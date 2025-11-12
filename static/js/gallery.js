@@ -87,9 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     async function openModal(imageUrl, clickedIndex = 0) {
         try {
-            safeLog('openModal called with:', imageUrl, 'index:', clickedIndex);
-            if (!modal) return safeLog('modal element missing');
-            if (!modalImg) return safeLog('modalImage element missing');
+            if (!modal || !modalImg) return;
 
             // Set current image index and list of images
             currentImageIndex = typeof clickedIndex === 'number' ? clickedIndex : 0;
@@ -186,17 +184,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!img) return;
 
             e.preventDefault();
-            safeLog('Opening modal for image:', img.src);
-                const allImages = Array.from(document.querySelectorAll('.gallery-image'));
-                const clickedIndex = allImages.indexOf(img);
-                openModal(img.src, clickedIndex);
+            const allImages = Array.from(document.querySelectorAll('.gallery-image'));
+            const clickedIndex = allImages.indexOf(img);
+            openModal(img.src, clickedIndex);
         });
 
-        // Log the number of images found
+        // Make images clickable
         const images = document.querySelectorAll('.gallery-image');
-        safeLog(`Found ${images.length} gallery images`);
-        
-        // Make images obviously clickable
         images.forEach((img, index) => {
             img.style.cursor = 'pointer';
         });
@@ -747,11 +741,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Toggle tag selection
     function toggleTag(tag) {
+        console.log('toggleTag called with:', tag, 'Type:', typeof tag);
         if (selectedTags.has(tag)) {
             selectedTags.delete(tag);
+            console.log('Removed tag');
         } else {
             selectedTags.add(tag);
+            console.log('Added tag');
         }
+        console.log('Calling applyTagFilter...');
         applyTagFilter();
     }
 
@@ -779,7 +777,9 @@ document.addEventListener('DOMContentLoaded', () => {
     tagFilterButtons.forEach(btn => {
         btn.addEventListener('click', () => {
             const tag = btn.dataset.tag;
+            console.log('Tag clicked:', tag, 'Selected tags before:', Array.from(selectedTags));
             toggleTag(tag);
+            console.log('Selected tags after:', Array.from(selectedTags));
         });
     });
 
