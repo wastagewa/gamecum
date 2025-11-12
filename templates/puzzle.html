@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Puzzle Slider{% if collection %} - {{ collection }}{% endif %}</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.png') }}">
+    
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        // Apply saved or system theme ASAP to prevent light-mode flash
+        (function(){
+            var theme = null;
+            try { theme = localStorage.getItem('imgur.theme'); } catch(e) {}
+            if(!theme){
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                theme = prefersDark ? 'dark' : 'light';
+            }
+            if(theme === 'dark'){
+                document.documentElement.setAttribute('data-theme','dark');
+                document.documentElement.style.colorScheme = 'dark';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                document.documentElement.style.colorScheme = 'light';
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <!-- Modern Navigation Bar -->
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand">
+                <i class="fas fa-images"></i>
+                <span>ImgurMemory</span>
+            </a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                {% if collection %}
+                <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-gamepad"></i> Games <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu">
+                        <a href="/collection/{{ collection }}/game" class="navbar-dropdown-item"><i class="fas fa-brain"></i> Memory Game</a>
+                        <a href="/collection/{{ collection }}/puzzle" class="navbar-dropdown-item active"><i class="fas fa-puzzle-piece"></i> Jigsaw Puzzle</a>
+                    </div>
+                </div>
+                {% endif %}
+                <a href="/collection/Real" class="navbar-link"><i class="fas fa-camera"></i> Real</a>
+                <a href="/collection/AI" class="navbar-link"><i class="fas fa-robot"></i> AI</a>
+                <button id="themeToggle" class="navbar-theme-toggle" type="button">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+    
+    <div class="header">
+        <h1>Jigsaw Puzzle Game</h1>
+        {% if collection %}
+        <p style="margin-top:8px;color:var(--muted-text);">Playing: <strong style="color:var(--primary-color);">{{ collection }}</strong></p>
+        {% endif %}
+        <p style="margin-top:4px;font-size:0.9em;color:var(--muted-text);">
+            <i class="fas fa-hand-pointer"></i> Drag pieces to the board | 
+            <i class="fas fa-sync-alt"></i> Click pieces to rotate
+        </p>
+    </div>
+
+    <main style="padding:20px; max-width:1400px; margin:0 auto;">
+        <div class="game-controls" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px;">
+            <div>Score: <span id="score" style="font-weight:bold;color:var(--secondary-color);">1000</span></div>
+            <div>Peeks: <span id="peeks">0</span></div>
+            <div id="timeWrap">Time: <span id="time">0s</span></div>
+            <label style="display:flex;align-items:center;gap:8px;">
+                Pieces:
+                <input id="pieceCount" type="number" min="9" max="100" value="16" step="1" 
+                       style="width:70px;padding:6px;border-radius:6px;background:var(--surface-color);color:var(--text-color);border:1px solid rgba(255,255,255,0.15);" />
+            </label>
+            <button id="newImage" class="custom-upload-btn btn-romantic">
+                <i class="fas fa-random"></i> New Puzzle
+            </button>
+            <button id="showPreview" class="custom-upload-btn">
+                <i class="fas fa-eye"></i> Peek (-50 pts)
+            </button>
+            <button id="fullscreenBtn" class="custom-upload-btn btn-romantic">
+                <i class="fas fa-expand"></i> Fullscreen
+            </button>
+        </div>
+
+        <div style="display:flex;gap:20px;flex-wrap:wrap;justify-content:center;align-items:flex-start;">
+            <!-- Puzzle Board (Drop Zone) -->
+            <div style="flex:1;min-width:300px;max-width:600px;">
+                <h3 style="font-size:0.95em;margin-bottom:8px;color:var(--muted-text);text-align:center;">Puzzle Board</h3>
+                <div id="puzzleBoard" class="puzzle-board"></div>
+            </div>
+
+            <!-- Pieces Stash -->
+            <div style="flex:1;min-width:300px;max-width:600px;">
+                <h3 style="font-size:0.95em;margin-bottom:8px;color:var(--muted-text);text-align:center;">Piece Stash (drag from here)</h3>
+                <div id="piecesStash" class="pieces-stash"></div>
+            </div>
+        </div>
+
+        <!-- Peek Preview Modal -->
+        <div id="previewModal" class="preview-modal" style="display:none;">
+            <div class="preview-modal-content">
+                <div id="previewTimer" class="preview-timer">5</div>
+                <img id="previewImage" src="" alt="Preview" />
+            </div>
+        </div>
+
+        <div id="winMessage" class="win-message" style="display:none;margin-top:20px;">
+            <h2>🎉 Puzzle Solved!</h2>
+            <p>Final Score: <span id="finalScore" style="font-size:1.5em;color:var(--secondary-color);"></span></p>
+            <p>Time: <span id="finalTime"></span></p>
+            <p>Pieces: <span id="finalPieces"></span></p>
+            <button id="playAgain" class="custom-upload-btn btn-romantic">Play Again</button>
+        </div>
+
+        <!-- Victory Modal with Complete Image -->
+        <div id="victoryModal" class="victory-modal" style="display:none;">
+            <div class="victory-content">
+                <div class="victory-confetti"></div>
+                <h1 class="victory-title">🎉 Puzzle Complete! 🎉</h1>
+                <div class="victory-image-container">
+                    <img id="victoryImage" class="victory-image" src="" alt="Completed puzzle">
+                </div>
+                <div class="victory-stats">
+                    <div class="victory-stat">
+                        <span class="victory-stat-label">Score</span>
+                        <span id="victoryScore" class="victory-stat-value">0</span>
+                    </div>
+                    <div class="victory-stat">
+                        <span class="victory-stat-label">Time</span>
+                        <span id="victoryTime" class="victory-stat-value">0s</span>
+                    </div>
+                    <div class="victory-stat">
+                        <span class="victory-stat-label">Pieces</span>
+                        <span id="victoryPieces" class="victory-stat-value">0</span>
+                    </div>
+                </div>
+                <button id="victoryPlayAgain" class="custom-upload-btn btn-romantic" style="font-size:1.2em;padding:12px 30px;">
+                    <i class="fas fa-redo"></i> Play Again
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Pass images from server to JavaScript
+        const SERVER_IMAGES = {{ images | tojson | safe }};
+        const CURRENT_COLLECTION = {{ collection | tojson | safe }};
+    </script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/puzzle.js') }}"></script>
+</body>
+</html>

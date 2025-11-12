@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Background -->
+  <circle cx="50" cy="50" r="50" fill="#1a1a1a"/>
+  
+  <!-- Heart shape with gradient -->
+  <defs>
+    <linearGradient id="heartGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff6b81;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#ff3d71;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Main heart -->
+  <path d="M50,75 C50,75 20,55 20,40 C20,30 25,25 32,25 C38,25 43,28 50,35 C57,28 62,25 68,25 C75,25 80,30 80,40 C80,55 50,75 50,75 Z" 
+        fill="url(#heartGrad)" 
+        stroke="#ff1744" 
+        stroke-width="1.5"/>
+  
+  <!-- Sparkle effect 1 -->
+  <circle cx="30" cy="30" r="2" fill="#fff" opacity="0.8"/>
+  <line x1="30" y1="25" x2="30" y2="35" stroke="#fff" stroke-width="1" opacity="0.6"/>
+  <line x1="25" y1="30" x2="35" y2="30" stroke="#fff" stroke-width="1" opacity="0.6"/>
+  
+  <!-- Sparkle effect 2 -->
+  <circle cx="70" cy="35" r="1.5" fill="#fff" opacity="0.7"/>
+  <line x1="70" y1="32" x2="70" y2="38" stroke="#fff" stroke-width="0.8" opacity="0.5"/>
+  <line x1="67" y1="35" x2="73" y2="35" stroke="#fff" stroke-width="0.8" opacity="0.5"/>
+  
+  <!-- Small accent heart -->
+  <path d="M65,60 C65,60 55,52 55,47 C55,44 57,42 59,42 C60.5,42 62,43 65,46 C68,43 69.5,42 71,42 C73,42 75,44 75,47 C75,52 65,60 65,60 Z" 
+        fill="#ff8fa3" 
+        opacity="0.6"/>
+</svg>

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Image Gallery & Memory Game</title>
+  
+  <!-- Favicon -->
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
+  <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.png') }}">
+  
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <!-- Modern Navigation Bar -->
+  <nav class="navbar">
+    <div class="navbar-container">
+      <a href="/" class="navbar-brand">
+        <i class="fas fa-images"></i>
+        <span>ImgurMemory</span>
+      </a>
+      <div class="navbar-menu">
+        <a href="/" class="navbar-link active"><i class="fas fa-home"></i> Home</a>
+        <a href="/collection/Real" class="navbar-link"><i class="fas fa-camera"></i> Real</a>
+        <a href="/collection/AI" class="navbar-link"><i class="fas fa-robot"></i> AI</a>
+        <button id="themeToggle" class="navbar-theme-toggle" type="button">
+          <i class="fas fa-moon"></i>
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero-section">
+    <div class="hero-content">
+      <h1 class="hero-title">Your Memory Game Paradise</h1>
+      <p class="hero-subtitle">Upload stunning images, organize collections, and challenge your memory with customizable game modes</p>
+      <div class="hero-actions">
+        <a href="#collections" class="hero-btn primary"><i class="fas fa-play-circle"></i> Explore Collections</a>
+        <a href="#create" class="hero-btn secondary"><i class="fas fa-plus-circle"></i> Create New</a>
+      </div>
+    </div>
+    <div class="hero-decoration">
+      <div class="floating-card card-1"><i class="fas fa-image"></i></div>
+      <div class="floating-card card-2"><i class="fas fa-gamepad"></i></div>
+      <div class="floating-card card-3"><i class="fas fa-trophy"></i></div>
+    </div>
+  </section>
+
+  <main class="main-content">
+    <section id="collections" class="collections-section">
+      <div class="section-header">
+        <h2 class="section-title">
+          <i class="fas fa-layer-group"></i> Collections
+        </h2>
+        <p class="section-subtitle">Explore your image collections and compete for top scores</p>
+      </div>
+      <div id="collectionsList" class="collections-grid">
+        {% if collections %}
+          {% for name, count in collections.items() %}
+          <div class="modern-collection-card">
+            <div class="collection-header">
+              <div class="collection-icon">
+                {% if name == 'Real' %}
+                  <i class="fas fa-camera"></i>
+                {% elif name == 'AI' %}
+                  <i class="fas fa-robot"></i>
+                {% else %}
+                  <i class="fas fa-folder-open"></i>
+                {% endif %}
+              </div>
+              <div class="collection-info">
+                <h3 class="collection-name">{{ name }}</h3>
+                <div class="collection-count">
+                  <i class="fas fa-images"></i> {{ count }} images
+                </div>
+              </div>
+            </div>
+            
+            {% set top_scores = (leaderboards.get(name) if leaderboards else []) %}
+            <div class="leaderboard-section">
+              {% if top_scores and top_scores|length > 0 %}
+              <div class="leaderboard-header">
+                <i class="fas fa-trophy"></i> Top Scores
+              </div>
+              <div class="leaderboard-list">
+                {% for entry in top_scores %}
+                <div class="leaderboard-entry">
+                  <div class="entry-left">
+                    <span class="entry-score">{{ entry.score }}</span>
+                    <span class="entry-username">{{ entry.username }}</span>
+                  </div>
+                  <div class="entry-right">
+                    <div class="entry-stats">{{ entry.time }}s · {{ entry.wrong }}W</div>
+                    <div class="entry-meta">{{ entry.pairs }}×{{ entry.matchSize }}</div>
+                  </div>
+                </div>
+                {% endfor %}
+              </div>
+              {% else %}
+              <div class="no-scores">
+                <i class="fas fa-medal"></i>
+                <span>No scores yet. Be the first champion!</span>
+              </div>
+              {% endif %}
+            </div>
+            
+            <div class="collection-actions">
+              <a class="action-btn view-btn" href="/collection/{{ name }}">
+                <i class="fas fa-eye"></i> View Gallery
+              </a>
+              <a class="action-btn play-btn" href="/collection/{{ name }}/game">
+                <i class="fas fa-play"></i> Play Game
+              </a>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty-state">
+            <i class="fas fa-folder-open"></i>
+            <p>No collections found. Create your first collection to get started!</p>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <!-- Create Collection Section -->
+    <section id="create" class="create-section">
+      <div class="create-card">
+        <div class="create-header">
+          <h2><i class="fas fa-plus-circle"></i> Create New Collection</h2>
+          <p>Organize your images into custom collections for better management</p>
+        </div>
+        <form id="createCollectionForm" class="create-form">
+          <div class="form-group">
+            <label for="newCollectionName">Collection Name</label>
+            <input 
+              id="newCollectionName" 
+              type="text"
+              placeholder="e.g., Nature, Portraits, Abstract..." 
+              class="form-input"
+              pattern="[A-Za-z0-9_-]+"
+              title="Only letters, numbers, dashes, and underscores allowed"
+            />
+            <small class="form-hint">Only A-Z, a-z, 0-9, underscore (_), and dash (-) allowed</small>
+          </div>
+          <button class="create-btn" id="createCollectionBtn" type="button">
+            <i class="fas fa-magic"></i> Create Collection
+          </button>
+        </form>
+        <div id="createMsg" class="create-message"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-content">
+      <p><i class="fas fa-heart"></i> Made with passion for memory games</p>
+      <p class="footer-links">
+        <a href="/"><i class="fas fa-home"></i></a>
+        <a href="/collection/Real"><i class="fas fa-camera"></i></a>
+        <a href="/collection/AI"><i class="fas fa-robot"></i></a>
+      </p>
+    </div>
+  </footer>
+
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/home.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Memory Game{% if collection %} - {{ collection }}{% endif %}</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.png') }}">
+    
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        // Apply saved or system theme ASAP to prevent light-mode flash
+        (function(){
+            var theme = null;
+            try { theme = localStorage.getItem('imgur.theme'); } catch(e) {}
+            if(!theme){
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                theme = prefersDark ? 'dark' : 'light';
+            }
+            if(theme === 'dark'){
+                document.documentElement.setAttribute('data-theme','dark');
+                document.documentElement.style.colorScheme = 'dark';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                document.documentElement.style.colorScheme = 'light';
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <!-- Modern Navigation Bar -->
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand">
+                <i class="fas fa-images"></i>
+                <span>ImgurMemory</span>
+            </a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                {% if collection %}
+                <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-gamepad"></i> Games <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu">
+                        <a href="/collection/{{ collection }}/game" class="navbar-dropdown-item active"><i class="fas fa-brain"></i> Memory Game</a>
+                        <a href="/collection/{{ collection }}/puzzle" class="navbar-dropdown-item"><i class="fas fa-puzzle-piece"></i> Jigsaw Puzzle</a>
+                    </div>
+                </div>
+                {% endif %}
+                <a href="/collection/Real" class="navbar-link"><i class="fas fa-camera"></i> Real</a>
+                <a href="/collection/AI" class="navbar-link"><i class="fas fa-robot"></i> AI</a>
+                <button id="themeToggle" class="navbar-theme-toggle" type="button">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+    
+    <div class="header">
+        <h1>Memory Concentration Game</h1>
+        {% if collection %}
+        <p style="margin-top:8px;color:var(--muted-text);">Playing: <strong style="color:var(--primary-color);">{{ collection }}</strong></p>
+        {% endif %}
+    </div>
+
+    <main style="padding:20px; width:100%; max-width:none; margin:0 auto;">
+        <div id="validationWarning" class="validation-warning" style="display:none;margin-bottom:12px;padding:10px;background:rgba(255,107,129,0.15);border:1px solid var(--secondary-color);border-radius:8px;color:var(--text-color);">
+            <i class="fas fa-exclamation-triangle"></i> <span id="validationText"></span>
+        </div>
+    <div class="game-controls" style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:12px;">
+            <div>Moves: <span id="moves">0</span></div>
+            <div>Matches: <span id="matches">0</span></div>
+            <div>Wrong: <span id="wrong">0</span></div>
+            <div style="font-size:0.85em;color:var(--muted-text);">Completed: <span id="completedPairs">0</span>/<span id="totalPairs">0</span></div>
+            <div id="timeWrap" class="time-only">Time: <span id="time">0s</span></div>
+            <label style="display:flex;align-items:center;gap:8px;">
+                Player:
+                <input id="usernameInput" type="text" placeholder="Your name" maxlength="30" style="padding:6px;border-radius:6px;width:120px;background:var(--surface-color);color:var(--text-color);border:1px solid rgba(255,255,255,0.15);" />
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;">
+                Difficulty:
+                <select id="difficulty" style="padding:6px;border-radius:6px;">
+                    <option value="4">Easy (4 pairs)</option>
+                    <option value="8" selected>Medium (8 pairs)</option>
+                    <option value="12">Hard (12 pairs)</option>
+                    <option value="custom">Custom</option>
+                </select>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;">
+                Cards per row:
+                <select id="cardsPerRow" style="padding:6px;border-radius:6px;">
+                    <option value="auto" selected>Auto</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                </select>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;">
+                <input id="cardsPerRowUseCustom" type="checkbox" />
+                Custom cols:
+                <input id="cardsPerRowCustom" type="number" min="2" max="12" placeholder="e.g. 6" style="width:72px;padding:6px;border-radius:6px;" />
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;">
+                Match size:
+                <input id="matchSize" type="number" min="2" max="8" value="2" style="width:72px;padding:6px;border-radius:6px;" />
+            </label>
+            <label id="customPairsWrap" style="display:none;align-items:center;gap:8px;">
+                Pairs:
+                <input id="customPairs" type="number" min="1" value="8" style="width:72px;padding:6px;border-radius:6px;" />
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;">
+                Use up to N unique images:
+                <input id="numImages" type="number" min="1" value="{{ images|length }}" style="width:80px;padding:6px;border-radius:6px;" />
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;">
+                <input id="mixCollections" type="checkbox" />
+                Random collection (pick one collection at random and use images from it)
+            </label>
+            <button id="restart" class="custom-upload-btn btn-romantic"><i class="fas fa-rotate-right"></i> Restart</button>
+            <button id="fullscreenBtn" class="custom-upload-btn btn-romantic"><i class="fas fa-expand"></i> Fullscreen</button>
+            <label style="display:flex;align-items:center;gap:8px;">
+                Size:
+                <input id="sizeSlider" type="range" min="100" max="360" step="10" value="200" style="width:160px;" />
+                <span id="sizeLabel" style="min-width:44px;text-align:center;">200px</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;">
+                Width:
+                <input id="widthSlider" type="range" min="120" max="400" step="10" value="200" style="width:160px;" />
+                <span id="widthLabel" style="min-width:44px;text-align:center;">200px</span>
+            </label>
+            <button id="fitToggle" class="custom-upload-btn btn-romantic">Fit: On</button>
+        </div>
+
+        <!-- Toast container for transient messages (e.g., size saved) -->
+        <div id="sizeSavedToast" class="toast" style="display:none;">
+            <i class="fas fa-check-circle"></i>
+            <span id="toastText">Card size saved</span>
+        </div>
+
+        <!-- Game board container with row/column numbers -->
+        <div id="gameBoardWrapper" style="position: relative;">
+            <div id="columnNumbers" class="grid-numbers grid-numbers-columns"></div>
+            <div style="display: flex; gap: 8px;">
+                <div id="rowNumbers" class="grid-numbers grid-numbers-rows"></div>
+                <div id="gameBoard" class="game-board"></div>
+            </div>
+        </div>
+
+        <div id="winMessage" class="win-message" style="display:none;margin-top:20px;">
+            <h2>You won!</h2>
+            <p>Moves: <span id="finalMoves"></span></p>
+            <p>Time: <span id="finalTime"></span></p>
+            <p>Wrong: <span id="finalWrong"></span></p>
+            <button id="playAgain" class="custom-upload-btn">Play Again</button>
+        </div>
+
+        <!-- Victory overlay: shows a celebration animation and a random image not used in this game -->
+        <div id="victoryOverlay" class="victory-overlay" aria-hidden="true">
+            <div class="victory-content" role="dialog" aria-modal="true" aria-labelledby="victoryTitle">
+                <div id="bestScoreBanner" class="best-score-banner" style="display:none;">
+                    <i class="fas fa-trophy"></i> New Best Score!
+                </div>
+                <h2 id="victoryTitle">Victory! 🎉</h2>
+                <p class="victory-sub">Here's a random image from a different collection:</p>
+                <div class="victory-image-wrap">
+                    <img id="victoryImage" class="victory-image" alt="Victory surprise from this collection" />
+                </div>
+                <div class="victory-actions">
+                    <button id="victoryClose" class="custom-upload-btn btn-romantic">Close</button>
+                    <button id="victoryPlayAgain" class="custom-upload-btn btn-romantic">Play Again</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Template data injection -->
+    <script type="text/javascript">
+        // expose collection name on window for scripts that expect window.CURRENT_COLLECTION
+        window.CURRENT_COLLECTION = "{{ collection }}";
+        const CURRENT_COLLECTION = "{{ collection }}";
+        // @ts-ignore
+        const SERVER_IMAGES = {{ images | tojson | safe }};
+    </script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/game.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark light">
+    <title>{% if collection %}{{ collection }} - {% endif %}Image Gallery</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.png') }}">
+    
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+    <script>
+        // Apply saved or system theme ASAP to prevent light-mode flash
+        (function(){
+            var theme = null;
+            try { theme = localStorage.getItem('imgur.theme'); } catch(e) {}
+            if(!theme){
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                theme = prefersDark ? 'dark' : 'light';
+            }
+            if(theme === 'dark'){
+                document.documentElement.setAttribute('data-theme','dark');
+                document.documentElement.style.colorScheme = 'dark';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                document.documentElement.style.colorScheme = 'light';
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <!-- Modern Navigation Bar -->
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand">
+                <i class="fas fa-images"></i>
+                <span>ImgurMemory</span>
+            </a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                <a href="/collection/Real" class="navbar-link{% if collection == 'Real' %} active{% endif %}"><i class="fas fa-camera"></i> Real</a>
+                <a href="/collection/GReal" class="navbar-link{% if collection == 'GReal' %} active{% endif %}"><i class="fas fa-images"></i> GReal</a>
+                <a href="/collection/AI" class="navbar-link{% if collection == 'AI' %} active{% endif %}"><i class="fas fa-robot"></i> AI</a>
+                <a href="/collection/Nature" class="navbar-link{% if collection == 'Nature' %} active{% endif %}"><i class="fas fa-tree"></i> Nature</a>
+                {% if collection %}
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-gamepad"></i> Games <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu">
+                        <a href="/collection/{{ collection }}/game" class="navbar-dropdown-item"><i class="fas fa-brain"></i> Memory Game</a>
+                        <a href="/collection/{{ collection }}/puzzle" class="navbar-dropdown-item"><i class="fas fa-puzzle-piece"></i> Jigsaw Puzzle</a>
+                    </div>
+                </div>
+                {% endif %}
+                <button id="themeToggle" class="navbar-theme-toggle" type="button">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+    
+    <div class="header">
+        <h1>{% if collection %}{{ collection }} Gallery{% else %}Image Gallery{% endif %}</h1>
+        <div class="upload-container" style="margin-top:16px;display:flex;gap:12px;flex-wrap:wrap;justify-content:center;">
+            <label for="file-upload" class="custom-upload-btn">
+                <i class="fas fa-cloud-upload-alt"></i> Upload Image
+            </label>
+            <input id="file-upload" type="file" accept="image/*" multiple style="display: none;">
+            <button id="startSlideshow" class="custom-upload-btn btn-romantic">
+                <i class="fas fa-play-circle"></i> Start Slideshow
+            </button>
+        </div>
+        
+        <!-- Tag Filter with Search -->
+        {% if image_tags %}
+        <div class="tag-filter-container" style="margin-top:20px;max-width:900px;margin-left:auto;margin-right:auto;">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+                <i class="fas fa-filter" style="color:var(--secondary-color);"></i>
+                <span style="font-weight:600;">Filter by Tags:</span>
+                <div style="flex:1;min-width:200px;max-width:300px;position:relative;">
+                    <input type="text" 
+                           id="tagSearchInput" 
+                           placeholder="Search tags..." 
+                           style="width:100%;padding:8px 32px 8px 12px;border-radius:20px;background:var(--surface-color);color:var(--text-color);border:2px solid var(--primary-color);font-size:0.9em;">
+                    <i class="fas fa-search" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);color:var(--muted-text);pointer-events:none;"></i>
+                </div>
+                <button id="clearTagFilter" class="tag-filter-btn" style="padding:6px 16px;font-size:0.85em;display:none;">
+                    <i class="fas fa-times"></i> Clear All
+                </button>
+            </div>
+            
+            <!-- Selected Tags Display -->
+            <div id="selectedTagsContainer" style="display:none;margin-bottom:12px;padding:12px;background:var(--surface-color);border-radius:8px;border:1px solid rgba(255,107,129,0.3);">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                    <i class="fas fa-tags" style="color:var(--secondary-color);"></i>
+                    <strong style="font-size:0.9em;">Active Filters:</strong>
+                </div>
+                <div id="selectedTagsList" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+            </div>
+            
+            <!-- Tag Buttons (searchable) -->
+            <div id="tagFilterButtons" class="tag-filter-buttons" style="max-height:200px;overflow-y:auto;">
+                {% set all_tags = [] %}
+                {% for image, tags in image_tags.items() %}
+                    {% for tag in tags %}
+                        {% if tag not in all_tags %}
+                            {% set _ = all_tags.append(tag) %}
+                        {% endif %}
+                    {% endfor %}
+                {% endfor %}
+                {% for tag in all_tags|sort %}
+                <button class="tag-filter-btn" data-tag="{{ tag }}">
+                    <i class="fas fa-tag"></i> {{ tag }}
+                </button>
+                {% endfor %}
+            </div>
+            <div id="noTagsFound" style="display:none;text-align:center;padding:20px;color:var(--muted-text);">
+                <i class="fas fa-search"></i> No tags found
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="gallery" id="gallery">
+        {% set prefix = ('uploads/' + collection + '/') if collection else 'uploads/' %}
+        {% for image in images %}
+        <div class="gallery-item" data-aos="fade-up" data-filename="{{ image }}">
+            <button class="item-delete" data-filename="{{ image }}" aria-label="Delete image">
+                <i class="fas fa-trash"></i>
+            </button>
+            <button class="item-slideshow" data-filename="{{ image }}" aria-label="Start slideshow from here">
+                <i class="fas fa-play-circle"></i>
+            </button>
+            <img src="{{ url_for('static', filename=prefix + image) }}" 
+                 alt="Gallery Image"
+                 class="gallery-image">
+            {% if image_tags and image in image_tags and image_tags[image] %}
+            <div class="image-tags" data-all-tags="{{ image_tags[image]|join(',') }}">
+                {% for tag in image_tags[image][:4] %}
+                <span class="tag-badge">{{ tag }}</span>
+                {% endfor %}
+                {% if image_tags[image]|length > 4 %}
+                <span class="tag-badge" style="background: var(--primary-color); cursor: help;" title="{{ image_tags[image][4:]|join(', ') }}">
+                    +{{ image_tags[image]|length - 4 }} more
+                </span>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Modal -->
+    <div class="modal" id="imageModal">
+        <div class="modal-overlay" id="modalOverlay"></div>
+        <button class="close-modal" id="closeModal" aria-label="Close modal">&times;</button>
+        <div class="modal-container">
+            <button class="nav-btn prev-btn" id="prevBtn" aria-label="Previous image">
+                <i class="fas fa-chevron-left"></i>
+            </button>
+            <img class="modal-content" id="modalImage" src="" alt="Modal Image">
+            <button class="nav-btn next-btn" id="nextBtn" aria-label="Next image">
+                <i class="fas fa-chevron-right"></i>
+            </button>
+            <div class="modal-footer">
+                <p class="modal-quote" id="modalQuote"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Fullscreen Slideshow -->
+    <div class="slideshow-overlay" id="slideshowOverlay">
+        <button class="slideshow-close" id="slideshowClose" aria-label="Close slideshow">
+            <i class="fas fa-times"></i>
+        </button>
+        
+        <div class="slideshow-container">
+            <button class="slideshow-nav prev" id="slideshowPrev" aria-label="Previous">
+                <i class="fas fa-chevron-left"></i>
+            </button>
+            
+            <!-- Left-side tag panel (moved from right to avoid controls) -->
+            <div class="slideshow-tags-panel" id="slideshowTagsPanel">
+                <h3 class="tags-panel-header">
+                    <i class="fas fa-tags"></i> Image Tags
+                </h3>
+                <div class="tags-panel-content" id="slideshowTagsContent">
+                    <p class="tags-loading">Loading tags...</p>
+                </div>
+            </div>
+            
+            <div class="slideshow-content">
+                <img class="slideshow-image" id="slideshowImage" src="" alt="Slideshow">
+                <div class="slideshow-quote-container">
+                    <p class="slideshow-quote" id="slideshowQuote"></p>
+                </div>
+                <div class="slideshow-progress">
+                    <span id="slideshowCounter">1 / 1</span>
+                </div>
+            </div>
+            
+            <button class="slideshow-nav next" id="slideshowNext" aria-label="Next">
+                <i class="fas fa-chevron-right"></i>
+            </button>
+        </div>
+        
+        <!-- Controls positioned absolutely relative to overlay -->
+        <div class="slideshow-controls">
+            <button class="slideshow-control-btn" id="slideshowPlayPause" aria-label="Play/Pause">
+                <i class="fas fa-pause"></i>
+            </button>
+            <button class="slideshow-control-btn" id="slideshowFullscreen" aria-label="Toggle Fullscreen">
+                <i class="fas fa-expand"></i>
+            </button>
+            <div class="slideshow-speed-control">
+                <label for="slideshowSpeed" style="color:#fff;font-size:0.9rem;margin-right:8px;">Speed:</label>
+                <select id="slideshowSpeed" style="padding:6px;border-radius:6px;background:rgba(0,0,0,0.7);color:#fff;border:1px solid rgba(255,255,255,0.3);">
+                    <option value="2000" style="background:#2d3436;color:#fff;">Fast (2s)</option>
+                    <option value="4000" selected style="background:#2d3436;color:#fff;">Normal (4s)</option>
+                    <option value="6000" style="background:#2d3436;color:#fff;">Slow (6s)</option>
+                    <option value="8000" style="background:#2d3436;color:#fff;">Relaxed (8s)</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Spinner -->
+    <div id="loading" class="loading-spinner">
+        <div class="spinner"></div>
+    </div>
+
+    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+    <script>
+        // expose collection name on window for older scripts that read window.CURRENT_COLLECTION
+        window.CURRENT_COLLECTION = "{{ collection }}";
+        const CURRENT_COLLECTION = "{{ collection }}";
+    </script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/gallery.js') }}"></script>
+</body>
+</html>
