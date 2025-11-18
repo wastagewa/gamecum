@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sequence Memory Game{% if collection %} - {{ collection }}{% endif %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand">
+                <i class="fas fa-images"></i>
+                <span>ImgurMemory</span>
+            </a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                {% if collection %}
+                <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-gamepad"></i> Games <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu">
+                        <a href="/collection/{{ collection }}/game" class="navbar-dropdown-item"><i class="fas fa-gamepad"></i> Memory Game</a>
+                        <a href="/collection/{{ collection }}/puzzle" class="navbar-dropdown-item"><i class="fas fa-puzzle-piece"></i> Jigsaw Puzzle</a>
+                        <a href="/collection/{{ collection }}/sequence" class="navbar-dropdown-item active"><i class="fas fa-brain"></i> Sequence Memory</a>
+                    </div>
+                </div>
+                {% endif %}
+                <a href="/collection/Real" class="navbar-link"><i class="fas fa-camera"></i> Real</a>
+                <a href="/collection/AI" class="navbar-link"><i class="fas fa-robot"></i> AI</a>
+                <button id="themeToggle" class="navbar-theme-toggle" type="button">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="sequence-game-container">
+        <header class="sequence-header">
+            <h1><i class="fas fa-brain"></i> Sequence Memory Game</h1>
+            <p class="sequence-subtitle">Watch the sequence and repeat it from memory</p>
+        </header>
+
+        <div class="sequence-controls">
+            <div class="sequence-stats">
+                <div class="stat-item">
+                    <i class="fas fa-layer-group"></i>
+                    <span>Level: <strong id="currentLevel">1</strong></span>
+                </div>
+                <div class="stat-item">
+                    <i class="fas fa-star"></i>
+                    <span>Score: <strong id="sequenceScore">0</strong></span>
+                </div>
+            </div>
+
+            <div class="sequence-settings">
+                <div class="setting-group">
+                    <label for="gridSize">
+                        <i class="fas fa-th"></i> Grid Size
+                    </label>
+                    <select id="gridSize">
+                        <option value="3">3×3 (Easy)</option>
+                        <option value="4" selected>4×4 (Normal)</option>
+                        <option value="5">5×5 (Hard)</option>
+                        <option value="6">6×6 (Expert)</option>
+                    </select>
+                </div>
+
+                <div class="setting-group">
+                    <label for="sequenceLength">
+                        <i class="fas fa-list-ol"></i> Start Length
+                    </label>
+                    <select id="sequenceLength">
+                        <option value="2">2 (Easy)</option>
+                        <option value="3" selected>3 (Normal)</option>
+                        <option value="4">4 (Hard)</option>
+                        <option value="5">5 (Expert)</option>
+                    </select>
+                </div>
+
+                <div class="setting-group">
+                    <label for="flashSpeed">
+                        <i class="fas fa-bolt"></i> Flash Speed
+                    </label>
+                    <select id="flashSpeed">
+                        <option value="800">Slow</option>
+                        <option value="600" selected>Normal</option>
+                        <option value="400">Fast</option>
+                        <option value="250">Very Fast</option>
+                    </select>
+                </div>
+
+                <div class="setting-group">
+                    <label for="incrementMode">
+                        <i class="fas fa-arrow-up"></i> Increment Mode
+                    </label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="incrementMode">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+
+                <div class="button-group">
+                    <button id="startSequence" class="btn btn-primary">
+                        <i class="fas fa-play"></i> Start Game
+                    </button>
+                    <button id="restartSequence" class="btn btn-secondary" style="display: none;">
+                        <i class="fas fa-redo"></i> Restart
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="sequenceStatus" class="sequence-status">Press Start to begin</div>
+
+        <div id="sequenceBoard" class="sequence-board">
+            <p style="color: var(--muted-text); grid-column: 1/-1; text-align: center;">Press Start to begin</p>
+        </div>
+    </div>
+
+    <!-- Game Over Modal -->
+    <div id="sequenceGameOver" class="sequence-modal">
+        <div class="sequence-modal-content">
+            <button id="closeSequenceModal" class="modal-close">
+                <i class="fas fa-times"></i>
+            </button>
+            
+            <div class="sequence-modal-body">
+                <h2 class="sequence-modal-title">🧠 Game Over!</h2>
+                
+                <div class="sequence-modal-stats">
+                    <div class="sequence-modal-stat">
+                        <i class="fas fa-layer-group"></i>
+                        <span class="stat-label">Level Reached</span>
+                        <span class="stat-value" id="finalSequenceLevel">0</span>
+                    </div>
+                    <div class="sequence-modal-stat">
+                        <i class="fas fa-star"></i>
+                        <span class="stat-label">Final Score</span>
+                        <span class="stat-value" id="finalSequenceScore">0</span>
+                    </div>
+                </div>
+
+                <div class="sequence-victory-image-container">
+                    <img id="sequenceVictoryImage" class="sequence-victory-image" src="" alt="Victory image">
+                </div>
+
+                <button id="playSequenceAgain" class="btn btn-primary btn-large">
+                    <i class="fas fa-redo"></i> Play Again
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Pass collection images to JavaScript
+        {% if images %}
+        window.SERVER_IMAGES = [
+            {% for image in images %}
+            "{{ url_for('static', filename='uploads/' + collection + '/' + image) }}"{{ "," if not loop.last else "" }}
+            {% endfor %}
+        ];
+        window.CURRENT_COLLECTION = "{{ collection }}";
+        {% else %}
+        window.SERVER_IMAGES = [];
+        {% endif %}
+    </script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/sequence.js') }}"></script>
+</body>
+</html>

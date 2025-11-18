@@ -141,7 +141,7 @@ def collection_view(collection_name):
                 images.append(filename)
     except FileNotFoundError:
         images = []
-    
+
     # Load tags for all images
     tags_data = _load_tags()
     image_tags = {}
@@ -149,7 +149,7 @@ def collection_view(collection_name):
         image_key = _get_image_key(collection, filename)
         if image_key in tags_data:
             image_tags[filename] = tags_data[image_key].get('tags', [])
-    
+
     return render_template('index.html', images=images, collection=collection, image_tags=image_tags)
 
 @app.route('/upload', methods=['POST'])
@@ -157,11 +157,11 @@ def collection_view(collection_name):
 def upload_file(collection=None):
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
-    
+
     file = request.files['file']
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
-    
+
     if file and allowed_file(file.filename):
         # Handle collection from path parameter
         collection = _safe_collection_name(collection or '')
@@ -171,13 +171,13 @@ def upload_file(collection=None):
         filename = str(uuid.uuid4()) + os.path.splitext(secure_filename(file.filename))[1]
         file_path = os.path.join(save_folder, filename)
         file.save(file_path)
-        
+
         # Analyze image and extract tags
         # BLIP produces natural, descriptive tags for realistic images
         try:
             tags_result = analyze_image(file_path, top_k=25, threshold=0.20)
             tags = [t['tag'] for t in tags_result]
-            
+
             # Store tags
             all_tags = _load_tags()
             image_key = _get_image_key(collection, filename)
@@ -474,6 +474,21 @@ def collection_puzzle(collection_name):
         images = []
     image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
     return render_template('puzzle.html', images=image_urls, collection=collection)
+
+
+@app.route('/collection/<collection_name>/sequence')
+def collection_sequence(collection_name):
+    """Render the sequence memory game for a specific collection."""
+    collection = _safe_collection_name(collection_name)
+    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
+    images = []
+    try:
+        for filename in os.listdir(folder):
+            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
+                images.append(filename)
+    except FileNotFoundError:
+        images = []
+    return render_template('sequence.html', images=images, collection=collection)
 
 
 @app.route('/api/images')
