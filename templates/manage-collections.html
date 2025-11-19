@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manage Collections - Imgur Gallery</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand">
+                <i class="fas fa-images"></i>
+                <span>ImgurMemory</span>
+            </a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                <a href="/manage-collections" class="navbar-link active"><i class="fas fa-cog"></i> Manage</a>
+                <button id="themeToggle" class="navbar-theme-toggle" type="button">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="manage-container">
+        <header class="manage-header">
+            <h1><i class="fas fa-cog"></i> Manage Collections</h1>
+            <p class="manage-subtitle">Organize and maintain your image collections</p>
+        </header>
+
+        <div class="manage-actions">
+            <button id="createCollectionBtn" class="btn btn-primary">
+                <i class="fas fa-plus"></i> Create New Collection
+            </button>
+        </div>
+
+        <div class="collections-grid">
+            {% for name, count in collections.items() %}
+            <div class="collection-card" data-collection="{{ name }}">
+                <div class="collection-header">
+                    <h3><i class="fas fa-folder"></i> {{ name }}</h3>
+                    <span class="collection-count">{{ count }} images</span>
+                </div>
+                <div class="collection-actions">
+                    <a href="/collection/{{ name }}" class="collection-btn view-btn">
+                        <i class="fas fa-eye"></i> View
+                    </a>
+                    <button class="collection-btn rename-btn" data-collection="{{ name }}">
+                        <i class="fas fa-edit"></i> Rename
+                    </button>
+                    <button class="collection-btn delete-btn" data-collection="{{ name }}">
+                        <i class="fas fa-trash"></i> Delete
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Create Collection Modal -->
+    <div id="createModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create New Collection</h2>
+                <button class="modal-close" id="closeCreate">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="newCollectionName">Collection Name</label>
+                    <input type="text" id="newCollectionName" placeholder="Enter collection name" autocomplete="off">
+                    <small>Letters, numbers, hyphens, and underscores only</small>
+                </div>
+                <div id="createMessage" class="message"></div>
+            </div>
+            <div class="modal-footer">
+                <button id="confirmCreate" class="btn btn-primary">
+                    <i class="fas fa-check"></i> Create
+                </button>
+                <button class="btn btn-secondary" onclick="document.getElementById('createModal').style.display='none'">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Rename Collection Modal -->
+    <div id="renameModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Rename Collection</h2>
+                <button class="modal-close" id="closeRename">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="renameOldName">Current Name</label>
+                    <input type="text" id="renameOldName" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="renameNewName">New Name</label>
+                    <input type="text" id="renameNewName" placeholder="Enter new name" autocomplete="off">
+                </div>
+                <div id="renameMessage" class="message"></div>
+            </div>
+            <div class="modal-footer">
+                <button id="confirmRename" class="btn btn-primary">
+                    <i class="fas fa-check"></i> Rename
+                </button>
+                <button class="btn btn-secondary" onclick="document.getElementById('renameModal').style.display='none'">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="deleteModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Delete Collection</h2>
+                <button class="modal-close" id="closeDelete">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p class="warning-text">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    Are you sure you want to delete the collection <strong id="deleteCollectionName"></strong>?
+                </p>
+                <p class="warning-subtext">This will permanently delete all images in this collection. This action cannot be undone.</p>
+                <div id="deleteMessage" class="message"></div>
+            </div>
+            <div class="modal-footer">
+                <button id="confirmDelete" class="btn btn-danger">
+                    <i class="fas fa-trash"></i> Delete Permanently
+                </button>
+                <button class="btn btn-secondary" onclick="document.getElementById('deleteModal').style.display='none'">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/manage-collections.js') }}"></script>
+</body>
+</html>

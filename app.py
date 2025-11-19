@@ -515,6 +515,123 @@ def api_images_all():
     return jsonify({'images': result})
 
 
+@app.route('/manage-collections')
+def manage_collections():
+    """Render collection management page."""
+    base = app.config['UPLOAD_FOLDER']
+    collections = {}
+    try:
+        for name in os.listdir(base):
+            folder = os.path.join(base, name)
+            if os.path.isdir(folder):
+                imgs = 0
+                for filename in os.listdir(folder):
+                    if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
+                        imgs += 1
+                collections[name] = imgs
+    except Exception:
+        collections = {}
+    return render_template('manage-collections.html', collections=collections)
+
+
+@app.route('/api/collections/create', methods=['POST'])
+def api_create_collection():
+    """Create a new collection folder."""
+    data = request.get_json()
+    name = data.get('name', '').strip()
+    
+    if not name:
+        return jsonify({'success': False, 'error': 'Collection name required'}), 400
+    
+    safe_name = _safe_collection_name(name)
+    if not safe_name or safe_name != name:
+        return jsonify({'success': False, 'error': 'Invalid collection name. Use only letters, numbers, hyphens, and underscores'}), 400
+    
+    folder_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name)
+    
+    if os.path.exists(folder_path):
+        return jsonify({'success': False, 'error': 'Collection already exists'}), 400
+    
+    try:
+        os.makedirs(folder_path, exist_ok=True)
+        return jsonify({'success': True, 'message': 'Collection created'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/collections/rename', methods=['POST'])
+def api_rename_collection():
+    """Rename a collection folder."""
+    data = request.get_json()
+    old_name = data.get('old_name', '').strip()
+    new_name = data.get('new_name', '').strip()
+    
+    if not old_name or not new_name:
+        return jsonify({'success': False, 'error': 'Both names required'}), 400
+    
+    safe_old = _safe_collection_name(old_name)
+    safe_new = _safe_collection_name(new_name)
+    
+    if not safe_new or safe_new != new_name:
+        return jsonify({'success': False, 'error': 'Invalid new name'}), 400
+    
+    old_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_old)
+    new_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_new)
+    
+    if not os.path.exists(old_path):
+        return jsonify({'success': False, 'error': 'Collection not found'}), 404
+    
+    if os.path.exists(new_path):
+        return jsonify({'success': False, 'error': 'Target name already exists'}), 400
+    
+    try:
+        os.rename(old_path, new_path)
+        
+        # Update tags file
+        tags_data = _load_tags()
+        updated_tags = {}
+        for key, value in tags_data.items():
+            if key.startswith(f"{safe_old}/"):
+                new_key = key.replace(f"{safe_old}/", f"{safe_new}/", 1)
+                updated_tags[new_key] = value
+            else:
+                updated_tags[key] = value
+        _save_tags(updated_tags)
+        
+        return jsonify({'success': True, 'message': 'Collection renamed'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/collections/delete', methods=['POST'])
+def api_delete_collection():
+    """Delete a collection folder and all its contents."""
+    data = request.get_json()
+    name = data.get('name', '').strip()
+    
+    if not name:
+        return jsonify({'success': False, 'error': 'Collection name required'}), 400
+    
+    safe_name = _safe_collection_name(name)
+    folder_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name)
+    
+    if not os.path.exists(folder_path):
+        return jsonify({'success': False, 'error': 'Collection not found'}), 404
+    
+    try:
+        import shutil
+        shutil.rmtree(folder_path)
+        
+        # Remove tags for deleted images
+        tags_data = _load_tags()
+        updated_tags = {k: v for k, v in tags_data.items() if not k.startswith(f"{safe_name}/")}
+        _save_tags(updated_tags)
+        
+        return jsonify({'success': True, 'message': 'Collection deleted'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/collections')
 def api_collections():
     """Return a JSON mapping of collection name -> list of image URLs.
