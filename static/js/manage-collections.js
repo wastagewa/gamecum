@@ -158,13 +158,213 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Retag collection
+    const retagModal = document.getElementById('retagModal');
+    const retagCollectionNameSpan = document.getElementById('retagCollectionName');
+    const retagImagesList = document.getElementById('retagImagesList');
+    const retagMessage = document.getElementById('retagMessage');
+    const retagAllBtn = document.getElementById('retagAll');
+    const retagProgress = document.getElementById('retagProgress');
+    const retagProgressBar = document.getElementById('retagProgressBar');
+    const retagProgressText = document.getElementById('retagProgressText');
+
+    document.querySelectorAll('.retag-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            currentCollection = btn.dataset.collection;
+            retagCollectionNameSpan.textContent = currentCollection;
+            retagMessage.textContent = '';
+            retagImagesList.innerHTML = '<div class="loading">Loading images...</div>';
+            showModal(retagModal);
+            
+            // Load images for this collection
+            await loadCollectionImages(currentCollection);
+        });
+    });
+
+    async function loadCollectionImages(collection) {
+        try {
+            const res = await fetch(`/api/collections/${collection}/images`);
+            const data = await res.json();
+
+            if (data.success) {
+                displayImages(data.images, collection);
+            } else {
+                retagImagesList.innerHTML = '<div class="error">Failed to load images</div>';
+            }
+        } catch (err) {
+            retagImagesList.innerHTML = '<div class="error">Error loading images</div>';
+        }
+    }
+
+    function displayImages(images, collection) {
+        if (images.length === 0) {
+            retagImagesList.innerHTML = '<div class="empty-state">No images in this collection</div>';
+            return;
+        }
+
+        retagImagesList.innerHTML = images.map(img => `
+            <div class="retag-image-card" data-filename="${img.filename}">
+                <img src="${img.url}" alt="${img.filename}">
+                <div class="retag-image-info">
+                    <div class="retag-image-filename">${img.filename}</div>
+                    <div class="retag-tags-container">
+                        <div class="retag-tags" data-filename="${img.filename}">
+                            ${img.tags.map(tag => `
+                                <span class="retag-tag">
+                                    ${tag}
+                                    <button class="remove-tag" data-tag="${tag}">×</button>
+                                </span>
+                            `).join('')}
+                        </div>
+                        <button class="btn-add-tag" data-filename="${img.filename}">
+                            <i class="fas fa-plus"></i> Add Tag
+                        </button>
+                        <button class="btn-auto-tag" data-filename="${img.filename}">
+                            <i class="fas fa-magic"></i> Auto-Tag
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+
+        // Add event listeners for tag management
+        attachTagEventListeners(collection);
+    }
+
+    function attachTagEventListeners(collection) {
+        // Remove tag buttons
+        document.querySelectorAll('.remove-tag').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const card = e.target.closest('.retag-image-card');
+                const filename = card.dataset.filename;
+                const tagToRemove = e.target.dataset.tag;
+                const tagsContainer = card.querySelector('.retag-tags');
+                
+                // Get current tags
+                const currentTags = Array.from(tagsContainer.querySelectorAll('.retag-tag'))
+                    .map(t => t.textContent.trim().replace('×', ''))
+                    .filter(t => t !== tagToRemove);
+                
+                await updateImageTags(collection, filename, currentTags);
+                await loadCollectionImages(currentCollection);
+            });
+        });
+
+        // Add tag buttons
+        document.querySelectorAll('.btn-add-tag').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const card = e.target.closest('.retag-image-card');
+                const filename = card.dataset.filename;
+                const newTag = prompt('Enter new tag:');
+                
+                if (newTag && newTag.trim()) {
+                    const tagsContainer = card.querySelector('.retag-tags');
+                    const currentTags = Array.from(tagsContainer.querySelectorAll('.retag-tag'))
+                        .map(t => t.textContent.trim().replace('×', ''));
+                    
+                    currentTags.push(newTag.trim());
+                    await updateImageTags(collection, filename, currentTags);
+                    await loadCollectionImages(currentCollection);
+                }
+            });
+        });
+
+        // Auto-tag buttons
+        document.querySelectorAll('.btn-auto-tag').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const card = e.target.closest('.retag-image-card');
+                const filename = card.dataset.filename;
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Tagging...';
+                
+                try {
+                    const res = await fetch(`/api/images/${collection}/${filename}/retag`, {
+                        method: 'POST'
+                    });
+                    const data = await res.json();
+                    
+                    if (data.success) {
+                        await loadCollectionImages(currentCollection);
+                    } else {
+                        alert('Failed to auto-tag image: ' + data.error);
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="fas fa-magic"></i> Auto-Tag';
+                    }
+                } catch (err) {
+                    alert('Error auto-tagging image');
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-magic"></i> Auto-Tag';
+                }
+            });
+        });
+    }
+
+    async function updateImageTags(collection, filename, tags) {
+        try {
+            const res = await fetch(`/api/images/${collection}/${filename}/tags`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tags })
+            });
+            return await res.json();
+        } catch (err) {
+            return { success: false, error: 'Network error' };
+        }
+    }
+
+    // Auto-tag all images in collection
+    if (retagAllBtn) {
+        retagAllBtn.addEventListener('click', async () => {
+            if (!confirm(`Auto-tag all images in ${currentCollection}? This will replace existing tags.`)) {
+                return;
+            }
+
+            retagAllBtn.disabled = true;
+            retagProgress.style.display = 'block';
+            retagProgressText.textContent = 'Processing images...';
+            retagProgressBar.style.width = '0%';
+
+            try {
+                const res = await fetch(`/api/collections/${currentCollection}/retag-all`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    retagProgressBar.style.width = '100%';
+                    retagProgressText.textContent = data.message;
+                    retagMessage.textContent = `Successfully processed ${data.processed} images`;
+                    retagMessage.className = 'message success';
+                    
+                    // Reload images
+                    setTimeout(async () => {
+                        await loadCollectionImages(currentCollection);
+                        retagProgress.style.display = 'none';
+                        retagAllBtn.disabled = false;
+                    }, 1500);
+                } else {
+                    retagMessage.textContent = data.error || 'Failed to auto-tag images';
+                    retagMessage.className = 'message error';
+                    retagProgress.style.display = 'none';
+                    retagAllBtn.disabled = false;
+                }
+            } catch (err) {
+                retagMessage.textContent = 'Error processing images';
+                retagMessage.className = 'message error';
+                retagProgress.style.display = 'none';
+                retagAllBtn.disabled = false;
+            }
+        });
+    }
+
     // Close buttons
     document.getElementById('closeCreate').addEventListener('click', () => hideModal(createModal));
     document.getElementById('closeRename').addEventListener('click', () => hideModal(renameModal));
     document.getElementById('closeDelete').addEventListener('click', () => hideModal(deleteModal));
+    document.getElementById('closeRetag').addEventListener('click', () => hideModal(retagModal));
 
     // Close on outside click
-    [createModal, renameModal, deleteModal].forEach(modal => {
+    [createModal, renameModal, deleteModal, retagModal].forEach(modal => {
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
                 hideModal(modal);

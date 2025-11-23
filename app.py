@@ -632,6 +632,116 @@ def api_delete_collection():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/collections/<collection_name>/images', methods=['GET'])
+def api_collection_images(collection_name):
+    """Get all images in a collection with their tags."""
+    safe_name = _safe_collection_name(collection_name)
+    folder_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name)
+    
+    if not os.path.exists(folder_path):
+        return jsonify({'success': False, 'error': 'Collection not found'}), 404
+    
+    images = []
+    tags_data = _load_tags()
+    
+    for filename in os.listdir(folder_path):
+        if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
+            image_key = _get_image_key(safe_name, filename)
+            image_tags = tags_data.get(image_key, [])
+            images.append({
+                'filename': filename,
+                'url': url_for('static', filename=f'uploads/{safe_name}/{filename}'),
+                'tags': image_tags
+            })
+    
+    return jsonify({'success': True, 'images': images})
+
+
+@app.route('/api/images/<collection_name>/<filename>/tags', methods=['POST'])
+def api_update_image_tags(collection_name, filename):
+    """Update tags for a specific image."""
+    data = request.get_json()
+    tags = data.get('tags', [])
+    
+    if not isinstance(tags, list):
+        return jsonify({'success': False, 'error': 'Tags must be an array'}), 400
+    
+    # Validate tags (remove empty strings and duplicates)
+    tags = [t.strip() for t in tags if t.strip()]
+    tags = list(set(tags))  # Remove duplicates
+    
+    safe_name = _safe_collection_name(collection_name)
+    image_key = _get_image_key(safe_name, filename)
+    
+    tags_data = _load_tags()
+    tags_data[image_key] = tags
+    _save_tags(tags_data)
+    
+    return jsonify({'success': True, 'tags': tags})
+
+
+@app.route('/api/images/<collection_name>/<filename>/retag', methods=['POST'])
+def api_retag_image(collection_name, filename):
+    """Auto-generate tags for a specific image."""
+    safe_name = _safe_collection_name(collection_name)
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name, filename)
+    
+    if not os.path.exists(file_path):
+        return jsonify({'success': False, 'error': 'Image not found'}), 404
+    
+    try:
+        # Use the image tagger to analyze the image
+        tags = analyze_image(file_path)
+        
+        # Save the tags
+        image_key = _get_image_key(safe_name, filename)
+        tags_data = _load_tags()
+        tags_data[image_key] = tags
+        _save_tags(tags_data)
+        
+        return jsonify({'success': True, 'tags': tags})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/collections/<collection_name>/retag-all', methods=['POST'])
+def api_retag_all_images(collection_name):
+    """Auto-generate tags for all images in a collection."""
+    safe_name = _safe_collection_name(collection_name)
+    folder_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name)
+    
+    if not os.path.exists(folder_path):
+        return jsonify({'success': False, 'error': 'Collection not found'}), 404
+    
+    try:
+        tags_data = _load_tags()
+        processed = 0
+        errors = 0
+        
+        for filename in os.listdir(folder_path):
+            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
+                try:
+                    file_path = os.path.join(folder_path, filename)
+                    tags = analyze_image(file_path)
+                    
+                    image_key = _get_image_key(safe_name, filename)
+                    tags_data[image_key] = tags
+                    processed += 1
+                except Exception as e:
+                    errors += 1
+        
+        _save_tags(tags_data)
+        
+        return jsonify({
+            'success': True,
+            'processed': processed,
+            'errors': errors,
+            'message': f'Processed {processed} images with {errors} errors'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/collections')
 def api_collections():
     """Return a JSON mapping of collection name -> list of image URLs.

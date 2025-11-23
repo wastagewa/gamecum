@@ -45,10 +45,12 @@
             </a>
             <div class="navbar-menu">
                 <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
-                <a href="/collection/Real" class="navbar-link{% if collection == 'Real' %} active{% endif %}"><i class="fas fa-camera"></i> Real</a>
-                <a href="/collection/GReal" class="navbar-link{% if collection == 'GReal' %} active{% endif %}"><i class="fas fa-images"></i> GReal</a>
-                <a href="/collection/AI" class="navbar-link{% if collection == 'AI' %} active{% endif %}"><i class="fas fa-robot"></i> AI</a>
-                <a href="/collection/Nature" class="navbar-link{% if collection == 'Nature' %} active{% endif %}"><i class="fas fa-tree"></i> Nature</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu" id="collectionsDropdown">
+                        <!-- Collections will be loaded dynamically -->
+                    </div>
+                </div>
                 {% if collection %}
                 <div class="navbar-dropdown">
                     <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-gamepad"></i> Games <i class="fas fa-caret-down"></i></button>
@@ -243,6 +245,7 @@
         window.CURRENT_COLLECTION = "{{ collection }}";
         const CURRENT_COLLECTION = "{{ collection }}";
     </script>
+    <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <script src="{{ url_for('static', filename='js/gallery.js') }}"></script>
 </body>

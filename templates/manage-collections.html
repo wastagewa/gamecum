@@ -16,6 +16,12 @@
             </a>
             <div class="navbar-menu">
                 <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu" id="collectionsDropdown">
+                        <!-- Collections will be loaded dynamically -->
+                    </div>
+                </div>
                 <a href="/manage-collections" class="navbar-link active"><i class="fas fa-cog"></i> Manage</a>
                 <button id="themeToggle" class="navbar-theme-toggle" type="button">
                     <i class="fas fa-moon"></i>
@@ -47,6 +53,9 @@
                     <a href="/collection/{{ name }}" class="collection-btn view-btn">
                         <i class="fas fa-eye"></i> View
                     </a>
+                    <button class="collection-btn retag-btn" data-collection="{{ name }}">
+                        <i class="fas fa-tags"></i> Retag
+                    </button>
                     <button class="collection-btn rename-btn" data-collection="{{ name }}">
                         <i class="fas fa-edit"></i> Rename
                     </button>
@@ -146,6 +155,41 @@
         </div>
     </div>
 
+    <!-- Retag Images Modal -->
+    <div id="retagModal" class="modal">
+        <div class="modal-content retag-modal-content">
+            <div class="modal-header">
+                <h2><i class="fas fa-tags"></i> Retag Images - <span id="retagCollectionName"></span></h2>
+                <button class="modal-close" id="closeRetag">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="retag-controls">
+                    <button id="retagAll" class="btn btn-primary">
+                        <i class="fas fa-magic"></i> Auto-Tag All Images
+                    </button>
+                    <div id="retagProgress" class="retag-progress" style="display: none;">
+                        <div class="progress-bar">
+                            <div id="retagProgressBar" class="progress-fill"></div>
+                        </div>
+                        <span id="retagProgressText">Processing...</span>
+                    </div>
+                </div>
+                <div id="retagMessage" class="message"></div>
+                <div id="retagImagesList" class="retag-images-list">
+                    <!-- Images will be loaded here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="document.getElementById('retagModal').classList.remove('show'); setTimeout(() => document.getElementById('retagModal').style.display='none', 300)">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <script src="{{ url_for('static', filename='js/manage-collections.js') }}"></script>
 </body>

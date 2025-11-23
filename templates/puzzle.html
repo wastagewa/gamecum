@@ -44,6 +44,12 @@
             </a>
             <div class="navbar-menu">
                 <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu" id="collectionsDropdown">
+                        <!-- Collections will be loaded dynamically -->
+                    </div>
+                </div>
                 {% if collection %}
                 <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
                 <div class="navbar-dropdown">
@@ -55,8 +61,6 @@
                     </div>
                 </div>
                 {% endif %}
-                <a href="/collection/Real" class="navbar-link"><i class="fas fa-camera"></i> Real</a>
-                <a href="/collection/AI" class="navbar-link"><i class="fas fa-robot"></i> AI</a>
                 <button id="themeToggle" class="navbar-theme-toggle" type="button">
                     <i class="fas fa-moon"></i>
                 </button>
@@ -160,6 +164,7 @@
         const SERVER_IMAGES = {{ images | tojson | safe }};
         const CURRENT_COLLECTION = {{ collection | tojson | safe }};
     </script>
+    <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
     <script src="{{ url_for('static', filename='js/puzzle.js') }}"></script>
