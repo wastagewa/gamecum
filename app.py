@@ -61,6 +61,36 @@ def _save_tags(tags: dict):
     except Exception:
         pass
 
+def _cleanup_tags():
+    """Clean up malformed tags data (convert dict objects to string lists)."""
+    tags_data = _load_tags()
+    cleaned = False
+    
+    for key, value in tags_data.items():
+        if isinstance(value, list):
+            # Check if list contains dicts instead of strings
+            if value and isinstance(value[0], dict):
+                # Extract 'tag' field from each dict
+                tags_data[key] = [item.get('tag', str(item)) for item in value if isinstance(item, dict)]
+                cleaned = True
+            else:
+                # Ensure all items are strings
+                tags_data[key] = [str(item) for item in value if isinstance(item, (str, int, float))]
+        elif isinstance(value, dict):
+            # Old format: {'tags': [...]}
+            if 'tags' in value:
+                tags_data[key] = value['tags'] if isinstance(value['tags'], list) else []
+                cleaned = True
+            else:
+                # Dict with tag/confidence structure, extract tag
+                tags_data[key] = [value.get('tag', str(value))]
+                cleaned = True
+    
+    if cleaned:
+        _save_tags(tags_data)
+    
+    return tags_data
+
 def _get_image_key(collection: str, filename: str):
     """Generate a unique key for an image."""
     return f"{collection}/{filename}" if collection else filename
@@ -148,7 +178,16 @@ def collection_view(collection_name):
     for filename in images:
         image_key = _get_image_key(collection, filename)
         if image_key in tags_data:
-            image_tags[filename] = tags_data[image_key].get('tags', [])
+            # Tags are stored directly as a list, not as {'tags': [...]}
+            tags = tags_data[image_key]
+            if isinstance(tags, list):
+                # Ensure all items in the list are strings, not dicts
+                image_tags[filename] = [str(tag) for tag in tags if isinstance(tag, (str, int, float))]
+            elif isinstance(tags, dict) and 'tags' in tags:
+                # Handle old format where tags were stored as {'tags': [...]}
+                image_tags[filename] = tags['tags'] if isinstance(tags['tags'], list) else []
+            else:
+                image_tags[filename] = []
 
     return render_template('index.html', images=images, collection=collection, image_tags=image_tags)
 
@@ -225,13 +264,24 @@ def get_quote():
         if collection and filename:
             all_tags = _load_tags()
             image_key = _get_image_key(collection, filename)
-            image_data = all_tags.get(image_key, {})
-            detailed_tags = image_data.get('detailed', [])
+            image_data = all_tags.get(image_key)
             
-            if detailed_tags:
-                # Extract just the tag names from detailed tags
-                image_tag_names = [tag_obj.get('tag', '').lower().strip() for tag_obj in detailed_tags if tag_obj.get('tag')]
-                
+            # Handle both new format (list of strings) and old format (dict with 'detailed')
+            image_tag_names = []
+            if isinstance(image_data, list):
+                # New format: direct list of tag strings
+                image_tag_names = [tag.lower().strip() for tag in image_data if isinstance(tag, str)]
+            elif isinstance(image_data, dict):
+                # Old format: dict with 'detailed' or 'tags' key
+                detailed_tags = image_data.get('detailed', [])
+                if detailed_tags:
+                    image_tag_names = [tag_obj.get('tag', '').lower().strip() for tag_obj in detailed_tags if tag_obj.get('tag')]
+                else:
+                    # Fallback to 'tags' key if 'detailed' is empty
+                    simple_tags = image_data.get('tags', [])
+                    image_tag_names = [tag.lower().strip() for tag in simple_tags if isinstance(tag, str)]
+            
+            if image_tag_names:
                 # Iterate through quote keys in order (preserving JSON order)
                 # Skip 'default' key in priority matching
                 for quote_key in quotes_data.keys():
@@ -648,11 +698,17 @@ def api_collection_images(collection_name):
         if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
             image_key = _get_image_key(safe_name, filename)
             image_tags = tags_data.get(image_key, [])
+            # Ensure tags is always a list
+            if not isinstance(image_tags, list):
+                image_tags = []
             images.append({
                 'filename': filename,
                 'url': url_for('static', filename=f'uploads/{safe_name}/{filename}'),
                 'tags': image_tags
             })
+    
+    # Sort images by filename for consistent ordering
+    images.sort(key=lambda x: x['filename'])
     
     return jsonify({'success': True, 'images': images})
 
@@ -690,8 +746,9 @@ def api_retag_image(collection_name, filename):
         return jsonify({'success': False, 'error': 'Image not found'}), 404
     
     try:
-        # Use the image tagger to analyze the image
-        tags = analyze_image(file_path)
+        # Use the image tagger to get primary tags (returns list of strings)
+        from image_tagger import get_primary_tags
+        tags = get_primary_tags(file_path, max_tags=10)
         
         # Save the tags
         image_key = _get_image_key(safe_name, filename)
@@ -714,6 +771,7 @@ def api_retag_all_images(collection_name):
         return jsonify({'success': False, 'error': 'Collection not found'}), 404
     
     try:
+        from image_tagger import get_primary_tags
         tags_data = _load_tags()
         processed = 0
         errors = 0
@@ -722,7 +780,8 @@ def api_retag_all_images(collection_name):
             if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
                 try:
                     file_path = os.path.join(folder_path, filename)
-                    tags = analyze_image(file_path)
+                    # Use get_primary_tags to get list of strings instead of dicts
+                    tags = get_primary_tags(file_path, max_tags=10)
                     
                     image_key = _get_image_key(safe_name, filename)
                     tags_data[image_key] = tags
@@ -788,11 +847,20 @@ def api_image_tags(collection, filename):
     tags_data = _load_tags()
     
     if image_key in tags_data:
-        return jsonify({
-            'success': True,
-            'tags': tags_data[image_key].get('tags', []),
-            'detailed': tags_data[image_key].get('detailed', [])
-        })
+        tags = tags_data[image_key]
+        # Handle both formats: list of strings or dict with 'tags' key
+        if isinstance(tags, list):
+            return jsonify({
+                'success': True,
+                'tags': tags,
+                'detailed': []
+            })
+        elif isinstance(tags, dict):
+            return jsonify({
+                'success': True,
+                'tags': tags.get('tags', []),
+                'detailed': tags.get('detailed', [])
+            })
     return jsonify({'success': False, 'tags': []}), 404
 
 
@@ -923,4 +991,8 @@ if __name__ == '__main__':
     os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'Real'), exist_ok=True)
     os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'AI'), exist_ok=True)
     _ensure_scores_file()
+    # Clean up any malformed tags data from old format
+    print("Cleaning up tags data...")
+    _cleanup_tags()
+    print("Tags cleanup complete!")
     app.run(debug=True)

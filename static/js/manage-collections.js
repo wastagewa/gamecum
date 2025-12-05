@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const createModal = document.getElementById('createModal');
     const renameModal = document.getElementById('renameModal');
     const deleteModal = document.getElementById('deleteModal');
+    const retagModal = document.getElementById('retagModal');
     
     const newCollectionInput = document.getElementById('newCollectionName');
     const createMessage = document.getElementById('createMessage');
@@ -18,17 +19,69 @@ document.addEventListener('DOMContentLoaded', () => {
     const deleteMessage = document.getElementById('deleteMessage');
     const confirmDelete = document.getElementById('confirmDelete');
     
+    const retagCollectionNameSpan = document.getElementById('retagCollectionName');
+    const retagImagesList = document.getElementById('retagImagesList');
+    const retagMessage = document.getElementById('retagMessage');
+    const retagAllBtn = document.getElementById('retagAllBtn');
+    const retagProgress = document.getElementById('retagProgress');
+    const retagProgressBar = document.getElementById('retagProgressBar');
+    const retagProgressText = document.getElementById('retagProgressText');
+    const closeRetagBtn = document.getElementById('closeRetagBtn');
+    const closeRetagFooterBtn = document.getElementById('closeRetagFooterBtn');
+    
+    // Add Tags Modal elements
+    const addTagsModal = document.getElementById('addTagsModal');
+    const addTagsInput = document.getElementById('addTagsInput');
+    const addTagsMessage = document.getElementById('addTagsMessage');
+    const closeAddTagsBtn = document.getElementById('closeAddTagsBtn');
+    const cancelAddTagsBtn = document.getElementById('cancelAddTagsBtn');
+    const confirmAddTagsBtn = document.getElementById('confirmAddTagsBtn');
+    
     let currentCollection = '';
+    let currentImageForTags = { collection: '', filename: '', existingTags: [] };
 
-    // Show/hide modals
+    // Show/hide modals - REBUILT FROM SCRATCH
     function showModal(modal) {
+        if (!modal) return;
         modal.style.display = 'flex';
-        setTimeout(() => modal.classList.add('show'), 10);
+        modal.classList.add('show');
+        // Force reflow to trigger CSS transition
+        modal.offsetHeight;
+        // Ensure body doesn't scroll when modal is open
+        document.body.style.overflow = 'hidden';
     }
 
     function hideModal(modal) {
+        if (!modal) return;
         modal.classList.remove('show');
-        setTimeout(() => modal.style.display = 'none', 300);
+        setTimeout(() => {
+            modal.style.display = 'none';
+            // Restore body scroll
+            document.body.style.overflow = '';
+        }, 300);
+    }
+    
+    // Retag modal - REBUILT FROM SCRATCH
+    function openRetagModal(collectionName) {
+        if (!retagModal) return;
+        
+        currentCollection = collectionName;
+        retagCollectionNameSpan.textContent = collectionName;
+        retagImagesList.innerHTML = '<div class="loading">Loading images...</div>';
+        retagMessage.textContent = '';
+        
+        // Direct display change - no classes, no transitions
+        retagModal.style.display = 'block';
+        document.body.style.overflow = 'hidden';
+        
+        // Load images
+        loadCollectionImages(collectionName);
+    }
+    
+    function closeRetagModal() {
+        if (!retagModal) return;
+        retagModal.style.display = 'none';
+        document.body.style.overflow = '';
     }
 
     // Create collection
@@ -77,7 +130,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Rename collection
     document.querySelectorAll('.rename-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
             currentCollection = btn.dataset.collection;
             renameOldNameInput.value = currentCollection;
             renameNewNameInput.value = '';
@@ -123,7 +179,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Delete collection
     document.querySelectorAll('.delete-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
             currentCollection = btn.dataset.collection;
             deleteCollectionNameSpan.textContent = currentCollection;
             deleteMessage.textContent = '';
@@ -158,28 +217,159 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Retag collection
-    const retagModal = document.getElementById('retagModal');
-    const retagCollectionNameSpan = document.getElementById('retagCollectionName');
-    const retagImagesList = document.getElementById('retagImagesList');
-    const retagMessage = document.getElementById('retagMessage');
-    const retagAllBtn = document.getElementById('retagAll');
-    const retagProgress = document.getElementById('retagProgress');
-    const retagProgressBar = document.getElementById('retagProgressBar');
-    const retagProgressText = document.getElementById('retagProgressText');
-
+    // Retag button handler - REBUILT FROM SCRATCH
     document.querySelectorAll('.retag-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            currentCollection = btn.dataset.collection;
-            retagCollectionNameSpan.textContent = currentCollection;
-            retagMessage.textContent = '';
-            retagImagesList.innerHTML = '<div class="loading">Loading images...</div>';
-            showModal(retagModal);
-            
-            // Load images for this collection
-            await loadCollectionImages(currentCollection);
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const collectionName = btn.dataset.collection;
+            openRetagModal(collectionName);
         });
     });
+    
+    // Close retag modal handlers - REBUILT FROM SCRATCH
+    if (closeRetagBtn) {
+        closeRetagBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closeRetagModal();
+        });
+    }
+    
+    if (closeRetagFooterBtn) {
+        closeRetagFooterBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closeRetagModal();
+        });
+    }
+    
+    // Close on overlay click - REBUILT FROM SCRATCH
+    if (retagModal) {
+        retagModal.addEventListener('click', (e) => {
+            if (e.target.classList.contains('retag-modal-overlay')) {
+                closeRetagModal();
+            }
+        });
+    }
+    
+    // Add Tags Modal functions
+    function openAddTagsModal(collection, filename, existingTags) {
+        if (!addTagsModal) return;
+        
+        currentImageForTags = { collection, filename, existingTags };
+        addTagsInput.value = '';
+        addTagsMessage.textContent = '';
+        
+        // Reset button state
+        if (confirmAddTagsBtn) {
+            confirmAddTagsBtn.disabled = false;
+            confirmAddTagsBtn.innerHTML = '<i class="fas fa-plus"></i> Add Tags';
+        }
+        
+        addTagsModal.style.display = 'block';
+        document.body.style.overflow = 'hidden';
+        
+        // Focus on input
+        setTimeout(() => addTagsInput.focus(), 100);
+    }
+    
+    function closeAddTagsModal() {
+        if (!addTagsModal) return;
+        addTagsModal.style.display = 'none';
+        document.body.style.overflow = '';
+        currentImageForTags = { collection: '', filename: '', existingTags: [] };
+        
+        // Reset button state
+        if (confirmAddTagsBtn) {
+            confirmAddTagsBtn.disabled = false;
+            confirmAddTagsBtn.innerHTML = '<i class="fas fa-plus"></i> Add Tags';
+        }
+    }
+    
+    // Add Tags Modal event listeners
+    if (closeAddTagsBtn) {
+        closeAddTagsBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closeAddTagsModal();
+        });
+    }
+    
+    if (cancelAddTagsBtn) {
+        cancelAddTagsBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closeAddTagsModal();
+        });
+    }
+    
+    if (confirmAddTagsBtn) {
+        confirmAddTagsBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const tagsInput = addTagsInput.value.trim();
+            if (!tagsInput) {
+                addTagsMessage.textContent = 'Please enter at least one tag';
+                addTagsMessage.className = 'message error';
+                return;
+            }
+            
+            // Parse comma-separated tags
+            const newTags = tagsInput.split(',')
+                .map(tag => tag.trim())
+                .filter(tag => tag.length > 0);
+            
+            if (newTags.length === 0) {
+                addTagsMessage.textContent = 'Please enter valid tags';
+                addTagsMessage.className = 'message error';
+                return;
+            }
+            
+            // Merge with existing tags (remove duplicates)
+            const allTags = [...currentImageForTags.existingTags, ...newTags];
+            const uniqueTags = [...new Set(allTags)];
+            
+            // Disable button while processing
+            confirmAddTagsBtn.disabled = true;
+            confirmAddTagsBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding...';
+            
+            const result = await updateImageTags(
+                currentImageForTags.collection, 
+                currentImageForTags.filename, 
+                uniqueTags
+            );
+            
+            if (result.success) {
+                closeAddTagsModal();
+                await loadCollectionImages(currentCollection);
+            } else {
+                addTagsMessage.textContent = 'Failed to add tags: ' + (result.error || 'Unknown error');
+                addTagsMessage.className = 'message error';
+                confirmAddTagsBtn.disabled = false;
+                confirmAddTagsBtn.innerHTML = '<i class="fas fa-plus"></i> Add Tags';
+            }
+        });
+    }
+    
+    // Close on overlay click
+    if (addTagsModal) {
+        addTagsModal.addEventListener('click', (e) => {
+            if (e.target.classList.contains('retag-modal-overlay')) {
+                closeAddTagsModal();
+            }
+        });
+    }
+    
+    // Enter key to submit
+    if (addTagsInput) {
+        addTagsInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                confirmAddTagsBtn.click();
+            }
+        });
+    }
 
     async function loadCollectionImages(collection) {
         try {
@@ -235,37 +425,42 @@ document.addEventListener('DOMContentLoaded', () => {
         // Remove tag buttons
         document.querySelectorAll('.remove-tag').forEach(btn => {
             btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
                 const card = e.target.closest('.retag-image-card');
                 const filename = card.dataset.filename;
-                const tagToRemove = e.target.dataset.tag;
+                const tagToRemove = btn.dataset.tag;
                 const tagsContainer = card.querySelector('.retag-tags');
                 
-                // Get current tags
-                const currentTags = Array.from(tagsContainer.querySelectorAll('.retag-tag'))
-                    .map(t => t.textContent.trim().replace('×', ''))
-                    .filter(t => t !== tagToRemove);
+                // Get current tags from the remove-tag buttons (they have the actual tag text)
+                const currentTags = Array.from(tagsContainer.querySelectorAll('.remove-tag'))
+                    .map(b => b.dataset.tag)
+                    .filter(tag => tag !== tagToRemove);
                 
-                await updateImageTags(collection, filename, currentTags);
-                await loadCollectionImages(currentCollection);
+                const result = await updateImageTags(collection, filename, currentTags);
+                if (result.success) {
+                    await loadCollectionImages(currentCollection);
+                }
             });
         });
 
         // Add tag buttons
         document.querySelectorAll('.btn-add-tag').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
                 const card = e.target.closest('.retag-image-card');
                 const filename = card.dataset.filename;
-                const newTag = prompt('Enter new tag:');
+                const tagsContainer = card.querySelector('.retag-tags');
                 
-                if (newTag && newTag.trim()) {
-                    const tagsContainer = card.querySelector('.retag-tags');
-                    const currentTags = Array.from(tagsContainer.querySelectorAll('.retag-tag'))
-                        .map(t => t.textContent.trim().replace('×', ''));
-                    
-                    currentTags.push(newTag.trim());
-                    await updateImageTags(collection, filename, currentTags);
-                    await loadCollectionImages(currentCollection);
-                }
+                // Get current tags from the remove-tag buttons
+                const currentTags = Array.from(tagsContainer.querySelectorAll('.remove-tag'))
+                    .map(b => b.dataset.tag);
+                
+                // Open the add tags modal
+                openAddTagsModal(collection, filename, currentTags);
             });
         });
 
@@ -357,20 +552,38 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Close buttons
-    document.getElementById('closeCreate').addEventListener('click', () => hideModal(createModal));
-    document.getElementById('closeRename').addEventListener('click', () => hideModal(renameModal));
-    document.getElementById('closeDelete').addEventListener('click', () => hideModal(deleteModal));
-    document.getElementById('closeRetag').addEventListener('click', () => hideModal(retagModal));
+    // Close buttons for other modals
+    const closeCreate = document.getElementById('closeCreate');
+    const closeRename = document.getElementById('closeRename');
+    const closeDelete = document.getElementById('closeDelete');
+    
+    if (closeCreate) closeCreate.addEventListener('click', () => hideModal(createModal));
+    if (closeRename) closeRename.addEventListener('click', () => hideModal(renameModal));
+    if (closeDelete) closeDelete.addEventListener('click', () => hideModal(deleteModal));
 
-    // Close on outside click
-    [createModal, renameModal, deleteModal, retagModal].forEach(modal => {
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                hideModal(modal);
-            }
-        });
+    // Close on outside click for other modals
+    [createModal, renameModal, deleteModal].forEach(modal => {
+        if (modal) {
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    hideModal(modal);
+                }
+            });
+        }
     });
+    
+    // Ensure all modals start closed
+    [createModal, renameModal, deleteModal].forEach(modal => {
+        if (modal) {
+            modal.style.display = 'none';
+            modal.classList.remove('show');
+        }
+    });
+    
+    // Retag modal starts closed
+    if (retagModal) {
+        retagModal.style.display = 'none';
+    }
 
     // Enter key handlers
     newCollectionInput.addEventListener('keypress', (e) => {

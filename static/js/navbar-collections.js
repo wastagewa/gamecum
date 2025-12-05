@@ -8,12 +8,12 @@
             const res = await fetch('/api/collections');
             const data = await res.json();
             
-            if (!data || typeof data !== 'object') {
+            if (!data || !data.collections || typeof data.collections !== 'object') {
                 dropdown.innerHTML = '<div class="navbar-dropdown-item" style="color: var(--muted-text); cursor: default;">No collections found</div>';
                 return;
             }
 
-            const collections = Object.keys(data).filter(key => key !== 'root');
+            const collections = Object.keys(data.collections).filter(key => key !== 'root');
             
             if (collections.length === 0) {
                 dropdown.innerHTML = '<div class="navbar-dropdown-item" style="color: var(--muted-text); cursor: default;">No collections found</div>';
@@ -26,7 +26,11 @@
             // Generate dropdown items
             dropdown.innerHTML = collections.map(name => {
                 const iconClass = getCollectionIcon(name);
-                return `<a href="/collection/${name}" class="navbar-dropdown-item"><i class="${iconClass}"></i> ${name}</a>`;
+                const imageCount = data.collections[name].length;
+                return `<a href="/collection/${name}" class="navbar-dropdown-item">
+                    <i class="${iconClass}"></i> ${name} 
+                    <span style="opacity: 0.6; font-size: 0.85em;">(${imageCount})</span>
+                </a>`;
             }).join('');
             
         } catch (err) {
