@@ -3613,3 +3613,376 @@ input:checked + .toggle-slider:before {
         width: 100%;
     }
 }
+
+/* ============================================
+   FLASH CARDS GAME STYLES
+   ============================================ */
+
+#flashcardsContainer {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.flashcards-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    gap: 2rem;
+}
+
+.flashcards-stats {
+    display: flex;
+    gap: 3rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    font-size: 1.2rem;
+    font-weight: 500;
+    margin-bottom: 1rem;
+}
+
+.stat-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-color);
+}
+
+.stat-label {
+    font-weight: 400;
+    opacity: 0.8;
+}
+
+.stat-value {
+    font-weight: 700;
+    color: var(--primary-color);
+    font-size: 1.4rem;
+}
+
+.game-message {
+    min-height: 80px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    font-weight: 500;
+    border-radius: 8px;
+    padding: 1rem;
+    width: 100%;
+    max-width: 500px;
+    text-align: center;
+    transition: all 0.3s ease;
+}
+
+.game-message.success {
+    color: #4caf50;
+    background-color: rgba(76, 175, 80, 0.1);
+}
+
+.game-message.error {
+    color: #f44336;
+    background-color: rgba(244, 67, 54, 0.1);
+}
+
+.feedback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-weight: 600;
+}
+
+.victory-message {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+}
+
+.victory-message i {
+    font-size: 3rem;
+    color: var(--primary-color);
+    animation: bounce 1s infinite;
+}
+
+@keyframes bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+}
+
+.victory-message h2 {
+    font-size: 2rem;
+    margin: 0;
+}
+
+.victory-message p {
+    margin: 0.25rem 0;
+    font-size: 1.1rem;
+}
+
+/* View Phase - Memorization */
+#viewPhase {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 2rem;
+    width: 100%;
+    max-width: 800px;
+}
+
+#viewPhase.active {
+    display: flex;
+}
+
+#imageGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    width: 100%;
+}
+
+.flashcard-image {
+    width: 100%;
+    height: 150px;
+    object-fit: cover;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transition: transform 0.2s ease;
+    cursor: default;
+}
+
+.flashcard-image:hover {
+    transform: scale(1.05);
+}
+
+#countdownText {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--primary-color);
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Guess Phase - Identification */
+#guessPhase {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 2rem;
+    width: 100%;
+    max-width: 800px;
+}
+
+#guessPhase.active {
+    display: flex;
+}
+
+#guessGrid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+    width: 100%;
+    max-width: 500px;
+}
+
+.guess-option {
+    width: 100%;
+    height: 200px;
+    object-fit: cover;
+    border-radius: 12px;
+    cursor: pointer;
+    border: 3px solid transparent;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.guess-option:hover:not(.correct):not(.incorrect) {
+    border-color: var(--primary-color);
+    transform: scale(1.05);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+}
+
+.guess-option.correct {
+    border-color: #4caf50;
+    box-shadow: 0 0 20px rgba(76, 175, 80, 0.5);
+    animation: correctPulse 0.5s ease;
+}
+
+@keyframes correctPulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.08); }
+    100% { transform: scale(1); }
+}
+
+.guess-option.incorrect {
+    border-color: #f44336;
+    box-shadow: 0 0 20px rgba(244, 67, 54, 0.5);
+    opacity: 0.5;
+}
+
+/* Game Controls */
+.flashcards-controls {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 2rem;
+}
+
+.flashcards-controls .btn {
+    padding: 0.75rem 2rem;
+    font-size: 1rem;
+    font-weight: 500;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.flashcards-controls .btn-primary {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.flashcards-controls .btn-primary:hover:not(:disabled) {
+    opacity: 0.9;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.flashcards-controls .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.flashcards-controls .btn-secondary {
+    background-color: transparent;
+    color: var(--primary-color);
+    border: 2px solid var(--primary-color);
+}
+
+.flashcards-controls .btn-secondary:hover {
+    background-color: var(--primary-color);
+    color: white;
+    transform: translateY(-2px);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .flashcards-stats {
+        gap: 1.5rem;
+        font-size: 1rem;
+    }
+    
+    .stat-value {
+        font-size: 1.2rem;
+    }
+    
+    #imageGrid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.75rem;
+    }
+    
+    .flashcard-image {
+        height: 120px;
+    }
+    
+    #guessGrid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1rem;
+        max-width: 100%;
+    }
+    
+    .guess-option {
+        height: 150px;
+    }
+    
+    .flashcards-content {
+        padding: 1rem;
+        gap: 1rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .flashcards-stats {
+        gap: 1rem;
+        font-size: 0.9rem;
+    }
+    
+    .stat-value {
+        font-size: 1rem;
+    }
+    
+    #imageGrid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.5rem;
+    }
+    
+    .flashcard-image {
+        height: 100px;
+    }
+    
+    #guessGrid {
+        grid-template-columns: 1fr;
+        gap: 0.75rem;
+    }
+    
+    .guess-option {
+        height: 120px;
+    }
+    
+    .flashcards-controls {
+        gap: 0.5rem;
+    }
+    
+    .flashcards-controls .btn {
+        padding: 0.6rem 1.2rem;
+        font-size: 0.9rem;
+    }
+}
+
+/* Fullscreen adjustments for Flash Cards */
+#flashcardsContainer.fullscreen {
+    width: 100vw !important;
+    height: 100vh !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: var(--surface-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#flashcardsContainer.fullscreen .flashcards-content {
+    width: 100%;
+    height: 100%;
+    padding: 1.5rem;
+    box-sizing: border-box;
+}
+
+#flashcardsContainer.fullscreen .flashcards-controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 9999;
+    gap: 0.5rem;
+}
+
+#flashcardsContainer.fullscreen .game-message {
+    position: absolute;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9999;
+    max-width: 90%;
+}

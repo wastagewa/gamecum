@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Flash Cards{% if collection %} - {{ collection }}{% endif %}</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.png') }}">
+    
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        // Apply saved or system theme ASAP to prevent light-mode flash
+        (function(){
+            var theme = null;
+            try { theme = localStorage.getItem('imgur.theme'); } catch(e) {}
+            if(!theme){
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                theme = prefersDark ? 'dark' : 'light';
+            }
+            if(theme === 'dark'){
+                document.documentElement.setAttribute('data-theme','dark');
+                document.documentElement.style.colorScheme = 'dark';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                document.documentElement.style.colorScheme = 'light';
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand">
+                <i class="fas fa-images"></i>
+                <span>ImgurMemory</span>
+            </a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu" id="collectionsDropdown">
+                        <!-- Collections will be loaded dynamically -->
+                    </div>
+                </div>
+                {% if collection %}
+                <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-gamepad"></i> Games <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu">
+                        <a href="/collection/{{ collection }}/game" class="navbar-dropdown-item"><i class="fas fa-gamepad"></i> Memory Game</a>
+                        <a href="/collection/{{ collection }}/puzzle" class="navbar-dropdown-item"><i class="fas fa-puzzle-piece"></i> Jigsaw Puzzle</a>
+                        <a href="/collection/{{ collection }}/sequence" class="navbar-dropdown-item"><i class="fas fa-brain"></i> Sequence Memory</a>
+                        <a href="/collection/{{ collection }}/flashcards" class="navbar-dropdown-item active"><i class="fas fa-images"></i> Flash Cards</a>
+                    </div>
+                </div>
+                {% endif %}
+                <a href="/manage-collections" class="navbar-link"><i class="fas fa-cog"></i> Manage</a>
+                <button id="themeToggle" class="navbar-theme-toggle" type="button">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <div id="flashcardsContainer">
+        <div class="flashcards-content">
+            <div class="flashcards-stats">
+                <div class="stat-item">
+                    <span class="stat-label">Score:</span>
+                    <span class="stat-value" id="scoreCounter">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Level:</span>
+                    <span class="stat-value" id="levelCounter">1</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Time:</span>
+                    <span class="stat-value" id="timeCounter">0:00</span>
+                </div>
+            </div>
+
+            <div id="gameMessage" class="game-message"></div>
+
+            <!-- View Phase: Show images to memorize -->
+            <div id="viewPhase">
+                <p id="countdownText" style="font-size: 1.5rem; font-weight: 600;">Memorize these images!</p>
+                <div id="imageGrid"></div>
+            </div>
+
+            <!-- Guess Phase: Select the correct image -->
+            <div id="guessPhase">
+                <p style="font-size: 1.2rem; font-weight: 600;">Which image was shown?</p>
+                <div id="guessGrid"></div>
+            </div>
+
+            <div class="flashcards-controls">
+                <button id="startGameBtn" class="btn btn-primary">
+                    <i class="fas fa-play"></i> Start Game
+                </button>
+                <button id="resetGameBtn" class="btn btn-secondary">
+                    <i class="fas fa-redo"></i> Reset
+                </button>
+                <button id="fullscreenBtn" class="btn btn-secondary" title="Toggle fullscreen">
+                    <i class="fas fa-expand"></i> Fullscreen
+                </button>
+                <button id="backBtn" class="btn btn-secondary">
+                    <i class="fas fa-arrow-left"></i> Back to Gallery
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script>
+        // Pass images and collection to the game script
+        const GAME_IMAGES = {{ images | tojson }};
+        const CURRENT_COLLECTION = "{{ collection }}";
+    </script>
+    <script src="{{ url_for('static', filename='js/flashcards.js') }}"></script>
+</body>
+</html>

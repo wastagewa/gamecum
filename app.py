@@ -541,6 +541,22 @@ def collection_sequence(collection_name):
     return render_template('sequence.html', images=images, collection=collection)
 
 
+@app.route('/collection/<collection_name>/flashcards')
+def collection_flashcards(collection_name):
+    """Render the flashcards memory game for a specific collection."""
+    collection = _safe_collection_name(collection_name)
+    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
+    images = []
+    try:
+        for filename in os.listdir(folder):
+            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
+                images.append(filename)
+    except FileNotFoundError:
+        images = []
+    image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
+    return render_template('flashcards.html', images=image_urls, collection=collection)
+
+
 @app.route('/api/images')
 def api_images_all():
     """Return a JSON list of all image URLs across the uploads folder and its collections."""
