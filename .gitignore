@@ -19,7 +19,6 @@ static/uploads/*/
 
 # Data files
 data/
-*.json
 !tags_template.json
 
 # IDE
