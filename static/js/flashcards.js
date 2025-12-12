@@ -132,6 +132,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function showGuessPhase() {
+        // Clear the view phase images completely to prevent overlap
+        imageGrid.innerHTML = '';
+        
         viewPhase.style.display = 'none';
         guessPhase.style.display = 'block';
         

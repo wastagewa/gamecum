@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Image Hunt{% if collection %} - {{ collection }}{% endif %}</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        (function(){
+            var theme = null;
+            try { theme = localStorage.getItem('imgur.theme'); } catch(e) {}
+            if(!theme){
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                theme = prefersDark ? 'dark' : 'light';
+            }
+            if(theme === 'dark'){
+                document.documentElement.setAttribute('data-theme','dark');
+                document.documentElement.style.colorScheme = 'dark';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                document.documentElement.style.colorScheme = 'light';
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand"><i class="fas fa-images"></i> <span>ImgurMemory</span></a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu" id="collectionsDropdown"></div>
+                </div>
+                {% if collection %}
+                <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-gamepad"></i> Games <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu">
+                        <a href="/collection/{{ collection }}/game" class="navbar-dropdown-item"><i class="fas fa-gamepad"></i> Memory Game</a>
+                        <a href="/collection/{{ collection }}/puzzle" class="navbar-dropdown-item"><i class="fas fa-puzzle-piece"></i> Jigsaw Puzzle</a>
+                        <a href="/collection/{{ collection }}/sequence" class="navbar-dropdown-item"><i class="fas fa-brain"></i> Sequence Memory</a>
+                        <a href="/collection/{{ collection }}/flashcards" class="navbar-dropdown-item"><i class="fas fa-images"></i> Flash Cards</a>
+                        <a href="/collection/{{ collection }}/hunt" class="navbar-dropdown-item active"><i class="fas fa-search"></i> Image Hunt</a>
+                    </div>
+                </div>
+                {% endif %}
+                <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="hunt-container">
+        <header class="hunt-header">
+            <h1><i class="fas fa-search"></i> Image Hunt</h1>
+            <p class="hunt-sub">Find the target image as quickly as you can.</p>
+        </header>
+
+        <div class="hunt-controls">
+            <div class="controls-primary">
+                <button id="startBtn" class="btn btn-primary"><i class="fas fa-play"></i> Start</button>
+                <button id="nextBtn" class="btn btn-secondary" disabled>Next</button>
+                <button id="backBtn" class="btn btn-secondary"><i class="fas fa-arrow-left"></i> Back</button>
+            </div>
+            <div class="controls-settings">
+                <div class="control-group">
+                    <label for="gridSize">Grid:</label>
+                    <select id="gridSize">
+                        <option value="6">6</option>
+                        <option value="9" selected>9</option>
+                        <option value="12">12</option>
+                        <option value="16">16</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="cellSize">Cells:</label>
+                    <input id="cellSize" type="range" min="80" max="260" step="10" value="140" />
+                    <span id="cellSizeLabel">140px</span>
+                </div>
+                <div class="control-group">
+                    <label for="targetSize">Target:</label>
+                    <input id="targetSize" type="range" min="120" max="420" step="10" value="320" />
+                    <span id="targetSizeLabel">320px</span>
+                </div>
+                <button id="fitToggle" class="btn btn-small">Fit: On</button>
+            </div>
+        </div>
+
+        <div class="hunt-target">
+            <p class="target-label">Target Image</p>
+            <img id="targetImg" alt="Target" src="" />
+        </div>
+
+        <div class="hunt-stats">
+            <div class="stat-item"><span class="stat-label">Score:</span> <span id="score" class="stat-value">0</span></div>
+            <div class="stat-item"><span class="stat-label">Round:</span> <span id="round" class="stat-value">1</span></div>
+            <div class="stat-item"><span class="stat-label">Time:</span> <span id="time" class="stat-value">0.000</span>s</div>
+        </div>
+
+        <div id="grid" class="hunt-grid"></div>
+
+        <div id="message" class="game-message"></div>
+    </div>
+
+    <!-- Victory Overlay -->
+    <div id="victoryOverlay" class="hunt-victory-overlay" style="display: none;">
+        <div class="hunt-victory-content">
+            <div class="victory-header">
+                <i class="fas fa-star"></i>
+                <h2>Great Job!</h2>
+            </div>
+            <p class="victory-subtitle">Here's a bonus image from this collection:</p>
+            <img id="victoryImage" class="victory-image" alt="Victory" src="" />
+            <p id="victoryNextText" class="victory-next-text">Next round in <span id="countdown">3</span>s...</p>
+        </div>
+    </div>
+
+    <script>
+        const CURRENT_COLLECTION = "{{ collection }}";
+        const HUNT_IMAGES = {{ images | tojson }};
+    </script>
+    <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/hunt.js') }}"></script>
+</body>
+</html>
