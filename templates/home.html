@@ -106,31 +106,21 @@
             </div>
             
             {% set top_scores = (leaderboards.get(name) if leaderboards else []) %}
-            <div class="leaderboard-section">
-              {% if top_scores and top_scores|length > 0 %}
+            <div class="leaderboard-section" data-collection="{{ name }}">
               <div class="leaderboard-header">
-                <i class="fas fa-trophy"></i> Top Scores
+                <i class="fas fa-trophy"></i> High Scores
               </div>
-              <div class="leaderboard-list">
-                {% for entry in top_scores %}
-                <div class="leaderboard-entry">
-                  <div class="entry-left">
-                    <span class="entry-score">{{ entry.score }}</span>
-                    <span class="entry-username">{{ entry.username }}</span>
-                  </div>
-                  <div class="entry-right">
-                    <div class="entry-stats">{{ entry.time }}s · {{ entry.wrong }}W</div>
-                    <div class="entry-meta">{{ entry.pairs }}×{{ entry.matchSize }}</div>
-                  </div>
+              <div class="high-scores-tabs">
+                <button class="score-tab-btn active" data-game="all">All Games</button>
+                <button class="score-tab-btn" data-game="memory">Memory</button>
+                <button class="score-tab-btn" data-game="flashcards">Flash Cards</button>
+                <button class="score-tab-btn" data-game="hunt">Hunt</button>
+              </div>
+              <div class="leaderboard-list" id="scores-{{ name }}">
+                <div class="loading-spinner">
+                  <i class="fas fa-spinner fa-spin"></i> Loading scores...
                 </div>
-                {% endfor %}
               </div>
-              {% else %}
-              <div class="no-scores">
-                <i class="fas fa-medal"></i>
-                <span>No scores yet. Be the first champion!</span>
-              </div>
-              {% endif %}
             </div>
             
             <div class="collection-actions">

@@ -402,41 +402,90 @@ def _calculate_score(time_val: int, wrong_val: int, pairs: int, match_size: int)
 
 @app.route('/api/submit-score', methods=['POST'])
 def submit_score():
-    """Accept a finished game score and compute/persist top scores per collection.
-    Expects JSON: { collection: str, time: int, wrong: int, moves: int, username: str, pairs: int, matchSize: int }
-    Stores top 10 scores per collection (leaderboard).
+    """Accept a finished game score and compute/persist top scores per collection per game type.
+    Expects JSON: { collection: str, gameType: str, time: int, wrong: int, moves: int, username: str, pairs: int, matchSize: int, score: int, level: int }
+    Stores top 10 scores per collection per game type (leaderboard).
     """
     try:
         data = request.get_json() or {}
         collection = _safe_collection_name(str(data.get('collection') or ''))
         if not collection:
             return jsonify({'error': 'Invalid or missing collection'}), 400
-        time_val = int(data.get('time', 0))
-        wrong_val = int(data.get('wrong', 0))
-        moves_val = int(data.get('moves', 0))
-        pairs = int(data.get('pairs', 8))
-        match_size = int(data.get('matchSize', 2))
+        
+        game_type = str(data.get('gameType', 'memory')).lower()
+        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom']
+        if game_type not in allowed_games:
+            game_type = 'memory'
+        
         username = str(data.get('username') or 'Anonymous').strip()[:30]
 
-        # Compute score
-        score = _calculate_score(time_val, wrong_val, pairs, match_size)
-
+        # Build entry based on game type
         entry = {
-            'score': score,
-            'time': time_val,
-            'wrong': wrong_val,
-            'moves': moves_val,
-            'pairs': pairs,
-            'matchSize': match_size,
-            'username': username
+            'username': username,
+            'gameType': game_type
         }
 
+        # Add game-specific metrics
+        if game_type == 'memory':
+            time_val = int(data.get('time', 0))
+            wrong_val = int(data.get('wrong', 0))
+            moves_val = int(data.get('moves', 0))
+            pairs = int(data.get('pairs', 8))
+            match_size = int(data.get('matchSize', 2))
+            score = _calculate_score(time_val, wrong_val, pairs, match_size)
+            entry.update({
+                'score': score,
+                'time': time_val,
+                'wrong': wrong_val,
+                'moves': moves_val,
+                'pairs': pairs,
+                'matchSize': match_size
+            })
+        elif game_type == 'flashcards':
+            score = int(data.get('score', 0))
+            level = int(data.get('level', 1))
+            time_val = int(data.get('time', 0))
+            entry.update({
+                'score': score,
+                'level': level,
+                'time': time_val
+            })
+        elif game_type == 'hunt':
+            score = int(data.get('score', 0))
+            time_val = int(data.get('time', 0))
+            entry.update({
+                'score': score,
+                'time': time_val
+            })
+        elif game_type == 'zoom':
+            score = int(data.get('score', 0))
+            rounds = int(data.get('rounds', 0))
+            time_val = int(data.get('time', 0))
+            entry.update({
+                'score': score,
+                'rounds': rounds,
+                'time': time_val
+            })
+        else:  # puzzle, sequence, etc.
+            score = int(data.get('score', 0))
+            time_val = int(data.get('time', 0))
+            entry.update({
+                'score': score,
+                'time': time_val
+            })
+
         scores_data = _load_scores()
-        # Each collection now holds a list of top entries
+        # Structure: { collection: { gameType: [entries], ... }, ... }
         if collection not in scores_data:
-            scores_data[collection] = []
+            scores_data[collection] = {}
         
-        leaderboard = scores_data[collection]
+        if not isinstance(scores_data[collection], dict):
+            scores_data[collection] = {}
+        
+        if game_type not in scores_data[collection]:
+            scores_data[collection][game_type] = []
+        
+        leaderboard = scores_data[collection][game_type]
         if not isinstance(leaderboard, list):
             leaderboard = []
         
@@ -445,13 +494,42 @@ def submit_score():
         leaderboard.sort(key=lambda x: (-x.get('score', 0), x.get('time', 10**9)))
         # Keep top 10
         leaderboard = leaderboard[:10]
-        scores_data[collection] = leaderboard
+        scores_data[collection][game_type] = leaderboard
         _save_scores(scores_data)
 
         # Check if this entry is in top 5 (considered "new best" for UI feedback)
         is_top = any(e == entry for e in leaderboard[:5])
 
-        return jsonify({'success': True, 'updated': is_top, 'score': score, 'leaderboard': leaderboard[:5]})
+        return jsonify({'success': True, 'updated': is_top, 'score': entry.get('score', 0), 'leaderboard': leaderboard[:5]})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/high-scores/<collection>')
+def get_high_scores(collection):
+    """Get high scores for all games in a collection.
+    Returns: { gameType: [top 3 entries], ... }
+    """
+    try:
+        collection = _safe_collection_name(collection)
+        if not collection:
+            return jsonify({'error': 'Invalid collection'}), 400
+        
+        scores_data = _load_scores()
+        result = {}
+        
+        if collection in scores_data:
+            collection_scores = scores_data[collection]
+            if isinstance(collection_scores, dict):
+                # New format: { gameType: [entries], ... }
+                for game_type, leaderboard in collection_scores.items():
+                    if isinstance(leaderboard, list):
+                        result[game_type] = leaderboard[:3]  # Top 3 per game
+            else:
+                # Old format: list of entries - assume all memory game
+                result['memory'] = collection_scores[:3] if isinstance(collection_scores, list) else []
+        
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -571,6 +649,22 @@ def collection_hunt(collection_name):
         images = []
     image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
     return render_template('hunt.html', images=image_urls, collection=collection)
+
+
+@app.route('/collection/<collection_name>/zoom')
+def collection_zoom(collection_name):
+    """Zoom Challenge game: show zoomed-in portion of image, identify which full image it is."""
+    collection = _safe_collection_name(collection_name)
+    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
+    images = []
+    try:
+        for filename in os.listdir(folder):
+            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
+                images.append(filename)
+    except FileNotFoundError:
+        images = []
+    image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
+    return render_template('zoom.html', images=image_urls, collection=collection)
 
 
 @app.route('/api/images')

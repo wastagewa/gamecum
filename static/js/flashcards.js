@@ -98,6 +98,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function showViewPhase() {
+        // Clear all grids and ensure clean state
+        imageGrid.innerHTML = '';
+        guessGrid.innerHTML = '';
+        
         viewPhase.style.display = 'block';
         guessPhase.style.display = 'none';
         
@@ -106,11 +110,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function displayImages() {
+        // Completely empty and reset the grid
         imageGrid.innerHTML = '';
+        
+        // Force reflow to ensure clearing is processed
+        void imageGrid.offsetHeight;
         
         gameState.imagesToShow.forEach((image) => {
             const img = document.createElement('img');
-            img.src = image;
+            // Add cache-busting parameter to prevent browser caching issues
+            img.src = image + (image.includes('?') ? '&' : '?') + 'v=' + Date.now();
             img.alt = 'memorize';
             img.className = 'flashcard-image';
             imageGrid.appendChild(img);
@@ -132,45 +141,60 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function showGuessPhase() {
-        // Clear the view phase images completely to prevent overlap
-        imageGrid.innerHTML = '';
-        
+        // Immediately hide the view phase
         viewPhase.style.display = 'none';
-        guessPhase.style.display = 'block';
         
-        // Pick a random image from shown images
-        const randomIndex = Math.floor(Math.random() * gameState.imagesToShow.length);
-        gameState.correctAnswer = gameState.imagesToShow[randomIndex];
+        // Aggressively clear all content from view phase
+        imageGrid.innerHTML = '';
+        countdownText.textContent = '';
         
-        // Create guess options
-        let guessOptions = [gameState.correctAnswer];
+        // Force reflow to ensure clearing is processed before showing guess phase
+        void viewPhase.offsetHeight;
+        void imageGrid.offsetHeight;
         
-        // Add random other images
-        const otherImages = GAME_IMAGES.filter(img => !gameState.imagesToShow.includes(img));
-        while (guessOptions.length < Math.min(4, GAME_IMAGES.length)) {
-            const randomOther = otherImages[Math.floor(Math.random() * otherImages.length)];
-            if (!guessOptions.includes(randomOther)) {
-                guessOptions.push(randomOther);
+        // Wait a tiny bit to ensure DOM is fully cleared before showing new content
+        setTimeout(() => {
+            // Show guess phase
+            guessPhase.style.display = 'block';
+            
+            // Clear guess grid completely before populating
+            guessGrid.innerHTML = '';
+            void guessGrid.offsetHeight;
+            
+            // Pick a random image from shown images
+            const randomIndex = Math.floor(Math.random() * gameState.imagesToShow.length);
+            gameState.correctAnswer = gameState.imagesToShow[randomIndex];
+            
+            // Create guess options
+            let guessOptions = [gameState.correctAnswer];
+            
+            // Add random other images
+            const otherImages = GAME_IMAGES.filter(img => !gameState.imagesToShow.includes(img));
+            while (guessOptions.length < Math.min(4, GAME_IMAGES.length)) {
+                const randomOther = otherImages[Math.floor(Math.random() * otherImages.length)];
+                if (!guessOptions.includes(randomOther)) {
+                    guessOptions.push(randomOther);
+                }
             }
-        }
-        
-        // Shuffle options
-        gameState.guessOptions = shuffleArray(guessOptions);
-        
-        // Display options
-        guessGrid.innerHTML = '';
-        gameState.guessOptions.forEach((image) => {
-            const img = document.createElement('img');
-            img.src = image;
-            img.alt = 'guess';
-            img.className = 'guess-option';
             
-            img.addEventListener('click', () => {
-                checkAnswer(image);
+            // Shuffle options
+            gameState.guessOptions = shuffleArray(guessOptions);
+            
+            // Display options with cache-busting
+            gameState.guessOptions.forEach((image) => {
+                const img = document.createElement('img');
+                // Add cache-busting parameter to prevent browser caching issues
+                img.src = image + (image.includes('?') ? '&' : '?') + 'v=' + Date.now();
+                img.alt = 'guess';
+                img.className = 'guess-option';
+                
+                img.addEventListener('click', () => {
+                    checkAnswer(image);
+                });
+                
+                guessGrid.appendChild(img);
             });
-            
-            guessGrid.appendChild(img);
-        });
+        }, 50);
     }
 
     function checkAnswer(selected) {
@@ -260,6 +284,28 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `;
         gameMessage.className = 'game-message success';
+
+        // Submit score to server
+        try {
+            const username = (usernameInput && usernameInput.value.trim()) || 'Anonymous';
+            const payload = {
+                collection: (typeof CURRENT_COLLECTION !== 'undefined' && CURRENT_COLLECTION) ? CURRENT_COLLECTION : '',
+                gameType: 'flashcards',
+                score: gameState.score,
+                level: gameState.level,
+                time: elapsed,
+                username: username
+            };
+            if (payload.collection) {
+                fetch('/api/submit-score', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                }).catch(err => console.warn('Error submitting score', err));
+            }
+        } catch (err) {
+            console.warn('Error submitting score', err);
+        }
     }
 
     function resetGame() {

@@ -12,6 +12,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const closeBtn = document.querySelector('.close-modal');
     const modalOverlay = document.querySelector('.modal-overlay');
     const loading = document.getElementById('loading');
+    
+    // Hide loading spinner immediately on page load
+    if (loading) {
+        loading.style.display = 'none';
+        loading.classList.add('hidden');
+        loading.classList.remove('visible');
+    }
+    
         const prevBtn = document.getElementById('prevBtn');
         const nextBtn = document.getElementById('nextBtn');
     
@@ -269,8 +277,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window.AOS && AOS.refresh) AOS.refresh();
     }
 
-    function showLoading() { if (loading) loading.style.display = 'flex'; }
-    function hideLoading() { if (loading) loading.style.display = 'none'; }
+    function showLoading() { 
+        if (loading) {
+            loading.style.display = 'flex'; 
+            loading.classList.add('visible');
+            loading.classList.remove('hidden');
+        }
+    }
+    function hideLoading() { 
+        if (loading) {
+            loading.style.display = 'none';
+            loading.classList.remove('visible');
+            loading.classList.add('hidden');
+        }
+    }
 
     document.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); });
     document.addEventListener('drop', (e) => { 

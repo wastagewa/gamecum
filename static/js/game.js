@@ -250,6 +250,7 @@
                 const opts = getOptionsFromUI();
                 const payload = {
                     collection: (typeof CURRENT_COLLECTION !== 'undefined' && CURRENT_COLLECTION) ? CURRENT_COLLECTION : '',
+                    gameType: 'memory',
                     time: seconds,
                     wrong: wrongSteps,
                     moves: moves,

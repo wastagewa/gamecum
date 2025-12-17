@@ -1,9 +1,19 @@
-// home.js - handle creating new collections on the home page
+// home.js - handle creating new collections and loading high scores on the home page
 document.addEventListener('DOMContentLoaded', () => {
     const formBtn = document.getElementById('createCollectionBtn');
     const nameInput = document.getElementById('newCollectionName');
     const msg = document.getElementById('createMsg');
     const list = document.getElementById('collectionsList');
+
+    // Game display names
+    const gameNames = {
+        'memory': '🎮 Memory Game',
+        'flashcards': '📸 Flash Cards',
+        'hunt': '🔍 Image Hunt',
+        'zoom': '🔍 Zoom Challenge',
+        'puzzle': '🧩 Puzzle',
+        'sequence': '🧠 Sequence'
+    };
 
     function setMsg(text, isError = true) {
         if (!msg) return;
@@ -31,6 +41,113 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrap;
     }
 
+    // Load high scores for all leaderboard sections
+    function loadHighScores() {
+        const leaderboardSections = document.querySelectorAll('.leaderboard-section');
+        leaderboardSections.forEach(section => {
+            const collection = section.getAttribute('data-collection');
+            if (!collection) return;
+            
+            const scoresContainer = document.getElementById(`scores-${collection}`);
+            if (!scoresContainer) return;
+
+            // Load scores from API
+            fetch(`/api/high-scores/${collection}`)
+                .then(res => res.json())
+                .then(data => {
+                    renderHighScores(collection, data, scoresContainer, section);
+                })
+                .catch(err => {
+                    console.error('Failed to load high scores', err);
+                    scoresContainer.innerHTML = '<div class="no-scores"><i class="fas fa-error"></i> Failed to load scores</div>';
+                });
+        });
+    }
+
+    function renderHighScores(collection, data, container, section) {
+        // Setup tab buttons
+        const tabBtns = section.querySelectorAll('.score-tab-btn');
+        const allGames = Object.keys(data);
+
+        if (allGames.length === 0) {
+            container.innerHTML = '<div class="no-scores"><i class="fas fa-medal"></i> No scores yet. Be the first champion!</div>';
+            return;
+        }
+
+        // Handle tab clicks
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const gameType = btn.getAttribute('data-game');
+                tabBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                
+                if (gameType === 'all') {
+                    displayAllGameScores(data, container);
+                } else {
+                    displayGameScores(gameType, data[gameType] || [], container);
+                }
+            });
+        });
+
+        // Show all games by default
+        displayAllGameScores(data, container);
+    }
+
+    function displayAllGameScores(data, container) {
+        let html = '';
+        for (const [gameType, entries] of Object.entries(data)) {
+            if (!entries || entries.length === 0) continue;
+            
+            html += `<div class="game-scores-group">
+                <div class="game-scores-title">${gameNames[gameType] || gameType}</div>`;
+            
+            entries.forEach((entry, idx) => {
+                html += formatScoreEntry(entry, idx);
+            });
+            
+            html += '</div>';
+        }
+        
+        if (!html) {
+            html = '<div class="no-scores"><i class="fas fa-medal"></i> No scores yet. Be the first champion!</div>';
+        }
+        
+        container.innerHTML = html;
+    }
+
+    function displayGameScores(gameType, entries, container) {
+        if (!entries || entries.length === 0) {
+            container.innerHTML = '<div class="no-scores"><i class="fas fa-medal"></i> No scores yet for this game!</div>';
+            return;
+        }
+
+        let html = '';
+        entries.forEach((entry, idx) => {
+            html += formatScoreEntry(entry, idx);
+        });
+        
+        container.innerHTML = html;
+    }
+
+    function formatScoreEntry(entry, idx) {
+        const medals = ['🥇', '🥈', '🥉'];
+        const medal = medals[idx] || '•';
+        
+        let stats = '';
+        if (entry.time !== undefined) stats += `${entry.time}s`;
+        if (entry.level !== undefined) stats += ` · Lvl ${entry.level}`;
+        if (entry.wrong !== undefined) stats += ` · ${entry.wrong}W`;
+        
+        return `<div class="leaderboard-entry">
+            <div class="entry-rank">${medal}</div>
+            <div class="entry-left">
+                <span class="entry-username">${entry.username}</span>
+                ${stats ? `<span class="entry-stats">${stats}</span>` : ''}
+            </div>
+            <div class="entry-score">${entry.score}</div>
+        </div>`;
+    }
+
     if (formBtn && nameInput) {
         formBtn.addEventListener('click', async () => {
             const raw = nameInput.value.trim();
@@ -49,6 +166,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     setMsg('Collection created', false);
                     nameInput.value = '';
                     if (list) list.appendChild(createCard(data.name));
+                    // Reload high scores after creating new collection
+                    setTimeout(loadHighScores, 500);
                 } else {
                     setMsg(data.error || 'Failed to create collection');
                 }
@@ -58,4 +177,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } finally { formBtn.disabled = false; }
         });
     }
+
+    // Load high scores on page load
+    loadHighScores();
 });

@@ -122,6 +122,11 @@ document.addEventListener('DOMContentLoaded', () => {
             state.running = false;
             nextBtn.disabled = false;
             
+            // Submit score every 5 rounds
+            if (state.round % 5 === 0 && state.round > 0) {
+                submitHuntScore();
+            }
+            
             // Show victory overlay with random image from collection
             showVictory();
         } else {
@@ -129,6 +134,31 @@ document.addEventListener('DOMContentLoaded', () => {
             message.textContent = 'Wrong — try next round.';
             state.running = false;
             nextBtn.disabled = false;
+            
+            // Submit score on game over
+            submitHuntScore();
+        }
+    }
+
+    function submitHuntScore(){
+        try {
+            const username = (typeof usernameInput !== 'undefined' && usernameInput && usernameInput.value.trim()) || 'Anonymous';
+            const payload = {
+                collection: (typeof CURRENT_COLLECTION !== 'undefined' && CURRENT_COLLECTION) ? CURRENT_COLLECTION : '',
+                gameType: 'hunt',
+                score: state.score,
+                time: Math.floor((performance.now() - state.startAt) / 1000),
+                username: username
+            };
+            if (payload.collection) {
+                fetch('/api/submit-score', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                }).catch(err => console.warn('Error submitting score', err));
+            }
+        } catch (err) {
+            console.warn('Error submitting score', err);
         }
     }
 
