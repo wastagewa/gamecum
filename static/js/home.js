@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'flashcards': '📸 Flash Cards',
         'hunt': '🔍 Image Hunt',
         'zoom': '🔍 Zoom Challenge',
+        'whack': '🔨 Whack-a-Mole',
         'puzzle': '🧩 Puzzle',
         'sequence': '🧠 Sequence'
     };

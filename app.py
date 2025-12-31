@@ -434,7 +434,7 @@ def submit_score():
             return jsonify({'error': 'Invalid or missing collection'}), 400
         
         game_type = str(data.get('gameType', 'memory')).lower()
-        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom']
+        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack']
         if game_type not in allowed_games:
             game_type = 'memory'
         
@@ -486,6 +486,15 @@ def submit_score():
                 'score': score,
                 'rounds': rounds,
                 'time': time_val
+            })
+        elif game_type == 'whack':
+            score = int(data.get('score', 0))
+            time_val = int(data.get('time', 0))
+            clicks = int(data.get('clicks', 0))
+            entry.update({
+                'score': score,
+                'time': time_val,
+                'clicks': clicks
             })
         else:  # puzzle, sequence, etc.
             score = int(data.get('score', 0))
@@ -686,6 +695,22 @@ def collection_zoom(collection_name):
         images = []
     image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
     return render_template('zoom.html', images=image_urls, collection=collection)
+
+
+@app.route('/collection/<collection_name>/whack')
+def collection_whack(collection_name):
+    """Whack-a-Mole game: click images as they appear on screen."""
+    collection = _safe_collection_name(collection_name)
+    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
+    images = []
+    try:
+        for filename in os.listdir(folder):
+            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
+                images.append(filename)
+    except FileNotFoundError:
+        images = []
+    image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
+    return render_template('whack.html', images=image_urls, collection=collection)
 
 
 @app.route('/collection/<collection_name>/chatbot')

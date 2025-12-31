@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Whack-a-Mole{% if collection %} - {{ collection }}{% endif %}</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.png') }}">
+    
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        // Apply saved or system theme ASAP to prevent light-mode flash
+        (function(){
+            var theme = null;
+            try { theme = localStorage.getItem('imgur.theme'); } catch(e) {}
+            if(!theme){
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                theme = prefersDark ? 'dark' : 'light';
+            }
+            if(theme === 'dark'){
+                document.documentElement.setAttribute('data-theme','dark');
+                document.documentElement.style.colorScheme = 'dark';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                document.documentElement.style.colorScheme = 'light';
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand">
+                <i class="fas fa-images"></i>
+                <span>ImgurMemory</span>
+            </a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu" id="collectionsDropdown">
+                        <!-- Collections will be loaded dynamically -->
+                    </div>
+                </div>
+                {% if collection %}
+                <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+                <button class="navbar-link" id="gamesMenuBtn"><i class="fas fa-gamepad"></i> Games</button>
+                {% endif %}
+                <a href="/manage-collections" class="navbar-link"><i class="fas fa-cog"></i> Manage</a>
+                <button id="themeToggle" class="navbar-theme-toggle" type="button">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <div id="whackContainer">
+        <div class="whack-content">
+            <!-- Stats -->
+            <div class="whack-stats">
+                <div class="stat-item">
+                    <span class="stat-label">Score:</span>
+                    <span class="stat-value" id="whackScore">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Clicks:</span>
+                    <span class="stat-value" id="whackClicks">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Time:</span>
+                    <span class="stat-value" id="whackTime">0:00</span>
+                </div>
+            </div>
+
+            <!-- Message -->
+            <div id="whackMessage" class="whack-message"></div>
+
+            <!-- Game Area -->
+            <div class="whack-game-area" id="whackGameArea">
+                <!-- Images will appear and disappear here -->
+            </div>
+
+            <!-- Controls -->
+            <div class="whack-controls">
+                <button id="startWhackBtn" class="control-btn primary"><i class="fas fa-play"></i> Start Game</button>
+                <button id="resetWhackBtn" class="control-btn secondary" style="display:none;"><i class="fas fa-redo"></i> Reset</button>
+                <button id="backWhackBtn" class="control-btn secondary"><i class="fas fa-arrow-left"></i> Back</button>
+            </div>
+
+            <!-- Settings Panel -->
+            <div class="whack-settings">
+                <div class="settings-group">
+                    <label for="whackDuration">Game Duration (seconds):</label>
+                    <select id="whackDuration" class="setting-select">
+                        <option value="30">30 Seconds</option>
+                        <option value="60" selected>60 Seconds</option>
+                        <option value="90">90 Seconds</option>
+                    </select>
+                </div>
+                <div class="settings-group">
+                    <label for="whackDifficulty">Difficulty:</label>
+                    <select id="whackDifficulty" class="setting-select">
+                        <option value="easy">Easy (1.5s appear time)</option>
+                        <option value="medium" selected>Medium (1.0s appear time)</option>
+                        <option value="hard">Hard (0.7s appear time)</option>
+                        <option value="insane">Insane (0.5s appear time)</option>
+                    </select>
+                </div>
+                <div class="settings-group">
+                    <label for="whackUsernameInput">Username:</label>
+                    <input type="text" id="whackUsernameInput" class="setting-input" placeholder="Anonymous" maxlength="20">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Expose images and collection to JavaScript
+        const WHACK_IMAGES = [
+            {% for image in images %}
+                "{{ image }}"{{ "," if not loop.last }}
+            {% endfor %}
+        ];
+        const CURRENT_COLLECTION = "{{ collection }}";
+    </script>
+
+    <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/whack.js') }}"></script>
+
+    <!-- Games Modal -->
+    <div id="gamesModal" class="games-modal">
+        <div class="games-modal-content">
+            <div class="games-modal-header">
+                <h2><i class="fas fa-gamepad"></i> Choose a Game</h2>
+                <button class="games-modal-close" id="gamesModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="games-grid" id="gamesGrid">
+                <!-- Games will be populated by games-modal.js -->
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/games-modal.js') }}"></script>
+</body>
+</html>

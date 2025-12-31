@@ -44,6 +44,12 @@ document.addEventListener('DOMContentLoaded', () => {
             url: `/collection/${CURRENT_COLLECTION}/zoom`
         },
         {
+            name: 'Whack-a-Mole',
+            icon: 'fa-hammer',
+            description: 'Click images as they appear on screen',
+            url: `/collection/${CURRENT_COLLECTION}/whack`
+        },
+        {
             name: 'Character Chat',
             icon: 'fa-comments',
             description: 'Chat with AI-powered characters',
