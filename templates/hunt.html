@@ -37,17 +37,7 @@
                 </div>
                 {% if collection %}
                 <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
-                <div class="navbar-dropdown">
-                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-gamepad"></i> Games <i class="fas fa-caret-down"></i></button>
-                    <div class="navbar-dropdown-menu">
-                        <a href="/collection/{{ collection }}/game" class="navbar-dropdown-item"><i class="fas fa-gamepad"></i> Memory Game</a>
-                        <a href="/collection/{{ collection }}/puzzle" class="navbar-dropdown-item"><i class="fas fa-puzzle-piece"></i> Jigsaw Puzzle</a>
-                        <a href="/collection/{{ collection }}/sequence" class="navbar-dropdown-item"><i class="fas fa-brain"></i> Sequence Memory</a>
-                        <a href="/collection/{{ collection }}/flashcards" class="navbar-dropdown-item"><i class="fas fa-images"></i> Flash Cards</a>
-                        <a href="/collection/{{ collection }}/hunt" class="navbar-dropdown-item active"><i class="fas fa-search"></i> Image Hunt</a>
-                        <a href="/collection/{{ collection }}/zoom" class="navbar-dropdown-item"><i class="fas fa-search-plus"></i> Zoom Challenge</a>
-                    </div>
-                </div>
+                <button class="navbar-link" id="gamesMenuBtn"><i class="fas fa-gamepad"></i> Games</button>
                 {% endif %}
                 <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
             </div>
@@ -126,5 +116,22 @@
     <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <script src="{{ url_for('static', filename='js/hunt.js') }}"></script>
+
+    <!-- Games Modal -->
+    <div id="gamesModal" class="games-modal">
+        <div class="games-modal-content">
+            <div class="games-modal-header">
+                <h2><i class="fas fa-gamepad"></i> Choose a Game</h2>
+                <button class="games-modal-close" id="gamesModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="games-grid" id="gamesGrid">
+                <!-- Games will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/games-modal.js') }}"></script>
 </body>
 </html>

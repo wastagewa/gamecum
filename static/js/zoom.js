@@ -325,25 +325,37 @@ document.addEventListener('DOMContentLoaded', () => {
     // Fullscreen functionality
     if (fullscreenBtn && zoomContainer) {
         fullscreenBtn.addEventListener('click', () => {
+            const navbar = document.querySelector('.navbar');
+            const header = document.querySelector('.header');
+            
             zoomContainer.classList.toggle('fullscreen');
             if (zoomContainer.classList.contains('fullscreen')) {
                 fullscreenBtn.innerHTML = '<i class="fas fa-compress"></i> Exit Fullscreen';
                 fullscreenBtn.classList.add('exit-fullscreen');
                 document.body.style.overflow = 'hidden';
+                if (navbar) navbar.style.display = 'none';
+                if (header) header.style.display = 'none';
             } else {
                 fullscreenBtn.innerHTML = '<i class="fas fa-expand"></i> Fullscreen';
                 fullscreenBtn.classList.remove('exit-fullscreen');
                 document.body.style.overflow = '';
+                if (navbar) navbar.style.display = '';
+                if (header) header.style.display = '';
             }
         });
 
         // Exit fullscreen on Escape key
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && zoomContainer.classList.contains('fullscreen')) {
+                const navbar = document.querySelector('.navbar');
+                const header = document.querySelector('.header');
+                
                 zoomContainer.classList.remove('fullscreen');
                 fullscreenBtn.innerHTML = '<i class="fas fa-expand"></i> Fullscreen';
                 fullscreenBtn.classList.remove('exit-fullscreen');
                 document.body.style.overflow = '';
+                if (navbar) navbar.style.display = '';
+                if (header) header.style.display = '';
             }
         });
     }

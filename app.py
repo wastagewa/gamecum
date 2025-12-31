@@ -14,6 +14,7 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 SCORES_DIR = 'data'
 SCORES_FILE = os.path.join(SCORES_DIR, 'scores.json')
 TAGS_FILE = os.path.join(SCORES_DIR, 'tags.json')
+IMAGE_METADATA_FILE = os.path.join(SCORES_DIR, 'image_metadata.json')
 
 def _ensure_scores_file():
     os.makedirs(SCORES_DIR, exist_ok=True)
@@ -34,6 +35,26 @@ def _load_scores():
     except Exception:
         pass
     return {}
+
+def _load_image_metadata():
+    """Load image metadata (names, descriptions) from JSON file."""
+    _ensure_scores_file()
+    if not os.path.exists(IMAGE_METADATA_FILE):
+        return {}
+    try:
+        with open(IMAGE_METADATA_FILE, 'r') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_image_metadata(metadata: dict):
+    """Save image metadata to JSON file."""
+    try:
+        _ensure_scores_file()
+        with open(IMAGE_METADATA_FILE, 'w') as f:
+            json.dump(metadata, f)
+    except Exception:
+        pass
 
 def _save_scores(scores: dict):
     try:
@@ -665,6 +686,143 @@ def collection_zoom(collection_name):
         images = []
     image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
     return render_template('zoom.html', images=image_urls, collection=collection)
+
+
+@app.route('/collection/<collection_name>/chatbot')
+def collection_chatbot(collection_name):
+    """Chatbot game: interact with AI characters based on images."""
+    collection = _safe_collection_name(collection_name)
+    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
+    images = []
+    try:
+        for filename in os.listdir(folder):
+            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
+                images.append(filename)
+    except FileNotFoundError:
+        images = []
+    image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
+    
+    # Load image metadata
+    metadata = _load_image_metadata()
+    if collection not in metadata:
+        metadata[collection] = {}
+    
+    # Build image data with names
+    image_data = []
+    for i, url in enumerate(image_urls):
+        filename = images[i]
+        name = metadata[collection].get(filename, {}).get('name', f'Character {i + 1}')
+        image_data.append({
+            'url': url,
+            'filename': filename,
+            'name': name,
+            'index': i
+        })
+    
+    return render_template('chatbot.html', image_data=image_data, collection=collection)
+
+
+@app.route('/api/chatbot/message', methods=['POST'])
+def chatbot_message():
+    """Handle chatbot messages using MythoMax L2 13B."""
+    try:
+        data = request.json
+        message = data.get('message', '').strip()
+        image_index = data.get('image_index', 0)
+        collection = data.get('collection', '')
+        
+        if not message:
+            return jsonify({'error': 'Empty message'}), 400
+        
+        # Import ollama for LLM
+        import ollama
+        
+        # Load image metadata to get character name
+        metadata = _load_image_metadata()
+        character_name = 'Character'
+        if collection in metadata and image_index < len(metadata.get(collection, {})):
+            # Try to find the filename for this index
+            folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
+            try:
+                filenames = sorted([f for f in os.listdir(folder) if any(f.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS)])
+                if image_index < len(filenames):
+                    filename = filenames[image_index]
+                    character_name = metadata[collection].get(filename, {}).get('name', f'Character {image_index + 1}')
+            except:
+                pass
+        
+        # Get context from request if provided
+        context = data.get('context', '').strip()
+        context_text = f' The current situation: {context}' if context else ''
+        
+        # Create character prompt based on image index and name
+        character_prompt = f'You are {character_name}, a character from the {collection} collection.{context_text} Be creative, friendly, and engage with the user. Keep responses concise (2-3 sentences).'
+
+        try:
+            # Call Ollama LLM using llama2-uncensored model with optimized parameters
+            response = ollama.chat(
+                model='llama2-uncensored:7b',
+                messages=[
+                    {'role': 'system', 'content': character_prompt},
+                    {'role': 'user', 'content': message}
+                ],
+                stream=False,
+                options={
+                    'temperature': 0.7,
+                    'top_p': 0.9,
+                    'top_k': 40,
+                    'num_predict': 256,
+                    'num_ctx': 2048,
+                }
+            )
+
+            reply = response['message']['content']
+            return jsonify({'reply': reply, 'success': True})
+        except Exception as e:
+            error_msg = str(e).lower()
+            # Check if error is because Ollama is not running
+            if 'connection' in error_msg or 'refused' in error_msg or 'ollama' in error_msg or 'econnrefused' in error_msg:
+                return jsonify({'error': 'Ollama is not running. Make sure Ollama is started and try again.'}), 500
+            elif 'cuda' in error_msg or 'gpu' in error_msg:
+                return jsonify({'error': 'GPU Error. Try running: set OLLAMA_NUM_GPU=1 before starting Ollama, or disable GPU with: set OLLAMA_NUM_GPU=0'}), 500
+            elif 'model' in error_msg or 'not found' in error_msg:
+                return jsonify({'error': 'Model not found. Make sure llama2-uncensored:7b is installed.'}), 500
+            else:
+                return jsonify({'error': f'LLM Error: {str(e)}'}), 500
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/chatbot/update-name', methods=['POST'])
+def update_image_name():
+    """Update the name of an image in a collection."""
+    try:
+        data = request.json
+        collection = data.get('collection', '')
+        filename = data.get('filename', '')
+        name = data.get('name', '').strip()
+        
+        if not collection or not filename:
+            return jsonify({'error': 'Missing collection or filename'}), 400
+        
+        # Load metadata
+        metadata = _load_image_metadata()
+        if collection not in metadata:
+            metadata[collection] = {}
+        
+        if filename not in metadata[collection]:
+            metadata[collection][filename] = {}
+        
+        # Update name
+        metadata[collection][filename]['name'] = name if name else f'Image {filename}'
+        
+        # Save metadata
+        _save_image_metadata(metadata)
+        
+        return jsonify({'success': True, 'name': metadata[collection][filename]['name']})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/images')

@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Character Chatbot{% if collection %} - {{ collection }}{% endif %}</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.png') }}">
+    
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        // Apply saved or system theme ASAP
+        (function(){
+            var theme = null;
+            try { theme = localStorage.getItem('imgur.theme'); } catch(e) {}
+            if(!theme){
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                theme = prefersDark ? 'dark' : 'light';
+            }
+            if(theme === 'dark'){
+                document.documentElement.setAttribute('data-theme','dark');
+                document.documentElement.style.colorScheme = 'dark';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                document.documentElement.style.colorScheme = 'light';
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .chatbot-container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 2rem;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+        }
+
+        .character-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .character-image {
+            width: 100%;
+            aspect-ratio: 1;
+            border-radius: 12px;
+            object-fit: cover;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+            border: 2px solid var(--primary-color);
+        }
+
+        .character-name {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            text-align: center;
+        }
+
+        .character-name-edit {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+            align-items: center;
+        }
+
+        .character-name-input {
+            flex: 1;
+            padding: 0.5rem 0.8rem;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 6px;
+            background: var(--bg-color);
+            color: var(--text-color);
+            font-size: 0.9rem;
+        }
+
+        .character-name-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+        }
+
+        .name-edit-btn, .name-save-btn {
+            padding: 0.5rem 0.8rem;
+            background: rgba(164, 6, 110, 0.2);
+            border: 1px solid var(--primary-color);
+            color: var(--primary-color);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.2s ease;
+        }
+
+        .name-edit-btn:hover, .name-save-btn:hover {
+            background: rgba(164, 6, 110, 0.3);
+        }
+
+        .context-input-area {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            padding: 1rem;
+            background: rgba(164, 6, 110, 0.05);
+            border-radius: 8px;
+            border: 1px solid rgba(164, 6, 110, 0.2);
+        }
+
+        .context-label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--muted-text);
+            text-transform: uppercase;
+        }
+
+        .context-input {
+            padding: 0.8rem 1rem;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 6px;
+            background: var(--bg-color);
+            color: var(--text-color);
+            font-size: 0.9rem;
+            resize: vertical;
+            min-height: 60px;
+            font-family: inherit;
+        }
+
+        .context-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(164, 6, 110, 0.1);
+        }
+
+        .character-selector {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .char-thumb {
+            width: 50px;
+            height: 50px;
+            border-radius: 8px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: all 0.2s ease;
+            object-fit: cover;
+        }
+
+        .char-thumb:hover,
+        .char-thumb.active {
+            border-color: var(--primary-color);
+            transform: scale(1.1);
+        }
+
+        .chat-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            background: var(--surface-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+
+        .chat-header {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--primary-color);
+            border-bottom: 2px solid rgba(164, 6, 110, 0.2);
+            padding-bottom: 0.5rem;
+        }
+
+        .chat-messages {
+            flex: 1;
+            min-height: 400px;
+            max-height: 500px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            padding: 1rem 0;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+
+        .message {
+            display: flex;
+            gap: 0.8rem;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            justify-content: flex-end;
+        }
+
+        .message-bubble {
+            max-width: 70%;
+            padding: 0.8rem 1.2rem;
+            border-radius: 12px;
+            word-wrap: break-word;
+            line-height: 1.4;
+        }
+
+        .message.user .message-bubble {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+        }
+
+        .message.bot .message-bubble {
+            background: var(--bg-color);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: var(--text-color);
+        }
+
+        .chat-input-area {
+            display: flex;
+            gap: 0.8rem;
+        }
+
+        .chat-input {
+            flex: 1;
+            padding: 0.8rem 1rem;
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            background: var(--bg-color);
+            color: var(--text-color);
+            font-size: 1rem;
+        }
+
+        .chat-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(164, 6, 110, 0.1);
+        }
+
+        .send-btn {
+            padding: 0.8rem 1.5rem;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+
+        .send-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(164, 6, 110, 0.4);
+        }
+
+        .send-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--muted-text);
+            font-size: 0.9rem;
+        }
+
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--primary-color);
+            border-top: 2px solid transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .controls {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .control-btn {
+            padding: 0.8rem 1.5rem;
+            border: 2px solid var(--primary-color);
+            background: transparent;
+            color: var(--primary-color);
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+
+        .control-btn:hover {
+            background: rgba(164, 6, 110, 0.1);
+            transform: translateY(-2px);
+        }
+
+        @media (max-width: 1024px) {
+            .chatbot-container {
+                grid-template-columns: 1fr;
+            }
+
+            .message-bubble {
+                max-width: 90%;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .chatbot-container {
+                padding: 1rem;
+            }
+
+            .chat-messages {
+                min-height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand">
+                <i class="fas fa-images"></i>
+                <span>ImgurMemory</span>
+            </a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu" id="collectionsDropdown">
+                        <!-- Collections will be loaded dynamically -->
+                    </div>
+                </div>
+                {% if collection %}
+                <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+                <button class="navbar-link" id="gamesMenuBtn"><i class="fas fa-gamepad"></i> Games</button>
+                {% endif %}
+                <a href="/manage-collections" class="navbar-link"><i class="fas fa-cog"></i> Manage</a>
+                <button id="themeToggle" class="navbar-theme-toggle" type="button">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="header">
+        <h1><i class="fas fa-comments"></i> Character Chatbot</h1>
+        <p style="margin-top:8px;color:var(--muted-text);">Chat with AI characters based on images from your collection</p>
+    </div>
+
+    <div class="chatbot-container">
+        <!-- Character Selection Panel -->
+        <div class="character-panel">
+            <img id="characterImage" src="" alt="Character" class="character-image">
+            <div class="character-name" id="characterName">Select a Character</div>
+            <div class="character-name-edit" id="characterNameEdit" style="display: none;">
+                <input type="text" id="characterNameInput" class="character-name-input" placeholder="Enter character name...">
+                <button class="name-save-btn" id="nameSaveBtn"><i class="fas fa-check"></i></button>
+                <button class="name-edit-btn" id="nameEditCancelBtn" style="margin-left: auto;"><i class="fas fa-times"></i></button>
+            </div>
+            <button class="name-edit-btn" id="nameEditBtn" style="width: 100%;"><i class="fas fa-edit"></i> Edit Name</button>
+            <div class="character-selector" id="characterSelector"></div>
+            <div class="context-input-area">
+                <label class="context-label">Set Situation (Optional)</label>
+                <textarea id="contextInput" class="context-input" placeholder="E.g., We're on an adventure, or it's a job interview..."></textarea>
+            </div>
+            <div class="controls">
+                <button class="control-btn" id="clearChatBtn"><i class="fas fa-trash"></i> Clear Chat</button>
+                <button class="control-btn" id="backBtn"><i class="fas fa-arrow-left"></i> Back</button>
+            </div>
+        </div>
+
+        <!-- Chat Panel -->
+        <div class="chat-panel">
+            <div class="chat-header">Chat with Character</div>
+            <div class="chat-messages" id="chatMessages"></div>
+            <div class="chat-input-area">
+                <textarea id="chatInput" class="chat-input" placeholder="Type your message... (Shift+Enter for new line)" style="resize: vertical; min-height: 40px; max-height: 120px; font-family: inherit;"></textarea>
+                <button id="sendBtn" class="send-btn"><i class="fas fa-paper-plane"></i></button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script>
+        const CHATBOT_IMAGES = [
+            {% for img in image_data %}
+                { url: "{{ img.url }}", filename: "{{ img.filename }}", name: "{{ img.name }}", index: {{ img.index }} }{{ "," if not loop.last }}
+            {% endfor %}
+        ];
+        const CURRENT_COLLECTION = "{{ collection }}";
+    </script>
+    <script src="{{ url_for('static', filename='js/chatbot.js') }}"></script>
+
+    <!-- Games Modal -->
+    <div id="gamesModal" class="games-modal">
+        <div class="games-modal-content">
+            <div class="games-modal-header">
+                <h2><i class="fas fa-gamepad"></i> Choose a Game</h2>
+                <button class="games-modal-close" id="gamesModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="games-grid" id="gamesGrid">
+                <!-- Games will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/games-modal.js') }}"></script>
+</body>
+</html>
