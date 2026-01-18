@@ -49,12 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
             description: 'Click images as they appear on screen',
             url: `/collection/${CURRENT_COLLECTION}/whack`
         },
-        {
-            name: 'Character Chat',
-            icon: 'fa-comments',
-            description: 'Chat with AI-powered characters',
-            url: `/collection/${CURRENT_COLLECTION}/chatbot`
-        }
+
     ];
 
     if (gamesMenuBtn && gamesModal) {

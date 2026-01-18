@@ -112,6 +112,78 @@ def _cleanup_tags():
     
     return tags_data
 
+def _normalize_tags_entry(entry):
+    """Normalize tags entry to new format: {'tags': [...], 'locked': bool}."""
+    if isinstance(entry, list):
+        # Old format: list of tags
+        return {'tags': entry, 'locked': False}
+    elif isinstance(entry, dict):
+        # Could be new format or old dict format
+        if 'tags' in entry:
+            # Already has tags key, ensure locked key exists
+            return {
+                'tags': entry['tags'] if isinstance(entry['tags'], list) else [],
+                'locked': entry.get('locked', False)
+            }
+        elif 'tag' in entry:
+            # Old single tag dict
+            return {'tags': [entry['tag']], 'locked': False}
+        else:
+            # Try to extract all string values as tags
+            return {'tags': [str(v) for v in entry.values() if isinstance(v, str)], 'locked': False}
+    else:
+        return {'tags': [], 'locked': False}
+
+def _get_image_tags(collection: str, filename: str):
+    """Get tags for an image. Returns list of tags."""
+    image_key = _get_image_key(collection, filename)
+    tags_data = _load_tags()
+    entry = tags_data.get(image_key, {})
+    normalized = _normalize_tags_entry(entry)
+    return normalized['tags']
+
+def _get_image_locked_status(collection: str, filename: str):
+    """Get locked status for an image."""
+    image_key = _get_image_key(collection, filename)
+    tags_data = _load_tags()
+    entry = tags_data.get(image_key, {})
+    normalized = _normalize_tags_entry(entry)
+    return normalized.get('locked', False)
+
+def _set_image_tags(collection: str, filename: str, tags: list, locked: bool = None):
+    """Set tags for an image, optionally updating locked status."""
+    image_key = _get_image_key(collection, filename)
+    tags_data = _load_tags()
+    
+    # Get existing entry and normalize it
+    existing = tags_data.get(image_key, {})
+    normalized = _normalize_tags_entry(existing)
+    
+    # Update tags
+    normalized['tags'] = [str(t).strip() for t in tags if t]
+    
+    # Update locked status if provided
+    if locked is not None:
+        normalized['locked'] = locked
+    
+    tags_data[image_key] = normalized
+    _save_tags(tags_data)
+
+def _set_image_locked(collection: str, filename: str, locked: bool):
+    """Set locked status for an image."""
+    image_key = _get_image_key(collection, filename)
+    tags_data = _load_tags()
+    
+    # Get existing entry and normalize it
+    existing = tags_data.get(image_key, {})
+    normalized = _normalize_tags_entry(existing)
+    
+    # Update locked status
+    normalized['locked'] = locked
+    
+    tags_data[image_key] = normalized
+    _save_tags(tags_data)
+
 def _get_image_key(collection: str, filename: str):
     """Generate a unique key for an image."""
     return f"{collection}/{filename}" if collection else filename
@@ -713,141 +785,7 @@ def collection_whack(collection_name):
     return render_template('whack.html', images=image_urls, collection=collection)
 
 
-@app.route('/collection/<collection_name>/chatbot')
-def collection_chatbot(collection_name):
-    """Chatbot game: interact with AI characters based on images."""
-    collection = _safe_collection_name(collection_name)
-    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
-    images = []
-    try:
-        for filename in os.listdir(folder):
-            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                images.append(filename)
-    except FileNotFoundError:
-        images = []
-    image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
-    
-    # Load image metadata
-    metadata = _load_image_metadata()
-    if collection not in metadata:
-        metadata[collection] = {}
-    
-    # Build image data with names
-    image_data = []
-    for i, url in enumerate(image_urls):
-        filename = images[i]
-        name = metadata[collection].get(filename, {}).get('name', f'Character {i + 1}')
-        image_data.append({
-            'url': url,
-            'filename': filename,
-            'name': name,
-            'index': i
-        })
-    
-    return render_template('chatbot.html', image_data=image_data, collection=collection)
 
-
-@app.route('/api/chatbot/message', methods=['POST'])
-def chatbot_message():
-    """Handle chatbot messages using MythoMax L2 13B."""
-    try:
-        data = request.json
-        message = data.get('message', '').strip()
-        image_index = data.get('image_index', 0)
-        collection = data.get('collection', '')
-        
-        if not message:
-            return jsonify({'error': 'Empty message'}), 400
-        
-        # Import ollama for LLM
-        import ollama
-        
-        # Load image metadata to get character name
-        metadata = _load_image_metadata()
-        character_name = 'Character'
-        if collection in metadata and image_index < len(metadata.get(collection, {})):
-            # Try to find the filename for this index
-            folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
-            try:
-                filenames = sorted([f for f in os.listdir(folder) if any(f.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS)])
-                if image_index < len(filenames):
-                    filename = filenames[image_index]
-                    character_name = metadata[collection].get(filename, {}).get('name', f'Character {image_index + 1}')
-            except:
-                pass
-        
-        # Get context from request if provided
-        context = data.get('context', '').strip()
-        context_text = f' The current situation: {context}' if context else ''
-        
-        # Create character prompt based on image index and name
-        character_prompt = f'You are {character_name}, a character from the {collection} collection.{context_text} Be creative, friendly, and engage with the user. Keep responses concise (2-3 sentences).'
-
-        try:
-            # Call Ollama LLM using llama2-uncensored model with optimized parameters
-            response = ollama.chat(
-                model='llama2-uncensored:7b',
-                messages=[
-                    {'role': 'system', 'content': character_prompt},
-                    {'role': 'user', 'content': message}
-                ],
-                stream=False,
-                options={
-                    'temperature': 0.7,
-                    'top_p': 0.9,
-                    'top_k': 40,
-                    'num_predict': 256,
-                    'num_ctx': 2048,
-                }
-            )
-
-            reply = response['message']['content']
-            return jsonify({'reply': reply, 'success': True})
-        except Exception as e:
-            error_msg = str(e).lower()
-            # Check if error is because Ollama is not running
-            if 'connection' in error_msg or 'refused' in error_msg or 'ollama' in error_msg or 'econnrefused' in error_msg:
-                return jsonify({'error': 'Ollama is not running. Make sure Ollama is started and try again.'}), 500
-            elif 'cuda' in error_msg or 'gpu' in error_msg:
-                return jsonify({'error': 'GPU Error. Try running: set OLLAMA_NUM_GPU=1 before starting Ollama, or disable GPU with: set OLLAMA_NUM_GPU=0'}), 500
-            elif 'model' in error_msg or 'not found' in error_msg:
-                return jsonify({'error': 'Model not found. Make sure llama2-uncensored:7b is installed.'}), 500
-            else:
-                return jsonify({'error': f'LLM Error: {str(e)}'}), 500
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/chatbot/update-name', methods=['POST'])
-def update_image_name():
-    """Update the name of an image in a collection."""
-    try:
-        data = request.json
-        collection = data.get('collection', '')
-        filename = data.get('filename', '')
-        name = data.get('name', '').strip()
-        
-        if not collection or not filename:
-            return jsonify({'error': 'Missing collection or filename'}), 400
-        
-        # Load metadata
-        metadata = _load_image_metadata()
-        if collection not in metadata:
-            metadata[collection] = {}
-        
-        if filename not in metadata[collection]:
-            metadata[collection][filename] = {}
-        
-        # Update name
-        metadata[collection][filename]['name'] = name if name else f'Image {filename}'
-        
-        # Save metadata
-        _save_image_metadata(metadata)
-        
-        return jsonify({'success': True, 'name': metadata[collection][filename]['name']})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/images')
@@ -993,7 +931,7 @@ def api_delete_collection():
 
 @app.route('/api/collections/<collection_name>/images', methods=['GET'])
 def api_collection_images(collection_name):
-    """Get all images in a collection with their tags."""
+    """Get all images in a collection with their tags and lock status."""
     safe_name = _safe_collection_name(collection_name)
     folder_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name)
     
@@ -1006,14 +944,18 @@ def api_collection_images(collection_name):
     for filename in os.listdir(folder_path):
         if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
             image_key = _get_image_key(safe_name, filename)
-            image_tags = tags_data.get(image_key, [])
-            # Ensure tags is always a list
-            if not isinstance(image_tags, list):
-                image_tags = []
+            entry = tags_data.get(image_key, {})
+            
+            # Normalize the entry
+            normalized = _normalize_tags_entry(entry)
+            image_tags = normalized['tags']
+            locked = normalized.get('locked', False)
+            
             images.append({
                 'filename': filename,
                 'url': url_for('static', filename=f'uploads/{safe_name}/{filename}'),
-                'tags': image_tags
+                'tags': image_tags,
+                'locked': locked
             })
     
     # Sort images by filename for consistent ordering
@@ -1036,11 +978,9 @@ def api_update_image_tags(collection_name, filename):
     tags = list(set(tags))  # Remove duplicates
     
     safe_name = _safe_collection_name(collection_name)
-    image_key = _get_image_key(safe_name, filename)
     
-    tags_data = _load_tags()
-    tags_data[image_key] = tags
-    _save_tags(tags_data)
+    # Use new function to set tags while preserving locked status
+    _set_image_tags(safe_name, filename, tags)
     
     return jsonify({'success': True, 'tags': tags})
 
@@ -1072,7 +1012,7 @@ def api_retag_image(collection_name, filename):
 
 @app.route('/api/collections/<collection_name>/retag-all', methods=['POST'])
 def api_retag_all_images(collection_name):
-    """Auto-generate tags for all images in a collection."""
+    """Auto-generate tags for all images in a collection, skipping locked images."""
     safe_name = _safe_collection_name(collection_name)
     folder_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name)
     
@@ -1084,30 +1024,92 @@ def api_retag_all_images(collection_name):
         tags_data = _load_tags()
         processed = 0
         errors = 0
+        skipped_locked = 0
         
         for filename in os.listdir(folder_path):
             if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
+                # Check if image is locked
+                if _get_image_locked_status(safe_name, filename):
+                    skipped_locked += 1
+                    continue
+                
                 try:
                     file_path = os.path.join(folder_path, filename)
                     # Use get_primary_tags to get list of strings instead of dicts
                     tags = get_primary_tags(file_path, max_tags=10)
                     
-                    image_key = _get_image_key(safe_name, filename)
-                    tags_data[image_key] = tags
+                    # Use the new function to set tags while preserving locked status
+                    _set_image_tags(safe_name, filename, tags)
                     processed += 1
                 except Exception as e:
                     errors += 1
-        
-        _save_tags(tags_data)
         
         return jsonify({
             'success': True,
             'processed': processed,
             'errors': errors,
-            'message': f'Processed {processed} images with {errors} errors'
+            'skipped_locked': skipped_locked,
+            'message': f'Processed {processed} images with {errors} errors ({skipped_locked} locked images skipped)'
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/images/<collection_name>/<filename>/lock', methods=['POST'])
+def api_lock_image(collection_name, filename):
+    """Lock an image so it won't be retagged during retag-all."""
+    safe_name = _safe_collection_name(collection_name)
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name, filename)
+    
+    if not os.path.exists(file_path):
+        return jsonify({'success': False, 'error': 'Image not found'}), 404
+    
+    _set_image_locked(safe_name, filename, True)
+    return jsonify({'success': True, 'locked': True, 'message': 'Image locked'})
+
+
+@app.route('/api/images/<collection_name>/<filename>/unlock', methods=['POST'])
+def api_unlock_image(collection_name, filename):
+    """Unlock an image so it can be retagged."""
+    safe_name = _safe_collection_name(collection_name)
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name, filename)
+    
+    if not os.path.exists(file_path):
+        return jsonify({'success': False, 'error': 'Image not found'}), 404
+    
+    _set_image_locked(safe_name, filename, False)
+    return jsonify({'success': True, 'locked': False, 'message': 'Image unlocked'})
+
+
+@app.route('/api/images/<collection_name>/<filename>/lock-status', methods=['GET'])
+def api_get_lock_status(collection_name, filename):
+    """Get lock status for an image."""
+    safe_name = _safe_collection_name(collection_name)
+    locked = _get_image_locked_status(safe_name, filename)
+    tags = _get_image_tags(safe_name, filename)
+    return jsonify({'success': True, 'locked': locked, 'tags': tags})
+
+
+@app.route('/api/images/<collection_name>/<source_filename>/copy-tags/<target_filename>', methods=['POST'])
+def api_copy_image_tags(collection_name, source_filename, target_filename):
+    """Copy tags from source image to target image."""
+    safe_name = _safe_collection_name(collection_name)
+    
+    source_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name, source_filename)
+    target_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name, target_filename)
+    
+    if not os.path.exists(source_path):
+        return jsonify({'success': False, 'error': 'Source image not found'}), 404
+    if not os.path.exists(target_path):
+        return jsonify({'success': False, 'error': 'Target image not found'}), 404
+    
+    # Get tags from source image
+    source_tags = _get_image_tags(safe_name, source_filename)
+    
+    # Set tags on target image (preserving target's locked status)
+    _set_image_tags(safe_name, target_filename, source_tags)
+    
+    return jsonify({'success': True, 'tags': source_tags, 'message': f'Copied {len(source_tags)} tags to target image'})
 
 
 @app.route('/api/collections')

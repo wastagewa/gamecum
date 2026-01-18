@@ -36,9 +36,24 @@ document.addEventListener('DOMContentLoaded', () => {
     const closeAddTagsBtn = document.getElementById('closeAddTagsBtn');
     const cancelAddTagsBtn = document.getElementById('cancelAddTagsBtn');
     const confirmAddTagsBtn = document.getElementById('confirmAddTagsBtn');
+    const existingTagsSection = document.getElementById('existingTagsSection');
+    const existingTagsList = document.getElementById('existingTagsList');
+    
+    // Copy Tags Modal elements
+    const copyTagsModal = document.getElementById('copyTagsModal');
+    const copyTargetImageName = document.getElementById('copyTargetImageName');
+    const copySourceImagesList = document.getElementById('copySourceImagesList');
+    const selectedSourceTags = document.getElementById('selectedSourceTags');
+    const selectedSourceTagsList = document.getElementById('selectedSourceTagsList');
+    const copyTagsMessage = document.getElementById('copyTagsMessage');
+    const closeCopyTagsBtn = document.getElementById('closeCopyTagsBtn');
+    const cancelCopyTagsBtn = document.getElementById('cancelCopyTagsBtn');
+    const confirmCopyTagsBtn = document.getElementById('confirmCopyTagsBtn');
     
     let currentCollection = '';
     let currentImageForTags = { collection: '', filename: '', existingTags: [] };
+    let currentImageForCopy = { collection: '', filename: '', targetFilename: '', allImages: [] };
+    let selectedSourceImageTags = [];
 
     // Show/hide modals - REBUILT FROM SCRATCH
     function showModal(modal) {
@@ -261,6 +276,27 @@ document.addEventListener('DOMContentLoaded', () => {
         addTagsInput.value = '';
         addTagsMessage.textContent = '';
         
+        // Display existing tags
+        if (existingTags && existingTags.length > 0) {
+            const section = document.getElementById('existingTagsSection');
+            const list = document.getElementById('existingTagsList');
+            
+            if (section && list) {
+                section.style.display = 'block';
+                list.innerHTML = existingTags.map(tag => `
+                    <span class="retag-tag" style="background: var(--primary-color); color: white; padding: 4px 10px; border-radius: 4px; font-size: 0.9rem;">
+                        ${tag}
+                    </span>
+                `).join('');
+                console.log('Existing tags displayed:', existingTags);
+            }
+        } else {
+            const section = document.getElementById('existingTagsSection');
+            const list = document.getElementById('existingTagsList');
+            if (section) section.style.display = 'none';
+            if (list) list.innerHTML = '';
+        }
+        
         // Reset button state
         if (confirmAddTagsBtn) {
             confirmAddTagsBtn.disabled = false;
@@ -371,6 +407,142 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Copy Tags Modal functions
+    function openCopyTagsModal(collection, targetFilename, allImages) {
+        if (!copyTagsModal) return;
+        
+        currentImageForCopy = { collection, targetFilename, allImages, sourceFilename: '' };
+        copyTargetImageName.textContent = targetFilename;
+        copyTagsMessage.textContent = '';
+        selectedSourceTags = [];
+        selectedSourceTagsList.innerHTML = '';
+        selectedSourceTags.style.display = 'none';
+        confirmCopyTagsBtn.disabled = true;
+        confirmCopyTagsBtn.innerHTML = '<i class="fas fa-check"></i> Copy Selected Tags';
+        
+        // Display all images except the target
+        copySourceImagesList.innerHTML = allImages
+            .filter(img => img.filename !== targetFilename)
+            .map(img => `
+                <button class="copy-source-image-btn" data-filename="${img.filename}" data-tags='${JSON.stringify(img.tags)}'>
+                    <img src="${img.url}" alt="${img.filename}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 4px;">
+                    <div class="copy-source-image-label">${img.filename.substring(0, 15)}...</div>
+                </button>
+            `).join('');
+        
+        // Add click listeners to source images
+        document.querySelectorAll('.copy-source-image-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                // Deselect previous button
+                document.querySelectorAll('.copy-source-image-btn').forEach(b => {
+                    b.classList.remove('selected');
+                });
+                
+                // Select this button
+                btn.classList.add('selected');
+                
+                const filename = btn.dataset.filename;
+                const tags = JSON.parse(btn.dataset.tags);
+                
+                currentImageForCopy.sourceFilename = filename;
+                selectedSourceImageTags = tags;
+                
+                // Display selected tags
+                selectedSourceTags.style.display = 'block';
+                selectedSourceTagsList.innerHTML = tags.length > 0 
+                    ? tags.map(tag => `<span class="retag-tag" style="background: var(--primary-color); color: white; padding: 4px 10px; border-radius: 4px; font-size: 0.9rem;">${tag}</span>`).join('')
+                    : '<span style="color: var(--text-secondary);">No tags to copy</span>';
+                
+                // Enable copy button
+                confirmCopyTagsBtn.disabled = tags.length === 0;
+            });
+        });
+        
+        copyTagsModal.style.display = 'block';
+        document.body.style.overflow = 'hidden';
+    }
+    
+    function closeCopyTagsModal() {
+        if (!copyTagsModal) return;
+        copyTagsModal.style.display = 'none';
+        document.body.style.overflow = '';
+        currentImageForCopy = { collection: '', targetFilename: '', sourceFilename: '', allImages: [] };
+        selectedSourceImageTags = [];
+    }
+    
+    // Copy Tags Modal event listeners
+    if (closeCopyTagsBtn) {
+        closeCopyTagsBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closeCopyTagsModal();
+        });
+    }
+    
+    if (cancelCopyTagsBtn) {
+        cancelCopyTagsBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closeCopyTagsModal();
+        });
+    }
+    
+    if (confirmCopyTagsBtn) {
+        confirmCopyTagsBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            if (!currentImageForCopy.sourceFilename || selectedSourceImageTags.length === 0) {
+                copyTagsMessage.textContent = 'Please select a source image';
+                copyTagsMessage.className = 'message error';
+                return;
+            }
+            
+            // Disable button while processing
+            confirmCopyTagsBtn.disabled = true;
+            confirmCopyTagsBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Copying...';
+            
+            try {
+                const res = await fetch(`/api/images/${currentImageForCopy.collection}/${currentImageForCopy.sourceFilename}/copy-tags/${currentImageForCopy.targetFilename}`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    copyTagsMessage.textContent = data.message;
+                    copyTagsMessage.className = 'message success';
+                    
+                    setTimeout(async () => {
+                        closeCopyTagsModal();
+                        await loadCollectionImages(currentCollection);
+                    }, 1000);
+                } else {
+                    copyTagsMessage.textContent = 'Failed to copy tags: ' + (data.error || 'Unknown error');
+                    copyTagsMessage.className = 'message error';
+                    confirmCopyTagsBtn.disabled = false;
+                    confirmCopyTagsBtn.innerHTML = '<i class="fas fa-check"></i> Copy Selected Tags';
+                }
+            } catch (err) {
+                copyTagsMessage.textContent = 'Error copying tags';
+                copyTagsMessage.className = 'message error';
+                confirmCopyTagsBtn.disabled = false;
+                confirmCopyTagsBtn.innerHTML = '<i class="fas fa-check"></i> Copy Selected Tags';
+            }
+        });
+    }
+    
+    // Close on overlay click
+    if (copyTagsModal) {
+        copyTagsModal.addEventListener('click', (e) => {
+            if (e.target.classList.contains('retag-modal-overlay')) {
+                closeCopyTagsModal();
+            }
+        });
+    }
+
     async function loadCollectionImages(collection) {
         try {
             const res = await fetch(`/api/collections/${collection}/images`);
@@ -393,10 +565,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         retagImagesList.innerHTML = images.map(img => `
-            <div class="retag-image-card" data-filename="${img.filename}">
+            <div class="retag-image-card" data-filename="${img.filename}" data-locked="${img.locked || false}">
                 <img src="${img.url}" alt="${img.filename}">
                 <div class="retag-image-info">
-                    <div class="retag-image-filename">${img.filename}</div>
+                    <div class="retag-image-filename">
+                        ${img.filename}
+                        ${img.locked ? '<span class="lock-badge" title="Tags locked"><i class="fas fa-lock"></i></span>' : ''}
+                    </div>
                     <div class="retag-tags-container">
                         <div class="retag-tags" data-filename="${img.filename}">
                             ${img.tags.map(tag => `
@@ -406,22 +581,30 @@ document.addEventListener('DOMContentLoaded', () => {
                                 </span>
                             `).join('')}
                         </div>
-                        <button class="btn-add-tag" data-filename="${img.filename}">
-                            <i class="fas fa-plus"></i> Add Tag
-                        </button>
-                        <button class="btn-auto-tag" data-filename="${img.filename}">
-                            <i class="fas fa-magic"></i> Auto-Tag
-                        </button>
+                        <div class="retag-button-group">
+                            <button class="btn-add-tag" data-filename="${img.filename}">
+                                <i class="fas fa-plus"></i> Add
+                            </button>
+                            <button class="btn-auto-tag" data-filename="${img.filename}">
+                                <i class="fas fa-magic"></i> Auto-Tag
+                            </button>
+                            <button class="btn-copy-tags" data-filename="${img.filename}">
+                                <i class="fas fa-copy"></i> Copy To
+                            </button>
+                            <button class="btn-lock-tag ${img.locked ? 'locked' : ''}" data-filename="${img.filename}" title="${img.locked ? 'Unlock tags' : 'Lock tags'}">
+                                <i class="fas fa-${img.locked ? 'lock' : 'lock-open'}"></i>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
         `).join('');
 
         // Add event listeners for tag management
-        attachTagEventListeners(collection);
+        attachTagEventListeners(collection, images);
     }
 
-    function attachTagEventListeners(collection) {
+    function attachTagEventListeners(collection, allImages) {
         // Remove tag buttons
         document.querySelectorAll('.remove-tag').forEach(btn => {
             btn.addEventListener('click', async (e) => {
@@ -461,6 +644,48 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 // Open the add tags modal
                 openAddTagsModal(collection, filename, currentTags);
+            });
+        });
+
+        // Copy tags buttons
+        document.querySelectorAll('.btn-copy-tags').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                const card = e.target.closest('.retag-image-card');
+                const filename = card.dataset.filename;
+                
+                // Open the copy tags modal
+                openCopyTagsModal(collection, filename, allImages);
+            });
+        });
+
+        // Lock/unlock tag buttons
+        document.querySelectorAll('.btn-lock-tag').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                const card = e.target.closest('.retag-image-card');
+                const filename = card.dataset.filename;
+                const isCurrentlyLocked = card.dataset.locked === 'true';
+                
+                try {
+                    const endpoint = isCurrentlyLocked ? 'unlock' : 'lock';
+                    const res = await fetch(`/api/images/${collection}/${filename}/${endpoint}`, {
+                        method: 'POST'
+                    });
+                    const data = await res.json();
+                    
+                    if (data.success) {
+                        await loadCollectionImages(currentCollection);
+                    } else {
+                        alert('Failed to ' + endpoint + ' image: ' + data.error);
+                    }
+                } catch (err) {
+                    alert('Error ' + (isCurrentlyLocked ? 'unlocking' : 'locking') + ' image');
+                }
             });
         });
 

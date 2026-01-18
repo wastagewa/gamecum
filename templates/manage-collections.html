@@ -220,6 +220,14 @@
                 </button>
             </div>
             <div class="retag-modal-body">
+                <div id="existingTagsSection" style="margin-bottom: 20px; display: none;">
+                    <p style="margin-bottom: 8px; color: var(--text-secondary); font-weight: 500;">
+                        <i class="fas fa-tag"></i> Existing Tags:
+                    </p>
+                    <div id="existingTagsList" style="display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; background: rgba(255, 255, 255, 0.02); border-radius: 6px; border: 1px solid var(--border-color);">
+                        <!-- Existing tags will be displayed here -->
+                    </div>
+                </div>
                 <p style="margin-bottom: 15px; color: var(--text-secondary);">
                     Enter tags separated by commas (e.g., nature, landscape, sunset)
                 </p>
@@ -232,6 +240,47 @@
                 </button>
                 <button id="confirmAddTagsBtn" class="btn btn-primary">
                     <i class="fas fa-plus"></i> Add Tags
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Copy Tags Modal -->
+    <div id="copyTagsModal" class="retag-modal" style="display: none;">
+        <div class="retag-modal-overlay"></div>
+        <div class="retag-modal-container" style="max-width: 600px;">
+            <div class="retag-modal-header">
+                <h2><i class="fas fa-copy"></i> Copy Tags from Image</h2>
+                <button class="retag-modal-close" id="closeCopyTagsBtn">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="retag-modal-body">
+                <p style="margin-bottom: 15px; color: var(--text-secondary);">
+                    <strong id="copyTargetImageName"></strong>
+                </p>
+                <p style="margin-bottom: 15px; color: var(--text-secondary);">
+                    Select an image to copy tags from:
+                </p>
+                <div id="copySourceImagesList" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin-bottom: 20px; max-height: 400px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; background: rgba(255, 255, 255, 0.02);">
+                    <!-- Source images will be loaded here -->
+                </div>
+                <div id="selectedSourceTags" style="margin-bottom: 15px; padding: 12px; background: rgba(255, 255, 255, 0.02); border-radius: 6px; border: 1px solid var(--border-color); display: none;">
+                    <p style="margin-bottom: 8px; color: var(--text-secondary); font-weight: 500;">
+                        <i class="fas fa-tag"></i> Tags to copy:
+                    </p>
+                    <div id="selectedSourceTagsList" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                        <!-- Tags will be displayed here -->
+                    </div>
+                </div>
+                <div id="copyTagsMessage" class="message" style="margin-top: 10px;"></div>
+            </div>
+            <div class="retag-modal-footer">
+                <button id="cancelCopyTagsBtn" class="btn btn-secondary">
+                    Cancel
+                </button>
+                <button id="confirmCopyTagsBtn" class="btn btn-primary" disabled>
+                    <i class="fas fa-check"></i> Copy Selected Tags
                 </button>
             </div>
         </div>
