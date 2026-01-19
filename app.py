@@ -71,19 +71,24 @@ def _load_tags():
     try:
         with open(TAGS_FILE, 'r') as f:
             return json.load(f)
-    except Exception:
+    except Exception as e:
+        print(f"ERROR loading tags: {e}")
         return {}
 
 def _save_tags(tags: dict):
     """Save image tags to JSON file."""
     try:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(TAGS_FILE), exist_ok=True)
         with open(TAGS_FILE, 'w') as f:
             json.dump(tags, f, indent=2)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"ERROR saving tags: {e}")
+        import traceback
+        traceback.print_exc()
 
 def _cleanup_tags():
-    """Clean up malformed tags data (convert dict objects to string lists)."""
+    """Clean up malformed tags data (convert dict objects to string lists), preserving locked status."""
     tags_data = _load_tags()
     cleaned = False
     
@@ -98,13 +103,19 @@ def _cleanup_tags():
                 # Ensure all items are strings
                 tags_data[key] = [str(item) for item in value if isinstance(item, (str, int, float))]
         elif isinstance(value, dict):
-            # Old format: {'tags': [...]}
+            # New format: {'tags': [...], 'locked': bool} - preserve it
             if 'tags' in value:
-                tags_data[key] = value['tags'] if isinstance(value['tags'], list) else []
-                cleaned = True
+                # Ensure it's in the new normalized format
+                tags_data[key] = {
+                    'tags': value['tags'] if isinstance(value['tags'], list) else [],
+                    'locked': value.get('locked', False)
+                }
             else:
-                # Dict with tag/confidence structure, extract tag
-                tags_data[key] = [value.get('tag', str(value))]
+                # Old format: Dict with tag/confidence structure, convert to new format
+                tags_data[key] = {
+                    'tags': [value.get('tag', str(value))],
+                    'locked': False
+                }
                 cleaned = True
     
     if cleaned:
@@ -375,6 +386,17 @@ def get_quote():
                     image_tag_names = [tag.lower().strip() for tag in simple_tags if isinstance(tag, str)]
             
             if image_tag_names:
+                # Filter out internal tags (those starting with prefixes like "c ", "sn ", "n ", etc.)
+                # Internal tags are used for classification but shouldn't be matched to quotes
+                internal_prefixes = ('c ', 'sn ', 'n ', 'c_', 'sn_', 'n_')
+                filtered_tags = [
+                    tag for tag in image_tag_names 
+                    if not any(tag.startswith(prefix) for prefix in internal_prefixes)
+                ]
+                
+                # If all tags are internal, use them anyway to try to find a match
+                tags_to_match = filtered_tags if filtered_tags else image_tag_names
+                
                 # Iterate through quote keys in order (preserving JSON order)
                 # Skip 'default' key in priority matching
                 for quote_key in quotes_data.keys():
@@ -382,7 +404,7 @@ def get_quote():
                         continue
                     
                     # Check if any image tag matches this quote key
-                    for tag in image_tag_names:
+                    for tag in tags_to_match:
                         if _tags_match(tag, quote_key):
                             quote = random.choice(quotes_data[quote_key])
                             return jsonify({'quote': quote, 'matched_tag': quote_key})
@@ -931,7 +953,7 @@ def api_delete_collection():
 
 @app.route('/api/collections/<collection_name>/images', methods=['GET'])
 def api_collection_images(collection_name):
-    """Get all images in a collection with their tags and lock status."""
+    """Get all images in a collection with their tags and lock status, sorted by upload time."""
     safe_name = _safe_collection_name(collection_name)
     folder_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name)
     
@@ -951,15 +973,27 @@ def api_collection_images(collection_name):
             image_tags = normalized['tags']
             locked = normalized.get('locked', False)
             
+            # Get file modification time for sorting
+            file_path = os.path.join(folder_path, filename)
+            try:
+                mod_time = os.path.getmtime(file_path)
+            except:
+                mod_time = 0
+            
             images.append({
                 'filename': filename,
                 'url': url_for('static', filename=f'uploads/{safe_name}/{filename}'),
                 'tags': image_tags,
-                'locked': locked
+                'locked': locked,
+                'upload_time': mod_time
             })
     
-    # Sort images by filename for consistent ordering
-    images.sort(key=lambda x: x['filename'])
+    # Sort images by upload time (oldest first)
+    images.sort(key=lambda x: x['upload_time'])
+    
+    # Remove upload_time from response (it's only for sorting)
+    for img in images:
+        del img['upload_time']
     
     return jsonify({'success': True, 'images': images})
 

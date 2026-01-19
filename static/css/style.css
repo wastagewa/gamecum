@@ -3664,6 +3664,49 @@ input:checked + .toggle-slider:before {
     flex-wrap: wrap;
 }
 
+.retag-body-parts {
+    display: flex;
+    gap: 10px;
+    margin: 10px 0;
+    flex-wrap: wrap;
+}
+
+.body-part-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.body-part-group label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.body-part-input {
+    width: 80px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    background: var(--surface-color);
+    color: var(--text-color);
+    border-radius: 4px;
+    font-size: 0.9rem;
+    text-align: center;
+    text-transform: lowercase;
+    transition: border-color 0.2s ease;
+}
+
+.body-part-input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgba(164, 6, 110, 0.1);
+}
+
+.body-part-input::placeholder {
+    color: var(--text-tertiary);
+    opacity: 0.7;
+}
+
 .copy-source-image-btn {
     position: relative;
     width: 100%;

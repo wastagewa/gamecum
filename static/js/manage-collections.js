@@ -288,7 +288,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${tag}
                     </span>
                 `).join('');
-                console.log('Existing tags displayed:', existingTags);
             }
         } else {
             const section = document.getElementById('existingTagsSection');
@@ -409,26 +408,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Copy Tags Modal functions
     function openCopyTagsModal(collection, targetFilename, allImages) {
-        if (!copyTagsModal) return;
+        if (!copyTagsModal) {
+            return;
+        }
+        
+        if (!allImages || !Array.isArray(allImages)) {
+            return;
+        }
         
         currentImageForCopy = { collection, targetFilename, allImages, sourceFilename: '' };
         copyTargetImageName.textContent = targetFilename;
         copyTagsMessage.textContent = '';
-        selectedSourceTags = [];
-        selectedSourceTagsList.innerHTML = '';
-        selectedSourceTags.style.display = 'none';
+        selectedSourceImageTags = [];
         confirmCopyTagsBtn.disabled = true;
         confirmCopyTagsBtn.innerHTML = '<i class="fas fa-check"></i> Copy Selected Tags';
         
+        // Reset tags display - don't clear yet, wait for selection
+        if (selectedSourceTagsList) {
+            selectedSourceTagsList.innerHTML = '';
+        }
+        if (selectedSourceTags) {
+            selectedSourceTags.style.display = 'none';
+        }
+        
         // Display all images except the target
-        copySourceImagesList.innerHTML = allImages
-            .filter(img => img.filename !== targetFilename)
-            .map(img => `
-                <button class="copy-source-image-btn" data-filename="${img.filename}" data-tags='${JSON.stringify(img.tags)}'>
+        const sourceImages = allImages.filter(img => img.filename !== targetFilename);
+        
+        copySourceImagesList.innerHTML = sourceImages
+            .map(img => {
+                const tagsJson = JSON.stringify(img.tags || []);
+                return `
+                <button class="copy-source-image-btn" data-filename="${img.filename}" data-tags='${tagsJson}'>
                     <img src="${img.url}" alt="${img.filename}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 4px;">
                     <div class="copy-source-image-label">${img.filename.substring(0, 15)}...</div>
                 </button>
-            `).join('');
+            `;
+            }).join('');
         
         // Add click listeners to source images
         document.querySelectorAll('.copy-source-image-btn').forEach(btn => {
@@ -445,19 +460,35 @@ document.addEventListener('DOMContentLoaded', () => {
                 btn.classList.add('selected');
                 
                 const filename = btn.dataset.filename;
-                const tags = JSON.parse(btn.dataset.tags);
+                const tagsStr = btn.dataset.tags;
+                const tags = tagsStr ? JSON.parse(tagsStr) : [];
                 
                 currentImageForCopy.sourceFilename = filename;
                 selectedSourceImageTags = tags;
                 
-                // Display selected tags
-                selectedSourceTags.style.display = 'block';
-                selectedSourceTagsList.innerHTML = tags.length > 0 
-                    ? tags.map(tag => `<span class="retag-tag" style="background: var(--primary-color); color: white; padding: 4px 10px; border-radius: 4px; font-size: 0.9rem;">${tag}</span>`).join('')
-                    : '<span style="color: var(--text-secondary);">No tags to copy</span>';
+                // Display selected tags - ensure container is shown
+                if (selectedSourceTags) {
+                    selectedSourceTags.style.display = 'block';
+                    
+                    // Scroll into view
+                    setTimeout(() => {
+                        selectedSourceTags.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }, 0);
+                    
+                    if (selectedSourceTagsList) {
+                        if (tags && tags.length > 0) {
+                            const tagHtml = tags.map(tag => `<span class="retag-tag" style="background: var(--primary-color); color: white; padding: 4px 10px; border-radius: 4px; font-size: 0.9rem;">${tag}</span>`).join('');
+                            selectedSourceTagsList.innerHTML = tagHtml;
+                        } else {
+                            selectedSourceTagsList.innerHTML = '<span style="color: var(--text-secondary);">No tags to copy</span>';
+                        }
+                    }
+                }
                 
-                // Enable copy button
-                confirmCopyTagsBtn.disabled = tags.length === 0;
+                // Enable copy button only if there are tags
+                if (confirmCopyTagsBtn) {
+                    confirmCopyTagsBtn.disabled = !tags || tags.length === 0;
+                }
             });
         });
         
@@ -505,8 +536,10 @@ document.addEventListener('DOMContentLoaded', () => {
             confirmCopyTagsBtn.disabled = true;
             confirmCopyTagsBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Copying...';
             
+            const apiUrl = `/api/images/${currentImageForCopy.collection}/${currentImageForCopy.sourceFilename}/copy-tags/${currentImageForCopy.targetFilename}`;
+            
             try {
-                const res = await fetch(`/api/images/${currentImageForCopy.collection}/${currentImageForCopy.sourceFilename}/copy-tags/${currentImageForCopy.targetFilename}`, {
+                const res = await fetch(apiUrl, {
                     method: 'POST'
                 });
                 const data = await res.json();
@@ -526,7 +559,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     confirmCopyTagsBtn.innerHTML = '<i class="fas fa-check"></i> Copy Selected Tags';
                 }
             } catch (err) {
-                copyTagsMessage.textContent = 'Error copying tags';
+                copyTagsMessage.textContent = 'Error copying tags: ' + err.message;
                 copyTagsMessage.className = 'message error';
                 confirmCopyTagsBtn.disabled = false;
                 confirmCopyTagsBtn.innerHTML = '<i class="fas fa-check"></i> Copy Selected Tags';
@@ -564,7 +597,26 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        retagImagesList.innerHTML = images.map(img => `
+        // Images are already sorted by upload time from backend
+        retagImagesList.innerHTML = images.map(img => {
+            // Extract prefix for body part tags
+            const getBodyPartPrefix = (fieldName) => {
+                const fieldMap = {
+                    'boobs': ['c boobs', 'sn boobs', 'n boobs'],
+                    'pussy': ['c pussy', 'sn pussy', 'n pussy'],
+                    'butt': ['c butt', 'sn butt', 'n butt']
+                };
+                
+                const tags = fieldMap[fieldName] || [];
+                for (const tag of tags) {
+                    if (img.tags.includes(tag)) {
+                        return tag.split(' ')[0]; // Return 'c', 'sn', or 'n'
+                    }
+                }
+                return ''; // No existing tag
+            };
+
+            return `
             <div class="retag-image-card" data-filename="${img.filename}" data-locked="${img.locked || false}">
                 <img src="${img.url}" alt="${img.filename}">
                 <div class="retag-image-info">
@@ -581,6 +633,20 @@ document.addEventListener('DOMContentLoaded', () => {
                                 </span>
                             `).join('')}
                         </div>
+                        <div class="retag-body-parts">
+                            <div class="body-part-group">
+                                <label>Boobs:</label>
+                                <input type="text" class="body-part-input" data-filename="${img.filename}" data-field="boobs" value="${getBodyPartPrefix('boobs')}" placeholder="c/sn/n">
+                            </div>
+                            <div class="body-part-group">
+                                <label>Pussy:</label>
+                                <input type="text" class="body-part-input" data-filename="${img.filename}" data-field="pussy" value="${getBodyPartPrefix('pussy')}" placeholder="c/sn/n">
+                            </div>
+                            <div class="body-part-group">
+                                <label>Butt:</label>
+                                <input type="text" class="body-part-input" data-filename="${img.filename}" data-field="butt" value="${getBodyPartPrefix('butt')}" placeholder="c/sn/n">
+                            </div>
+                        </div>
                         <div class="retag-button-group">
                             <button class="btn-add-tag" data-filename="${img.filename}">
                                 <i class="fas fa-plus"></i> Add
@@ -589,7 +655,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <i class="fas fa-magic"></i> Auto-Tag
                             </button>
                             <button class="btn-copy-tags" data-filename="${img.filename}">
-                                <i class="fas fa-copy"></i> Copy To
+                                <i class="fas fa-copy"></i> Copy From
                             </button>
                             <button class="btn-lock-tag ${img.locked ? 'locked' : ''}" data-filename="${img.filename}" title="${img.locked ? 'Unlock tags' : 'Lock tags'}">
                                 <i class="fas fa-${img.locked ? 'lock' : 'lock-open'}"></i>
@@ -598,7 +664,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
 
         // Add event listeners for tag management
         attachTagEventListeners(collection, images);
@@ -658,6 +725,38 @@ document.addEventListener('DOMContentLoaded', () => {
                 
                 // Open the copy tags modal
                 openCopyTagsModal(collection, filename, allImages);
+            });
+        });
+
+        // Body part input handlers (boobs, pussy, butt)
+        document.querySelectorAll('.body-part-input').forEach(input => {
+            input.addEventListener('change', async (e) => {
+                const card = e.target.closest('.retag-image-card');
+                const filename = card.dataset.filename;
+                const fieldName = e.target.dataset.field;
+                const prefix = e.target.value.trim().toLowerCase();
+                
+                // Get current tags
+                const tagsContainer = card.querySelector('.retag-tags');
+                const currentTags = Array.from(tagsContainer.querySelectorAll('.remove-tag'))
+                    .map(b => b.dataset.tag);
+                
+                // Remove any existing tag for this field (c/sn/n + fieldName)
+                const fieldTags = [`c ${fieldName}`, `sn ${fieldName}`, `n ${fieldName}`];
+                let newTags = currentTags.filter(tag => !fieldTags.includes(tag));
+                
+                // Add new tag if prefix was entered
+                if (prefix && ['c', 'sn', 'n'].includes(prefix)) {
+                    newTags.push(`${prefix} ${fieldName}`);
+                }
+                
+                // Update tags
+                const result = await updateImageTags(collection, filename, newTags);
+                if (result.success) {
+                    await loadCollectionImages(currentCollection);
+                } else {
+                    alert('Failed to update tags: ' + (result.error || 'Unknown error'));
+                }
             });
         });
 

@@ -165,6 +165,19 @@ function startGame() {
     // Clear game area
     gameArea.innerHTML = '';
 
+    // Request fullscreen
+    if (!document.fullscreenElement) {
+        whackContainer.requestFullscreen().catch(err => {
+            console.log('Fullscreen request failed:', err);
+        });
+    }
+
+    // Hide cursor (make very slightly visible with low opacity)
+    // Bat cursor SVG
+    const batCursor = 'url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2224%22 height=%2224%22%3E%3Cg fill=%22white%22 opacity=%220.6%22%3E%3Cpath d=%22M12 4 L10 6 L8 5 L7 7 L5 6 L4 8 L3 7 L2 9 L1 8 L1 12 L3 13 L5 12 L7 14 L8 12 L9 13 L10 12 L11 14 L12 13 L13 14 L14 12 L15 13 L17 12 L19 13 L21 12 L23 8 L22 9 L21 7 L19 8 L18 6 L16 7 L14 6 L12 4 Z%22/%3E%3Ccircle cx=%2212%22 cy=%2210%22 r=%221%22 fill=%22white%22 opacity=%221%22/%3E%3C/g%3E%3C/svg%3E") 12 8, auto';
+    gameArea.style.cursor = batCursor;
+    document.body.style.cursor = batCursor;
+
     // Start game
     createWhackImage();
 
@@ -188,6 +201,17 @@ function endGame() {
         whackState.activeImage.remove();
         whackState.activeImage = null;
     }
+
+    // Exit fullscreen
+    if (document.fullscreenElement) {
+        document.exitFullscreen().catch(err => {
+            console.log('Fullscreen exit failed:', err);
+        });
+    }
+
+    // Restore cursor
+    gameArea.style.cursor = 'auto';
+    document.body.style.cursor = 'auto';
 
     // UI updates
     startBtn.style.display = 'inline-block';
@@ -249,6 +273,17 @@ function resetGame() {
     durationSelect.disabled = false;
     document.getElementById('whackDifficulty').disabled = false;
     usernameInput.disabled = false;
+
+    // Exit fullscreen
+    if (document.fullscreenElement) {
+        document.exitFullscreen().catch(err => {
+            console.log('Fullscreen exit failed:', err);
+        });
+    }
+
+    // Restore cursor
+    gameArea.style.cursor = 'auto';
+    document.body.style.cursor = 'auto';
 }
 
 // Event listeners
@@ -260,11 +295,30 @@ backBtn.addEventListener('click', () => {
     clearTimeout(imageTimeout);
     clearTimeout(respawnTimeout);
     clearInterval(timerInterval);
+    
+    // Exit fullscreen
+    if (document.fullscreenElement) {
+        document.exitFullscreen().catch(err => {
+            console.log('Fullscreen exit failed:', err);
+        });
+    }
+    
+    // Restore cursor
+    gameArea.style.cursor = 'auto';
+    document.body.style.cursor = 'auto';
+    
     window.location.href = `/collection/${CURRENT_COLLECTION}`;
 });
 
 durationSelect.addEventListener('change', (e) => {
     whackState.duration = parseInt(e.target.value) || 60;
+});
+
+// Handle ESC key to exit fullscreen and end game
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && whackState.running) {
+        endGame();
+    }
 });
 
 // Prevent context menu on game area
