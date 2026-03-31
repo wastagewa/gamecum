@@ -171,16 +171,8 @@
 
     <script>
         // Pass collection images to JavaScript
-        {% if images %}
-        window.SERVER_IMAGES = [
-            {% for image in images %}
-            "{{ url_for('static', filename='uploads/' + collection + '/' + image) }}"{{ "," if not loop.last else "" }}
-            {% endfor %}
-        ];
+        window.SERVER_IMAGES = {{ images | tojson | safe }};
         window.CURRENT_COLLECTION = "{{ collection }}";
-        {% else %}
-        window.SERVER_IMAGES = [];
-        {% endif %}
     </script>
     <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>

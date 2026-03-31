@@ -49,6 +49,18 @@ document.addEventListener('DOMContentLoaded', () => {
             description: 'Click images as they appear on screen',
             url: `/collection/${CURRENT_COLLECTION}/whack`
         },
+        {
+            name: 'Recall Grid',
+            icon: 'fa-location-dot',
+            description: 'Memorize where each image was placed',
+            url: `/collection/${CURRENT_COLLECTION}/recall`
+        },
+        {
+            name: 'Missing Piece',
+            icon: 'fa-eye-slash',
+            description: 'Spot which image disappeared from the grid',
+            url: `/collection/${CURRENT_COLLECTION}/missing`
+        },
 
     ];
 

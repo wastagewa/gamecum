@@ -217,6 +217,18 @@ def _is_better_score(candidate: dict, current: dict):
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def _get_collection_image_urls(collection: str):
+    """Return image URLs for a collection."""
+    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
+    images = []
+    try:
+        for filename in os.listdir(folder):
+            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
+                images.append(filename)
+    except FileNotFoundError:
+        images = []
+    return [f"/static/uploads/{collection}/{fn}" for fn in images]
+
 @app.route('/')
 def index():
     # Render a home page that lists collections and image counts, plus top scores.
@@ -528,7 +540,7 @@ def submit_score():
             return jsonify({'error': 'Invalid or missing collection'}), 400
         
         game_type = str(data.get('gameType', 'memory')).lower()
-        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack']
+        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing']
         if game_type not in allowed_games:
             game_type = 'memory'
         
@@ -694,15 +706,7 @@ def game():
 @app.route('/collection/<collection_name>/game')
 def collection_game(collection_name):
     collection = _safe_collection_name(collection_name)
-    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
-    images = []
-    try:
-        for filename in os.listdir(folder):
-            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                images.append(filename)
-    except FileNotFoundError:
-        images = []
-    image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
+    image_urls = _get_collection_image_urls(collection)
     return render_template('game.html', images=image_urls, collection=collection)
 
 
@@ -716,15 +720,7 @@ def puzzle():
 def collection_puzzle(collection_name):
     """Render the puzzle slider game for a specific collection."""
     collection = _safe_collection_name(collection_name)
-    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
-    images = []
-    try:
-        for filename in os.listdir(folder):
-            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                images.append(filename)
-    except FileNotFoundError:
-        images = []
-    image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
+    image_urls = _get_collection_image_urls(collection)
     return render_template('puzzle.html', images=image_urls, collection=collection)
 
 
@@ -732,30 +728,15 @@ def collection_puzzle(collection_name):
 def collection_sequence(collection_name):
     """Render the sequence memory game for a specific collection."""
     collection = _safe_collection_name(collection_name)
-    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
-    images = []
-    try:
-        for filename in os.listdir(folder):
-            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                images.append(filename)
-    except FileNotFoundError:
-        images = []
-    return render_template('sequence.html', images=images, collection=collection)
+    image_urls = _get_collection_image_urls(collection)
+    return render_template('sequence.html', images=image_urls, collection=collection)
 
 
 @app.route('/collection/<collection_name>/flashcards')
 def collection_flashcards(collection_name):
     """Render the flashcards memory game for a specific collection."""
     collection = _safe_collection_name(collection_name)
-    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
-    images = []
-    try:
-        for filename in os.listdir(folder):
-            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                images.append(filename)
-    except FileNotFoundError:
-        images = []
-    image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
+    image_urls = _get_collection_image_urls(collection)
     return render_template('flashcards.html', images=image_urls, collection=collection)
 
 
@@ -763,15 +744,7 @@ def collection_flashcards(collection_name):
 def collection_hunt(collection_name):
     """Simple Image Hunt game: show target image, player must find it in a grid."""
     collection = _safe_collection_name(collection_name)
-    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
-    images = []
-    try:
-        for filename in os.listdir(folder):
-            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                images.append(filename)
-    except FileNotFoundError:
-        images = []
-    image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
+    image_urls = _get_collection_image_urls(collection)
     return render_template('hunt.html', images=image_urls, collection=collection)
 
 
@@ -779,15 +752,7 @@ def collection_hunt(collection_name):
 def collection_zoom(collection_name):
     """Zoom Challenge game: show zoomed-in portion of image, identify which full image it is."""
     collection = _safe_collection_name(collection_name)
-    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
-    images = []
-    try:
-        for filename in os.listdir(folder):
-            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                images.append(filename)
-    except FileNotFoundError:
-        images = []
-    image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
+    image_urls = _get_collection_image_urls(collection)
     return render_template('zoom.html', images=image_urls, collection=collection)
 
 
@@ -795,16 +760,24 @@ def collection_zoom(collection_name):
 def collection_whack(collection_name):
     """Whack-a-Mole game: click images as they appear on screen."""
     collection = _safe_collection_name(collection_name)
-    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
-    images = []
-    try:
-        for filename in os.listdir(folder):
-            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                images.append(filename)
-    except FileNotFoundError:
-        images = []
-    image_urls = [f"/static/uploads/{collection}/{fn}" for fn in images]
+    image_urls = _get_collection_image_urls(collection)
     return render_template('whack.html', images=image_urls, collection=collection)
+
+
+@app.route('/collection/<collection_name>/recall')
+def collection_recall(collection_name):
+    """Recall Grid game: memorize image positions and select the original spot."""
+    collection = _safe_collection_name(collection_name)
+    image_urls = _get_collection_image_urls(collection)
+    return render_template('recall.html', images=image_urls, collection=collection)
+
+
+@app.route('/collection/<collection_name>/missing')
+def collection_missing(collection_name):
+    """Missing Piece game: identify which image disappeared from the shown grid."""
+    collection = _safe_collection_name(collection_name)
+    image_urls = _get_collection_image_urls(collection)
+    return render_template('missing.html', images=image_urls, collection=collection)
 
 
 
