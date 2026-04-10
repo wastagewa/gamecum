@@ -5,15 +5,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const msg = document.getElementById('createMsg');
     const list = document.getElementById('collectionsList');
 
-    // Game display names
     const gameNames = {
-        'memory': '🎮 Memory Game',
-        'flashcards': '📸 Flash Cards',
-        'hunt': '🔍 Image Hunt',
-        'zoom': '🔍 Zoom Challenge',
-        'whack': '🔨 Whack-a-Mole',
-        'puzzle': '🧩 Puzzle',
-        'sequence': '🧠 Sequence'
+        memory: 'Memory Game',
+        flashcards: 'Flash Cards',
+        hunt: 'Image Hunt',
+        zoom: 'Zoom Challenge',
+        whack: 'Whack-a-Mole',
+        puzzle: 'Puzzle',
+        sequence: 'Sequence',
+        recall: 'Recall Grid',
+        missing: 'Missing Piece',
+        trail: 'Trail Trace',
+        remix: 'Remix Match'
     };
 
     function setMsg(text, isError = true) {
@@ -34,7 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
         wrap.innerHTML = `
             <div style="font-weight:700;color:var(--text-color);">${name}</div>
             <div style="color:var(--muted-text);margin-top:6px;">Images: <strong style="color:var(--text-color);">0</strong></div>
-            <div style="color:var(--muted-text);margin-top:4px;">Best: <em>—</em><br><small style="opacity:0;">by —</small></div>
+            <div style="color:var(--muted-text);margin-top:4px;">Best: <em>-</em><br><small style="opacity:0;">by -</small></div>
             <div style="margin-top:8px;display:flex;gap:8px;">
                 <a class="custom-upload-btn" href="/collection/${encodeURIComponent(name)}">View</a>
                 <a class="custom-upload-btn" href="/collection/${encodeURIComponent(name)}/game">Play</a>
@@ -42,31 +45,28 @@ document.addEventListener('DOMContentLoaded', () => {
         return wrap;
     }
 
-    // Load high scores for all leaderboard sections
     function loadHighScores() {
         const leaderboardSections = document.querySelectorAll('.leaderboard-section');
         leaderboardSections.forEach(section => {
             const collection = section.getAttribute('data-collection');
             if (!collection) return;
-            
+
             const scoresContainer = document.getElementById(`scores-${collection}`);
             if (!scoresContainer) return;
 
-            // Load scores from API
             fetch(`/api/high-scores/${collection}`)
-                .then(res => res.json())
-                .then(data => {
-                    renderHighScores(collection, data, scoresContainer, section);
+                .then((res) => res.json())
+                .then((data) => {
+                    renderHighScores(data, scoresContainer, section);
                 })
-                .catch(err => {
+                .catch((err) => {
                     console.error('Failed to load high scores', err);
                     scoresContainer.innerHTML = '<div class="no-scores"><i class="fas fa-error"></i> Failed to load scores</div>';
                 });
         });
     }
 
-    function renderHighScores(collection, data, container, section) {
-        // Setup tab buttons
+    function renderHighScores(data, container, section) {
         const tabBtns = section.querySelectorAll('.score-tab-btn');
         const allGames = Object.keys(data);
 
@@ -75,13 +75,12 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Handle tab clicks
-        tabBtns.forEach(btn => {
+        tabBtns.forEach((btn) => {
             btn.addEventListener('click', () => {
                 const gameType = btn.getAttribute('data-game');
-                tabBtns.forEach(b => b.classList.remove('active'));
+                tabBtns.forEach((tab) => tab.classList.remove('active'));
                 btn.classList.add('active');
-                
+
                 if (gameType === 'all') {
                     displayAllGameScores(data, container);
                 } else {
@@ -90,7 +89,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        // Show all games by default
         displayAllGameScores(data, container);
     }
 
@@ -98,21 +96,21 @@ document.addEventListener('DOMContentLoaded', () => {
         let html = '';
         for (const [gameType, entries] of Object.entries(data)) {
             if (!entries || entries.length === 0) continue;
-            
+
             html += `<div class="game-scores-group">
                 <div class="game-scores-title">${gameNames[gameType] || gameType}</div>`;
-            
+
             entries.forEach((entry, idx) => {
                 html += formatScoreEntry(entry, idx);
             });
-            
+
             html += '</div>';
         }
-        
+
         if (!html) {
             html = '<div class="no-scores"><i class="fas fa-medal"></i> No scores yet. Be the first champion!</div>';
         }
-        
+
         container.innerHTML = html;
     }
 
@@ -126,19 +124,19 @@ document.addEventListener('DOMContentLoaded', () => {
         entries.forEach((entry, idx) => {
             html += formatScoreEntry(entry, idx);
         });
-        
+
         container.innerHTML = html;
     }
 
     function formatScoreEntry(entry, idx) {
-        const medals = ['🥇', '🥈', '🥉'];
+        const medals = ['1', '2', '3'];
         const medal = medals[idx] || '•';
-        
+
         let stats = '';
         if (entry.time !== undefined) stats += `${entry.time}s`;
         if (entry.level !== undefined) stats += ` · Lvl ${entry.level}`;
         if (entry.wrong !== undefined) stats += ` · ${entry.wrong}W`;
-        
+
         return `<div class="leaderboard-entry">
             <div class="entry-rank">${medal}</div>
             <div class="entry-left">
@@ -167,7 +165,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     setMsg('Collection created', false);
                     nameInput.value = '';
                     if (list) list.appendChild(createCard(data.name));
-                    // Reload high scores after creating new collection
                     setTimeout(loadHighScores, 500);
                 } else {
                     setMsg(data.error || 'Failed to create collection');
@@ -175,10 +172,11 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (err) {
                 console.error('create collection error', err);
                 setMsg('Error creating collection');
-            } finally { formBtn.disabled = false; }
+            } finally {
+                formBtn.disabled = false;
+            }
         });
     }
 
-    // Load high scores on page load
     loadHighScores();
 });

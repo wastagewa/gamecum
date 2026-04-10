@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Browse Images by Tags</title>
+    
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <script>
+        (function(){
+            var theme = null;
+            try { theme = localStorage.getItem('imgur.theme'); } catch(e) {}
+            if(!theme){
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                theme = prefersDark ? 'dark' : 'light';
+            }
+            if(theme === 'dark'){
+                document.documentElement.setAttribute('data-theme','dark');
+                document.documentElement.style.colorScheme = 'dark';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                document.documentElement.style.colorScheme = 'light';
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    
+    <style>
+        .tag-browser-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .tag-browser-header {
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+        
+        .tag-browser-header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            color: var(--primary-color);
+        }
+        
+        .tag-browser-header p {
+            font-size: 1.1rem;
+            color: var(--text-secondary);
+        }
+        
+        .tag-browser-layout {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+        
+        .tag-sidebar {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid var(--border-color);
+            max-height: 80vh;
+            overflow-y: auto;
+            position: sticky;
+            top: 100px;
+        }
+        
+        .tag-sidebar h2 {
+            font-size: 1.3rem;
+            margin-bottom: 1rem;
+            color: var(--primary-color);
+        }
+        
+        .tag-search {
+            margin-bottom: 1.5rem;
+        }
+        
+        .tag-search input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--input-bg);
+            color: var(--text-color);
+            font-size: 1rem;
+        }
+        
+        .tag-sort-options {
+            margin-bottom: 1.5rem;
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .tag-sort-btn {
+            padding: 0.5rem 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--input-bg);
+            color: var(--text-color);
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+        
+        .tag-sort-btn.active {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+        
+        .tag-sort-btn:hover {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+        
+        .tag-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        
+        .tag-item {
+            padding: 0.75rem;
+            background: var(--input-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .tag-item:hover {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+        
+        .tag-item.selected {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+        
+        .tag-name {
+            flex: 1;
+            word-break: break-word;
+        }
+        
+        .tag-count {
+            font-weight: bold;
+            font-size: 0.9rem;
+            margin-left: 0.5rem;
+            background: rgba(255,255,255,0.2);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+        }
+        
+        .tag-items-wrapper {
+            max-height: calc(80vh - 300px);
+            overflow-y: auto;
+        }
+        
+        .tag-browser-main {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid var(--border-color);
+        }
+        
+        .filter-bar {
+            margin-bottom: 1.5rem;
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .selected-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+        
+        .selected-tag-badge {
+            background: var(--primary-color);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+        }
+        
+        .selected-tag-badge button {
+            background: none;
+            border: none;
+            color: white;
+            cursor: pointer;
+            padding: 0;
+            margin-left: 0.25rem;
+            font-size: 1.1rem;
+        }
+        
+        .match-mode {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .match-mode label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+        }
+        
+        .match-mode input {
+            cursor: pointer;
+        }
+        
+        .images-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+        
+        .image-card {
+            background: var(--input-bg);
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .image-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--primary-color);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        
+        .image-card-img {
+            width: 100%;
+            aspect-ratio: 1;
+            object-fit: cover;
+        }
+        
+        .image-card-info {
+            padding: 1rem;
+        }
+        
+        .image-card-filename {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            word-break: break-all;
+            margin-bottom: 0.5rem;
+        }
+        
+        .image-card-collection {
+            font-size: 0.8rem;
+            background: var(--primary-color);
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            display: inline-block;
+            margin-bottom: 0.5rem;
+        }
+        
+        .image-card-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.25rem;
+            max-height: 60px;
+            overflow: hidden;
+        }
+        
+        .image-card-tag {
+            background: var(--border-color);
+            color: var(--text-secondary);
+            padding: 0.25rem 0.5rem;
+            border-radius: 3px;
+            font-size: 0.75rem;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state i {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+        
+        .results-info {
+            font-size: 1rem;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .results-count {
+            font-weight: bold;
+            color: var(--primary-color);
+        }
+        
+        @media (max-width: 1024px) {
+            .tag-browser-layout {
+                grid-template-columns: 1fr;
+            }
+            
+            .tag-sidebar {
+                position: static;
+                max-height: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Modern Navigation Bar -->
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand">
+                <i class="fas fa-images"></i>
+                <span>ImgurMemory</span>
+            </a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu" id="collectionsDropdown">
+                        <!-- Collections will be loaded dynamically -->
+                    </div>
+                </div>
+                <a href="/tags" class="navbar-link active"><i class="fas fa-tags"></i> Browse Tags</a>
+                <a href="/manage-collections" class="navbar-link"><i class="fas fa-cog"></i> Manage</a>
+                <button id="themeToggle" class="navbar-theme-toggle" type="button">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <main class="main-content">
+        <div class="tag-browser-container">
+            <div class="tag-browser-header">
+                <h1><i class="fas fa-tags"></i> Browse Images by Tags</h1>
+                <p>Search and filter images by their tags to find what you're looking for</p>
+            </div>
+
+            <div class="tag-browser-layout">
+                <!-- Sidebar with tags -->
+                <aside class="tag-sidebar">
+                    <h2><i class="fas fa-list"></i> Tags</h2>
+                    
+                    <div class="tag-search">
+                        <input type="text" id="tagSearchInput" placeholder="Search tags...">
+                    </div>
+                    
+                    <div class="tag-sort-options">
+                        <button class="tag-sort-btn active" data-sort="count">
+                            <i class="fas fa-sort-numeric-down"></i> Count
+                        </button>
+                        <button class="tag-sort-btn" data-sort="alpha">
+                            <i class="fas fa-sort-alpha-down"></i> Name
+                        </button>
+                    </div>
+                    
+                    <div class="tag-items-wrapper">
+                        <div class="tag-list" id="tagList">
+                            <div class="loading">
+                                <i class="fas fa-spinner fa-spin"></i> Loading tags...
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+
+                <!-- Main content area -->
+                <div class="tag-browser-main">
+                    <div class="filter-bar">
+                        <div class="selected-tags" id="selectedTags"></div>
+                        <div class="match-mode">
+                            <label>
+                                <input type="radio" name="matchMode" value="any" checked>
+                                Any tag
+                            </label>
+                            <label>
+                                <input type="radio" name="matchMode" value="all">
+                                All tags
+                            </label>
+                        </div>
+                        <button id="clearFiltersBtn" style="margin-left: auto; padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-color); cursor: pointer; display: none;">
+                            Clear Filters
+                        </button>
+                    </div>
+
+                    <div class="results-info" id="resultsInfo" style="display: none;">
+                        <span>Showing <span class="results-count" id="resultCount">0</span> images</span>
+                    </div>
+
+                    <div id="imagesContainer">
+                        <div class="empty-state">
+                            <i class="fas fa-search"></i>
+                            <h2>Select tags to view images</h2>
+                            <p>Click on tags in the sidebar to filter images</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+    <script>
+        let allTags = [];
+        let selectedTags = new Set();
+        let allImages = [];
+        let currentSort = 'count';
+
+        // Load tags on page load
+        async function loadTags() {
+            try {
+                const response = await fetch('/api/tags-with-counts');
+                const data = await response.json();
+                
+                if (data.success) {
+                    allTags = data.tags;
+                    renderTags();
+                }
+            } catch (error) {
+                console.error('Error loading tags:', error);
+                document.getElementById('tagList').innerHTML = '<div class="error">Error loading tags</div>';
+            }
+        }
+
+        function renderTags() {
+            const searchTerm = document.getElementById('tagSearchInput').value.toLowerCase();
+            const tagList = document.getElementById('tagList');
+            
+            let filteredTags = allTags.filter(item => 
+                item.tag.toLowerCase().includes(searchTerm)
+            );
+
+            // Sort
+            if (currentSort === 'alpha') {
+                filteredTags.sort((a, b) => a.tag.localeCompare(b.tag));
+            } else {
+                filteredTags.sort((a, b) => b.counts.total - a.counts.total);
+            }
+
+            if (filteredTags.length === 0) {
+                tagList.innerHTML = '<div class="empty-state"><p>No tags found</p></div>';
+                return;
+            }
+
+            tagList.innerHTML = filteredTags.map(item => `
+                <div class="tag-item ${selectedTags.has(item.tag) ? 'selected' : ''}" data-tag="${item.tag}">
+                    <span class="tag-name">${escapeHtml(item.tag)}</span>
+                    <span class="tag-count">${item.counts.total}</span>
+                </div>
+            `).join('');
+
+            // Add click listeners
+            document.querySelectorAll('.tag-item').forEach(el => {
+                el.addEventListener('click', () => {
+                    const tag = el.dataset.tag;
+                    if (selectedTags.has(tag)) {
+                        selectedTags.delete(tag);
+                    } else {
+                        selectedTags.add(tag);
+                    }
+                    renderTags();
+                    updateSelectedTagsDisplay();
+                    loadImages();
+                });
+            });
+        }
+
+        function updateSelectedTagsDisplay() {
+            const selectedTagsContainer = document.getElementById('selectedTags');
+            if (selectedTags.size === 0) {
+                selectedTagsContainer.innerHTML = '';
+                document.getElementById('clearFiltersBtn').style.display = 'none';
+            } else {
+                selectedTagsContainer.innerHTML = Array.from(selectedTags).map(tag => `
+                    <div class="selected-tag-badge">
+                        ${escapeHtml(tag)}
+                        <button onclick="removeTag('${escapeHtml(tag)}')" type="button">×</button>
+                    </div>
+                `).join('');
+                document.getElementById('clearFiltersBtn').style.display = 'block';
+            }
+        }
+
+        function removeTag(tag) {
+            selectedTags.delete(tag);
+            renderTags();
+            updateSelectedTagsDisplay();
+            loadImages();
+        }
+
+        async function loadImages() {
+            if (selectedTags.size === 0) {
+                document.getElementById('imagesContainer').innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-search"></i>
+                        <h2>Select tags to view images</h2>
+                        <p>Click on tags in the sidebar to filter images</p>
+                    </div>
+                `;
+                document.getElementById('resultsInfo').style.display = 'none';
+                return;
+            }
+
+            document.getElementById('imagesContainer').innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading images...</div>';
+
+            try {
+                const matchMode = document.querySelector('input[name="matchMode"]:checked').value;
+                const tagsParam = Array.from(selectedTags).map(t => `tags=${encodeURIComponent(t)}`).join('&');
+                const matchAllParam = matchMode === 'all' ? '&matchAll=true' : '';
+                
+                const response = await fetch(`/api/images-by-tags?${tagsParam}${matchAllParam}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    renderImages(data.images);
+                    document.getElementById('resultCount').textContent = data.count;
+                    document.getElementById('resultsInfo').style.display = 'flex';
+                } else {
+                    document.getElementById('imagesContainer').innerHTML = '<div class="error">Error loading images</div>';
+                }
+            } catch (error) {
+                console.error('Error loading images:', error);
+                document.getElementById('imagesContainer').innerHTML = '<div class="error">Error loading images</div>';
+            }
+        }
+
+        function renderImages(images) {
+            if (images.length === 0) {
+                document.getElementById('imagesContainer').innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-inbox"></i>
+                        <h2>No images found</h2>
+                        <p>Try selecting different tags</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const imagesGrid = `
+                <div class="images-grid">
+                    ${images.map(img => `
+                        <div class="image-card" onclick="openImage('${escapeHtml(img.url)}')">
+                            <img src="${escapeHtml(img.url)}" alt="${escapeHtml(img.filename)}" class="image-card-img">
+                            <div class="image-card-info">
+                                <div class="image-card-filename" title="${escapeHtml(img.filename)}">${escapeHtml(img.filename.substring(0, 30))}${img.filename.length > 30 ? '...' : ''}</div>
+                                <div class="image-card-collection">${escapeHtml(img.collection)}</div>
+                                <div class="image-card-tags">
+                                    ${img.tags.slice(0, 3).map(tag => `<span class="image-card-tag">${escapeHtml(tag.substring(0, 20))}</span>`).join('')}
+                                    ${img.tags.length > 3 ? `<span class="image-card-tag">+${img.tags.length - 3}</span>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            document.getElementById('imagesContainer').innerHTML = imagesGrid;
+        }
+
+        function openImage(url) {
+            // Open in a lightbox or modal
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0,0,0,0.9);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 1000;
+                cursor: pointer;
+            `;
+            modal.innerHTML = `
+                <img src="${escapeHtml(url)}" style="max-width: 90vw; max-height: 90vh; object-fit: contain;">
+            `;
+            modal.addEventListener('click', () => modal.remove());
+            document.body.appendChild(modal);
+        }
+
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+
+        // Event listeners
+        document.getElementById('tagSearchInput').addEventListener('input', renderTags);
+        
+        document.querySelectorAll('[data-sort]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('[data-sort]').forEach(b => b.classList.remove('active'));
+                e.target.closest('[data-sort]').classList.add('active');
+                currentSort = e.target.closest('[data-sort]').dataset.sort;
+                renderTags();
+            });
+        });
+
+        document.querySelectorAll('input[name="matchMode"]').forEach(radio => {
+            radio.addEventListener('change', loadImages);
+        });
+
+        document.getElementById('clearFiltersBtn').addEventListener('click', () => {
+            selectedTags.clear();
+            renderTags();
+            updateSelectedTagsDisplay();
+            loadImages();
+        });
+
+        // Initialize
+        loadTags();
+    </script>
+</body>
+</html>

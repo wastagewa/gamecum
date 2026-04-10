@@ -599,21 +599,46 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Images are already sorted by upload time from backend
         retagImagesList.innerHTML = images.map(img => {
-            // Extract prefix for body part tags
-            const getBodyPartPrefix = (fieldName) => {
+            // Extract all body part prefixes as three consecutive letters
+            const getAllBodyPartPrefixes = () => {
                 const fieldMap = {
-                    'boobs': ['c boobs', 'sn boobs', 'n boobs'],
-                    'pussy': ['c pussy', 'sn pussy', 'n pussy'],
-                    'butt': ['c butt', 'sn butt', 'n butt']
+                    'boobs': ['Covered boobs', 'Semi Naked boobs', 'Naked boobs', 'Unseen boobs'],
+                    'pussy': ['Covered pussy', 'Semi Naked pussy', 'Naked pussy', 'Unseen pussy'],
+                    'butt': ['Covered butt', 'Semi Naked butt', 'Naked butt', 'Unseen butt']
                 };
                 
-                const tags = fieldMap[fieldName] || [];
-                for (const tag of tags) {
-                    if (img.tags.includes(tag)) {
-                        return tag.split(' ')[0]; // Return 'c', 'sn', or 'n'
+                const abbreviationMap = {
+                    'Covered': 'c',
+                    'Semi Naked': 's',
+                    'Naked': 'n',
+                    'Unseen': 'u'
+                };
+                
+                const result = [];
+                const fields = ['boobs', 'pussy', 'butt'];
+                
+                for (const fieldName of fields) {
+                    const tags = fieldMap[fieldName] || [];
+                    let found = false;
+                    
+                    // Check each tag in fieldMap to find which one is in img.tags
+                    for (const tag of tags) {
+                        if (img.tags.includes(tag)) {
+                            // Extract prefix: everything before the last space
+                            const parts = tag.split(' ');
+                            const lastPart = parts[parts.length - 1];
+                            const fullPrefix = tag.substring(0, tag.length - lastPart.length - 1);
+                            result.push(abbreviationMap[fullPrefix] || '');
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        result.push('');
                     }
                 }
-                return ''; // No existing tag
+                
+                return result.join('');
             };
 
             return `
@@ -634,18 +659,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             `).join('')}
                         </div>
                         <div class="retag-body-parts">
-                            <div class="body-part-group">
-                                <label>Boobs:</label>
-                                <input type="text" class="body-part-input" data-filename="${img.filename}" data-field="boobs" value="${getBodyPartPrefix('boobs')}" placeholder="c/sn/n">
-                            </div>
-                            <div class="body-part-group">
-                                <label>Pussy:</label>
-                                <input type="text" class="body-part-input" data-filename="${img.filename}" data-field="pussy" value="${getBodyPartPrefix('pussy')}" placeholder="c/sn/n">
-                            </div>
-                            <div class="body-part-group">
-                                <label>Butt:</label>
-                                <input type="text" class="body-part-input" data-filename="${img.filename}" data-field="butt" value="${getBodyPartPrefix('butt')}" placeholder="c/sn/n">
-                            </div>
+                            <label>Body Parts (Boobs, Pussy, Butt):</label>
+                            <input type="text" class="body-parts-combined-input" data-filename="${img.filename}" value="${getAllBodyPartPrefixes()}" placeholder="e.g., csn" maxlength="3">
+                            <small style="display: block; margin-top: 4px; color: var(--text-secondary);">Format: 3 letters (c=Covered, s=Semi Naked, n=Naked, u=Unseen). e.g., "csn" for Covered boobs, Semi Naked pussy, Naked butt</small>
                         </div>
                         <div class="retag-button-group">
                             <button class="btn-add-tag" data-filename="${img.filename}">
@@ -728,26 +744,55 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        // Body part input handlers (boobs, pussy, butt)
-        document.querySelectorAll('.body-part-input').forEach(input => {
+        // Body part input handlers (combined input with three consecutive letters)
+        document.querySelectorAll('.body-parts-combined-input').forEach(input => {
             input.addEventListener('change', async (e) => {
                 const card = e.target.closest('.retag-image-card');
                 const filename = card.dataset.filename;
-                const fieldName = e.target.dataset.field;
-                const prefix = e.target.value.trim().toLowerCase();
+                const inputValue = e.target.value.trim();
                 
                 // Get current tags
                 const tagsContainer = card.querySelector('.retag-tags');
                 const currentTags = Array.from(tagsContainer.querySelectorAll('.remove-tag'))
                     .map(b => b.dataset.tag);
                 
-                // Remove any existing tag for this field (c/sn/n + fieldName)
-                const fieldTags = [`c ${fieldName}`, `sn ${fieldName}`, `n ${fieldName}`];
-                let newTags = currentTags.filter(tag => !fieldTags.includes(tag));
+                // Map abbreviations to full names
+                const abbreviationMap = {
+                    'c': 'Covered',
+                    's': 'Semi Naked',
+                    'n': 'Naked',
+                    'u': 'Unseen'
+                };
                 
-                // Add new tag if prefix was entered
-                if (prefix && ['c', 'sn', 'n'].includes(prefix)) {
-                    newTags.push(`${prefix} ${fieldName}`);
+                // Remove any existing body part tags (all Covered/Semi Naked/Naked/Unseen + boobs/pussy/butt)
+                const validPrefixes = ['Covered', 'Semi Naked', 'Naked', 'Unseen'];
+                const bodyParts = ['boobs', 'pussy', 'butt'];
+                let newTags = currentTags.filter(tag => {
+                    // Keep tags that don't match any body part pattern
+                    for (const validPrefix of validPrefixes) {
+                        for (const bodyPart of bodyParts) {
+                            if (tag === `${validPrefix} ${bodyPart}`) {
+                                return false;
+                            }
+                        }
+                    }
+                    return true;
+                });
+                
+                // Parse three consecutive letters
+                if (inputValue) {
+                    const fieldNames = ['boobs', 'pussy', 'butt'];
+                    
+                    // Add new tags for each body part (up to 3 letters)
+                    for (let i = 0; i < Math.min(inputValue.length, 3); i++) {
+                        const abbrev = inputValue[i].toLowerCase();
+                        const fieldName = fieldNames[i];
+                        
+                        if (abbrev && abbreviationMap[abbrev]) {
+                            const fullPrefix = abbreviationMap[abbrev];
+                            newTags.push(`${fullPrefix} ${fieldName}`);
+                        }
+                    }
                 }
                 
                 // Update tags

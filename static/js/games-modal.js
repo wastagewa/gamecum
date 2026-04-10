@@ -61,6 +61,24 @@ document.addEventListener('DOMContentLoaded', () => {
             description: 'Spot which image disappeared from the grid',
             url: `/collection/${CURRENT_COLLECTION}/missing`
         },
+        {
+            name: 'Trail Trace',
+            icon: 'fa-route',
+            description: 'Memorize the image grid, then follow a logic path',
+            url: `/collection/${CURRENT_COLLECTION}/trail`
+        },
+        {
+            name: 'Remix Match',
+            icon: 'fa-wand-magic-sparkles',
+            description: 'Match the target image to its remixed visual clone',
+            url: `/collection/${CURRENT_COLLECTION}/remix`
+        },
+        {
+            name: 'Tag Match',
+            icon: 'fa-tag',
+            description: 'Match tag cards with images containing those tags',
+            url: `/collection/${CURRENT_COLLECTION}/tag-match`
+        },
 
     ];
 

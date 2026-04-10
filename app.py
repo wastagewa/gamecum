@@ -540,7 +540,7 @@ def submit_score():
             return jsonify({'error': 'Invalid or missing collection'}), 400
         
         game_type = str(data.get('gameType', 'memory')).lower()
-        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing']
+        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match']
         if game_type not in allowed_games:
             game_type = 'memory'
         
@@ -778,6 +778,35 @@ def collection_missing(collection_name):
     collection = _safe_collection_name(collection_name)
     image_urls = _get_collection_image_urls(collection)
     return render_template('missing.html', images=image_urls, collection=collection)
+
+
+@app.route('/collection/<collection_name>/trail')
+def collection_trail(collection_name):
+    """Trail Trace game: follow a route through a memorized image grid."""
+    collection = _safe_collection_name(collection_name)
+    image_urls = _get_collection_image_urls(collection)
+    return render_template('trail.html', images=image_urls, collection=collection)
+
+
+@app.route('/collection/<collection_name>/remix')
+def collection_remix(collection_name):
+    """Remix Match game: identify which stylized remix belongs to the target image."""
+    collection = _safe_collection_name(collection_name)
+    image_urls = _get_collection_image_urls(collection)
+    return render_template('remix.html', images=image_urls, collection=collection)
+
+
+@app.route('/tag-match')
+def tag_match():
+    """Render the Tag Match memory game page using the Real collection."""
+    return redirect(url_for('collection_tag_match', collection_name='Real'))
+
+
+@app.route('/collection/<collection_name>/tag-match')
+def collection_tag_match(collection_name):
+    """Render the Tag Match memory game for a specific collection."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('tag-match.html', collection=collection)
 
 
 
@@ -1301,6 +1330,106 @@ def api_tagger_config():
         return jsonify({'success': True, 'backend': backend})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/tags')
+def tags_view():
+    """Display all tags with image counts."""
+    return render_template('tag-browser.html')
+
+
+@app.route('/api/tags-with-counts')
+def api_tags_with_counts():
+    """Return all tags grouped by collection with image counts."""
+    tags_data = _load_tags()
+    tag_counts = {}  # {tag: {collections: {collection: count}, total: count}}
+    
+    # Iterate through all tagged images
+    for image_key, tags_info in tags_data.items():
+        # Extract collection name from image_key (format: collection/filename)
+        parts = image_key.split('/')
+        if len(parts) < 2:
+            continue
+        
+        collection = parts[0]
+        
+        # Extract tags
+        tags = []
+        if isinstance(tags_info, list):
+            tags = tags_info
+        elif isinstance(tags_info, dict):
+            tags = tags_info.get('tags', [])
+        
+        # Count each tag
+        for tag in tags:
+            if tag not in tag_counts:
+                tag_counts[tag] = {'collections': {}, 'total': 0}
+            
+            if collection not in tag_counts[tag]['collections']:
+                tag_counts[tag]['collections'][collection] = 0
+            
+            tag_counts[tag]['collections'][collection] += 1
+            tag_counts[tag]['total'] += 1
+    
+    # Sort by total count (descending)
+    sorted_tags = sorted(tag_counts.items(), key=lambda x: x[1]['total'], reverse=True)
+    
+    return jsonify({
+        'success': True,
+        'tags': [{'tag': tag, 'counts': data} for tag, data in sorted_tags]
+    })
+
+
+@app.route('/api/images-by-tags')
+def api_images_by_tags():
+    """Get images filtered by specific tags."""
+    tags_filter = request.args.getlist('tags')  # Multiple tags can be passed
+    match_all = request.args.get('matchAll', 'false').lower() == 'true'
+    
+    if not tags_filter:
+        return jsonify({'success': False, 'error': 'No tags provided'}), 400
+    
+    tags_data = _load_tags()
+    matching_images = []
+    
+    # Iterate through all tagged images
+    for image_key, tags_info in tags_data.items():
+        # Extract collection and filename (format: collection/filename)
+        parts = image_key.split('/')
+        if len(parts) < 2:
+            continue
+        
+        collection = parts[0]
+        filename = '/'.join(parts[1:])  # Handle filenames with slashes
+        
+        # Extract tags
+        tags = []
+        if isinstance(tags_info, list):
+            tags = tags_info
+        elif isinstance(tags_info, dict):
+            tags = tags_info.get('tags', [])
+        
+        # Check if image matches filter
+        if match_all:
+            # Image must have all requested tags
+            if all(tag in tags for tag in tags_filter):
+                matching_images.append({
+                    'filename': filename,
+                    'collection': collection,
+                    'url': f'/static/uploads/{collection}/{filename}',
+                    'tags': tags
+                })
+        else:
+            # Image must have at least one of the requested tags
+            if any(tag in tags for tag in tags_filter):
+                matching_images.append({
+                    'filename': filename,
+                    'collection': collection,
+                    'url': f'/static/uploads/{collection}/{filename}',
+                    'tags': tags
+                })
+    
+    return jsonify({'success': True, 'images': matching_images, 'count': len(matching_images)})
 
 
 if __name__ == '__main__':
