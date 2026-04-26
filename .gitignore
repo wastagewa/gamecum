@@ -28,6 +28,9 @@ data/
 *.swo
 *~
 
+#JSON Files
+static/*.json
+
 # OS
 .DS_Store
 Thumbs.db

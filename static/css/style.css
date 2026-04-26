@@ -3248,7 +3248,7 @@ input:checked + .toggle-slider:before {
     justify-content: center;
     opacity: 0;
     transition: opacity 0.3s ease;
-    pointer-events: auto;
+    pointer-events: none;
 }
 
 .modal.show {
@@ -3265,6 +3265,8 @@ input:checked + .toggle-slider:before {
     overflow-y: auto;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
     animation: modalSlideIn 0.3s ease;
+    opacity: 1;
+    transform: none;
 }
 
 .modal-header {
