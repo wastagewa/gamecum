@@ -36,26 +36,6 @@ def _load_scores():
         pass
     return {}
 
-def _load_image_metadata():
-    """Load image metadata (names, descriptions) from JSON file."""
-    _ensure_scores_file()
-    if not os.path.exists(IMAGE_METADATA_FILE):
-        return {}
-    try:
-        with open(IMAGE_METADATA_FILE, 'r') as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-def _save_image_metadata(metadata: dict):
-    """Save image metadata to JSON file."""
-    try:
-        _ensure_scores_file()
-        with open(IMAGE_METADATA_FILE, 'w') as f:
-            json.dump(metadata, f)
-    except Exception:
-        pass
-
 def _save_scores(scores: dict):
     try:
         with open(SCORES_FILE, 'w') as f:

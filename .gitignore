@@ -27,9 +27,9 @@ data/
 *.swp
 *.swo
 *~
-
+*.gguf
 #JSON Files
-static/*.json
+static/gquotes.json
 
 # OS
 .DS_Store
