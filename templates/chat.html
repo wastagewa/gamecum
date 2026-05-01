@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Chat{% if collection %} - {{ collection }}{% endif %}</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        (function(){
+            var theme = null;
+            try { theme = localStorage.getItem('imgur.theme'); } catch(e) {}
+            if(!theme){
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                theme = prefersDark ? 'dark' : 'light';
+            }
+            if(theme === 'dark'){
+                document.documentElement.setAttribute('data-theme','dark');
+                document.documentElement.style.colorScheme = 'dark';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                document.documentElement.style.colorScheme = 'light';
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .chat-shell {
+            max-width: 1440px;
+            margin: 0 auto;
+            padding: 24px;
+            box-sizing: border-box;
+        }
+
+        .chat-header {
+            text-align: center;
+            margin-bottom: 22px;
+        }
+
+        .chat-header p {
+            color: var(--muted-text);
+            margin: 8px auto 0;
+            max-width: 760px;
+        }
+
+        .chat-layout {
+            display: grid;
+            grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+            gap: 18px;
+            align-items: start;
+        }
+
+        .chat-panel {
+            background: var(--surface-color);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 14px;
+            padding: 16px;
+            box-shadow: 0 14px 34px rgba(0,0,0,0.16);
+        }
+
+        .chat-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 14px;
+        }
+
+        .chat-select,
+        .chat-input,
+        .chat-textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.16);
+            background: var(--surface-color);
+            color: var(--text-color);
+            box-sizing: border-box;
+        }
+
+        .chat-image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
+            gap: 10px;
+            max-height: 58vh;
+            overflow: auto;
+            padding-right: 4px;
+        }
+
+        .chat-thumb {
+            aspect-ratio: 1 / 1;
+            border: 2px solid transparent;
+            border-radius: 10px;
+            padding: 0;
+            overflow: hidden;
+            background: rgba(255,255,255,0.05);
+            cursor: pointer;
+        }
+
+        .chat-thumb.active {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(88,214,195,0.16);
+        }
+
+        .chat-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .chat-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+            background: rgba(0,0,0,0.18);
+        }
+
+        .chat-preview {
+            width: min(380px, 100%);
+            aspect-ratio: 1 / 1;
+            border-radius: 14px;
+            overflow: hidden;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .chat-workspace {
+            display: grid;
+            grid-template-columns: minmax(240px, 420px) minmax(0, 1fr);
+            gap: 18px;
+        }
+
+        .chat-description {
+            margin-top: 14px;
+            padding: 14px;
+            min-height: 96px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: var(--text-color);
+            white-space: pre-wrap;
+        }
+
+        .chat-thread {
+            min-height: 360px;
+            max-height: 62vh;
+            overflow: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 4px;
+        }
+
+        .chat-bubble {
+            padding: 12px 14px;
+            border-radius: 12px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+        }
+
+        .chat-bubble.assistant {
+            background: rgba(88,214,195,0.1);
+            border: 1px solid rgba(88,214,195,0.18);
+            align-self: flex-start;
+        }
+
+        .chat-bubble.user {
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.1);
+            align-self: flex-end;
+        }
+
+        .chat-status {
+            min-height: 24px;
+            color: var(--muted-text);
+            margin-top: 10px;
+        }
+
+        .chat-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 12px;
+            align-items: center;
+        }
+
+        .chat-actions .chat-textarea {
+            min-height: 44px;
+            resize: vertical;
+        }
+
+        @media (max-width: 980px) {
+            .chat-layout,
+            .chat-workspace {
+                grid-template-columns: 1fr;
+            }
+            .chat-image-grid {
+                max-height: 280px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand">
+                <i class="fas fa-images"></i>
+                <span>ImgurMemory</span>
+            </a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu" id="collectionsDropdown"></div>
+                </div>
+                {% if collection %}
+                <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+                <button class="navbar-link" id="gamesMenuBtn"><i class="fas fa-gamepad"></i> Games</button>
+                {% endif %}
+                <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+            </div>
+        </div>
+    </nav>
+
+    <main class="chat-shell">
+        <header class="chat-header">
+            <h1><i class="fas fa-comments"></i> Chat</h1>
+            <p>Browse any collection image, generate its description, then continue the chat from that image context.</p>
+        </header>
+
+        <div class="chat-layout">
+            <aside class="chat-panel">
+                <div class="chat-controls">
+                    <label style="width:100%;">Collection
+                        <select id="chatCollectionSelect" class="chat-select"></select>
+                    </label>
+                </div>
+                <div id="chatImageGrid" class="chat-image-grid"></div>
+            </aside>
+
+            <section class="chat-workspace">
+                <div class="chat-panel">
+                    <h2>Selected Image</h2>
+                    <div id="chatPreview" class="chat-preview"></div>
+                    <button id="chatAnalyzeBtn" class="btn btn-primary" type="button" style="margin-top:14px;width:100%;">
+                        <i class="fas fa-wand-magic-sparkles"></i> Analyze Image
+                    </button>
+                    <div id="chatDescription" class="chat-description">Choose an image to begin.</div>
+                    <div id="chatStatus" class="chat-status"></div>
+                </div>
+
+                <div class="chat-panel">
+                    <h2>Conversation</h2>
+                    <div id="chatThread" class="chat-thread"></div>
+                    <div class="chat-actions">
+                        <textarea id="chatUserInput" class="chat-textarea" placeholder="Type your message..." disabled></textarea>
+                        <button id="chatSendBtn" class="btn btn-primary" type="button" disabled>
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script>
+        window.CURRENT_COLLECTION = "{{ collection }}";
+        const CURRENT_COLLECTION = "{{ collection }}";
+    </script>
+    <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+
+    <div id="gamesModal" class="games-modal">
+        <div class="games-modal-content">
+            <div class="games-modal-header">
+                <h2><i class="fas fa-gamepad"></i> Choose a Game</h2>
+                <button class="games-modal-close" id="gamesModalClose">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="games-grid" id="gamesGrid"></div>
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='js/games-modal.js') }}"></script>
+</body>
+</html>

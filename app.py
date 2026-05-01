@@ -2,6 +2,7 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 import os
 import json
 from werkzeug.utils import secure_filename
+from urllib.parse import unquote
 import uuid
 import random
 import re
@@ -208,6 +209,35 @@ def _get_collection_image_urls(collection: str):
     except FileNotFoundError:
         images = []
     return [f"/static/uploads/{collection}/{fn}" for fn in images]
+
+
+def _resolve_upload_image_url(image_url: str):
+    """Resolve a /static/uploads image URL to a local path inside UPLOAD_FOLDER."""
+    if not image_url or not isinstance(image_url, str):
+        return None
+
+    marker = '/static/uploads/'
+    if marker not in image_url:
+        return None
+
+    relative = unquote(image_url.split(marker, 1)[1]).replace('\\', '/').strip('/')
+    if not relative:
+        return None
+
+    base = os.path.abspath(app.config['UPLOAD_FOLDER'])
+    candidate = os.path.abspath(os.path.join(base, *relative.split('/')))
+
+    try:
+        if os.path.commonpath([base, candidate]) != base:
+            return None
+    except ValueError:
+        return None
+
+    filename = os.path.basename(candidate)
+    if not os.path.isfile(candidate) or not allowed_file(filename):
+        return None
+
+    return candidate
 
 @app.route('/')
 def index():
@@ -520,7 +550,7 @@ def submit_score():
             return jsonify({'error': 'Invalid or missing collection'}), 400
         
         game_type = str(data.get('gameType', 'memory')).lower()
-        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match']
+        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'chat']
         if game_type not in allowed_games:
             game_type = 'memory'
         
@@ -774,6 +804,58 @@ def collection_remix(collection_name):
     collection = _safe_collection_name(collection_name)
     image_urls = _get_collection_image_urls(collection)
     return render_template('remix.html', images=image_urls, collection=collection)
+
+
+@app.route('/chat')
+def chat():
+    """Render the image chat game page using the Real collection as a starting point."""
+    return redirect(url_for('collection_chat', collection_name='Real'))
+
+
+@app.route('/collection/<collection_name>/chat')
+def collection_chat(collection_name):
+    """Chat game: browse uploaded images, describe one, then chat from that context."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('chat.html', collection=collection)
+
+
+@app.route('/api/chat/describe', methods=['POST'])
+def api_chat_describe():
+    """Describe a selected uploaded image using llava_image_describe.py."""
+    try:
+        data = request.get_json() or {}
+        image_url = str(data.get('imageUrl') or '')
+        image_path = _resolve_upload_image_url(image_url)
+        if not image_path:
+            return jsonify({'success': False, 'error': 'Invalid or missing image'}), 400
+
+        from llava_image_describe import describe_image_file
+
+        description = describe_image_file(image_path)
+        return jsonify({'success': True, 'description': description})
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/chat/reply', methods=['POST'])
+def api_chat_reply():
+    """Generate a chat response using llava_image_describe.py."""
+    try:
+        data = request.get_json() or {}
+        image_description = str(data.get('imageDescription') or '').strip()
+        chat_history = str(data.get('chatHistory') or '').strip()
+
+        if not image_description:
+            return jsonify({'success': False, 'error': 'Missing image description'}), 400
+        if not chat_history:
+            chat_history = 'User: (looking at you)'
+
+        from llava_image_describe import generate_chat_response
+
+        reply = generate_chat_response(chat_history, image_description)
+        return jsonify({'success': True, 'reply': reply})
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
 
 
 @app.route('/tag-match')

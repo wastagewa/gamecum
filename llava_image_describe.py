@@ -5,147 +5,26 @@ import torch
 from PIL import Image
 from gc import collect
 
-# 🔥 BLIP-2
-from transformers import Blip2Processor, Blip2ForConditionalGeneration, BitsAndBytesConfig
+from transformers import AutoModelForImageClassification, AutoProcessor
+from huggingface_hub import hf_hub_download
+import pandas as pd
 
-# 🔥 GGUF (llama.cpp)
 from llama_cpp import Llama
 
 # =========================
-# 🧠 STEP 1: IMAGE → TEXT
+# ⚡ CONFIG
 # =========================
-def describe_image(image):
-    IMG_MODEL = "kpsss34/bl2.7b-Nsfw-long-captioning-1"
-    print("🔄 Loading BLIP-2...")
-
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.float16
-    )
-
-    processor = Blip2Processor.from_pretrained(IMG_MODEL)
-
-    blip_model = Blip2ForConditionalGeneration.from_pretrained(
-        IMG_MODEL,
-        device_map="auto",
-        quantization_config=bnb_config
-    )
-
-    print("✅ BLIP-2 ready")
-    print_gpu_status("After Blip2 Load")
-    prompt = (
-    "Describe the person in this image in sensual explicit nsfw detail.\n"
-    "Focus on:\n"
-    "- Appearance (body, clothing, expression)\n"
-    "- Pose and posture\n"
-    "- Mood or vibe\n"
-    "Keep it concise and factual. Do not repeat information. Be specific and vivid.\n"
-)
-
-    inputs = processor(
-        images=image,
-        text=prompt,
-        return_tensors="pt"
-    ).to(blip_model.device)
-
-    #Log Device Info
-    print("Model device:", next(blip_model.parameters()).device)
-    print("Input device:", inputs["input_ids"].device)
-
-    with torch.no_grad():
-        output = blip_model.generate(
-            **inputs,
-            max_new_tokens=120
-        )
-
-    result = processor.decode(output[0], skip_special_tokens=True)
-    result = clean_text(result)
-
-    print_gpu_status("After Image Describe")
-
-# ✅ FREE GPU MEMORY HERE
-    del blip_model
-    del processor
-    collect()
-    torch.cuda.empty_cache()
-
-    print("\n📸 Description:")
-    print(result)
-    print_gpu_status("After GPU Cleanup")
-    return result
-
+TAGGER_MODEL = "SmilingWolf/wd-eva02-large-tagger-v3"
+GGUF_PATH = r"c:\Users\logan\Documents\gamecum\MistralRP-Noromaid-NSFW-7B-Q4_0.gguf"
+# 🔥 Tags you NEVER want in prompt
+BLOCKED_TAGS = {
+    "text", "logo", "watermark", "signature",
+    "blurry", "lowres", "artifact", "jpeg artifacts", "blue_skin", "colored_skin",
+    "head_out_of_frame", "blue_hair"
+}
 # =========================
-# 🧠 STEP 2: ROLEPLAY (GGUF)
+# 📊 GPU STATUS
 # =========================
-def generate_reply(chat_history, image_description):
-    GGUF_PATH = r"c:\Users\logan\Documents\gamecum\MistralRP-Noromaid-NSFW-7B-Q4_0.gguf"
-    print("🔄 Loading GGUF model...")
-
-    llm = Llama(
-        model_path=GGUF_PATH,
-        n_gpu_layers=35,   # adjust (30–40 for 6GB GPU)
-        n_ctx=4096,
-        verbose=False
-    )
-
-    print("✅ GGUF ready\n")
-    print_gpu_status("After GGUF load")
-
-    prompt = f"""
-You are roleplaying as a confident, teasing, seductive character based on this explicit description:
-
-{image_description}
-
-Rules:
-- Speak in first person
-- Be extremely engaging, playful, and immersive
-- Ask provocative questions and describe your actions in vivid, sexual detail to continue the interaction
-- Stay consistent with the scene and escalate the erotic tension
-- Do NOT break character
-
-Conversation:
-{chat_history}
-
-Provide a response that:
-- Is over 200 words long
-- Describes your actions, thoughts, and desires in graphic, explicit detail
-- Encourages the user to engage with your character in a sexual manner
-- Includes teasing language and questions designed to arouse and engage the user
-- Ask the user for response after three sentences to keep the conversation interactive
-
-Reply:
-"""
-    
-    output = llm(
-        prompt,
-        max_tokens=400,
-        temperature=0.8,
-        top_p=0.9,
-        stop=["User:"]
-    )
-    print_gpu_status("After GGUF Generate")
-    return output["choices"][0]["text"].strip()
-
-def clean_text(text):
-    # Remove prompt echo
-    if "Keep it concise and factual." in text:
-        text = text.split("Keep it concise and factual.")[-1]
-
-    # Remove repetition
-    sentences = text.split(". ")
-    seen = set()
-    cleaned = []
-
-    for s in sentences:
-        if s not in seen:
-            cleaned.append(s)
-            seen.add(s)
-
-    return ". ".join(cleaned).strip()
-
-def trim_history(history, max_chars=1500):
-    return history[-max_chars:]
-
 def print_gpu_status(tag=""):
     print(f"\n📊 GPU STATUS [{tag}]")
 
@@ -164,13 +43,164 @@ def print_gpu_status(tag=""):
         print(f"VRAM Free     : {total - reserved:.2f} GB")
 
 # =========================
+# 🧠 LOAD TAGGER + TAG LIST
+# =========================
+print("🔄 Loading Tagger...")
+
+tagger = AutoModelForImageClassification.from_pretrained(
+    TAGGER_MODEL,
+    device_map="auto"
+)
+
+processor = AutoProcessor.from_pretrained(TAGGER_MODEL)
+
+# 🔥 Download correct tag names
+csv_path = hf_hub_download(
+    repo_id=TAGGER_MODEL,
+    filename="selected_tags.csv"
+)
+
+df = pd.read_csv(csv_path)
+tag_names = df["name"].tolist()
+
+print("✅ Tagger ready")
+
+# =========================
+# 🧠 LOAD GGUF MODEL
+# =========================
+print("🔄 Loading GGUF model...")
+
+llm = Llama(
+    model_path=GGUF_PATH,
+    n_gpu_layers=35,   # good for 6GB VRAM
+    n_ctx=4096,
+    verbose=False
+)
+
+print("✅ GGUF ready")
+
+print_gpu_status("After Model Load")
+
+# =========================
+# 🧠 STEP 1: IMAGE → TAGS
+# =========================
+def extract_tags(image):
+    inputs = processor(images=image, return_tensors="pt").to("cuda")
+
+    with torch.no_grad():
+        outputs = tagger(**inputs)
+
+    probs = torch.sigmoid(outputs.logits)[0].detach().cpu().numpy()
+
+    tag_probs = list(zip(tag_names, probs))
+    tag_probs.sort(key=lambda x: x[1], reverse=True)
+
+    # 🔥 FULL TAGS (for logging)
+    full_tags = [f"{tag} ({prob:.2f})" for tag, prob in tag_probs[:30]]
+
+    # 🔥 FILTERED TAGS (for model)
+    filtered_tags = [
+        tag for tag, prob in tag_probs
+        if prob > 0.35 and tag not in BLOCKED_TAGS
+    ][:25]
+
+    return full_tags, filtered_tags
+
+# =========================
+# 🧠 STEP 2: TAGS → STRUCTURED PROMPT
+# =========================
+def build_scene_prompt(tags):
+
+    subject, appearance, clothing, pose, environment, exposed, naked = [], [], [], [], [], [], []
+
+    for t in tags:
+        t = t.replace("_", " ")
+
+        if any(x in t for x in ["1girl", "1boy"]):
+            subject.append(t.strip("1"))
+        elif any(x in t for x in ["hair", "eyes", "body", "skin"]):
+            appearance.append(t)
+        elif any(x in t for x in ["pussy", "ass", "breast", "nipples", "genital", "penis" , "cock"]):
+            exposed.append("naked " + t)
+        elif any(x in t for x in ["undress", "naked", "nude"]):
+            naked.append(t)
+        elif any(x in t for x in ["dress", "shirt", "underwear", "bra", "panty"]):
+            clothing.append(t)
+        elif any(x in t for x in ["sitting", "standing", "kneeling"]):
+            pose.append(t)
+        else:
+            environment.append(t)
+
+    return f"""
+Scene Description:
+
+You are roleplaying as a seductive {', '.join(subject or ["an attractive person"])}.
+
+You have exposed your {', '.join(exposed[:3]) or "some subtle details"} for the viewer.
+
+Your appearnance is {', '.join(appearance[:5]) or "a captivating appearance"}.
+
+You are {', '.join(naked[:3]) if naked else "wearing " + ', '.join(clothing[:3])} revealing your enticing form.
+
+You are {', '.join(pose[:2]) or "posing seductively"}.
+
+Environment includes {', '.join(environment[:5]) or "an indoor setting"}.
+
+Cinematic lighting, soft shadows, realistic depth.
+Rules:
+- Speak in first person
+- Be extremely engaging, playful, and immersive
+- Ask provocative questions and describe your actions in vivid, sexual detail to continue the interaction
+- Stay consistent with the scene and escalate the erotic tension
+- Do NOT break character
+Provide a response that:
+- Is over 200 words long
+- Describes your actions, thoughts, and desires in graphic, explicit detail
+- Encourages the user to engage with your character in a sexual manner
+- Includes teasing language and questions designed to arouse and engage the user
+- Ask the user for response after three sentences to keep the conversation interactive
+
+"""
+
+# =========================
+# 🧠 STEP 3: CHAT
+# =========================
+def generate_reply(chat_history, scene_prompt):
+
+    prompt = f"""You are a seductive character.
+
+Stay in character and respond ONLY as the assistant.
+
+Scene:
+{scene_prompt}
+
+Conversation:
+{chat_history}
+
+Assistant:"""
+
+    output = llm(
+        prompt,
+        max_tokens=400,
+        temperature=0.7,
+        top_p=0.9,
+        stop=["User:", "Assistant:"]   # 🔥 CRITICAL FIX
+    )
+
+    text = output["choices"][0]["text"].strip()
+
+    # 🔥 Clean accidental role leakage
+    if "User:" in text:
+        text = text.split("User:")[0].strip()
+
+    return text or "I slowly watch you, waiting for your next move..."
+
+# =========================
 # ❤️ MAIN LOOP
 # =========================
 if __name__ == "__main__":
-    print("Kinky  Image Roleplay Game (BLIP2 + GGUF)")
+    print("\n🧠 Image → Tag → SD Prompt → Chat System")
     print("Commands: 'exit' or 'new'\n")
-
-    print_gpu_status("Startup")
 
     while True:
         img_path = input("📷 Enter image path: ").strip()
@@ -184,14 +214,30 @@ if __name__ == "__main__":
 
         image = Image.open(img_path).convert("RGB")
 
-        print("\n🧠 Analyzing image...")
-        image_desc = describe_image(image)
+        # 🔥 STEP 1
+        print("\n🧠 Extracting tags...")
+        full_tags, filtered_tags = extract_tags(image)
+
+        print("\n FULL TAGS (debug):")
+        print(full_tags)
+
+        print("\n🎯 FILTERED TAGS (used):")
+        print(filtered_tags)
+
+        scene_prompt = build_scene_prompt(filtered_tags)
+
+        # 🔥 STEP 2
+        print("\n🎨 Building scene prompt...")
+        scene_prompt = build_scene_prompt(filtered_tags)
+
+        print("\n📸 Scene Prompt:\n", scene_prompt)
 
         chat_history = "User: (looking at you)"
 
+        # 🔥 STEP 3
         while True:
             print("\n🤖 Thinking...")
-            reply = generate_reply(chat_history, image_desc)
+            reply = generate_reply(chat_history, scene_prompt)
 
             print("🤖:", reply)
 
@@ -208,5 +254,5 @@ if __name__ == "__main__":
 
             chat_history += f"\nUser: {user_input}"
 
-            # keep context small (important for speed)
-            chat_history = trim_history(chat_history)
+            # keep context small
+            chat_history = chat_history[-3000:]

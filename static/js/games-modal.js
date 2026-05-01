@@ -79,6 +79,12 @@ document.addEventListener('DOMContentLoaded', () => {
             description: 'Match tag cards with images containing those tags',
             url: `/collection/${CURRENT_COLLECTION}/tag-match`
         },
+        {
+            name: 'Chat',
+            icon: 'fa-comments',
+            description: 'Pick an image and chat from its generated description',
+            url: `/collection/${CURRENT_COLLECTION}/chat`
+        },
 
     ];
 
