@@ -3,7 +3,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const imageGrid = document.getElementById('chatImageGrid');
     const preview = document.getElementById('chatPreview');
     const analyzeBtn = document.getElementById('chatAnalyzeBtn');
-    const descriptionEl = document.getElementById('chatDescription');
+    const fullTagsEl = document.getElementById('chatFullTags');
+    const filteredTagsEl = document.getElementById('chatFilteredTags');
+    const scenePromptEl = document.getElementById('chatScenePrompt');
     const statusEl = document.getElementById('chatStatus');
     const threadEl = document.getElementById('chatThread');
     const userInput = document.getElementById('chatUserInput');
@@ -13,7 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
         collections: {},
         selectedCollection: window.CURRENT_COLLECTION || 'Real',
         selectedImage: '',
-        imageDescription: '',
+        scenePrompt: '',
         chatHistory: ''
     };
 
@@ -24,8 +26,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function setBusy(isBusy, text) {
         analyzeBtn.disabled = isBusy || !state.selectedImage;
-        sendBtn.disabled = isBusy || !state.imageDescription;
-        userInput.disabled = isBusy || !state.imageDescription;
+        sendBtn.disabled = isBusy || !state.scenePrompt;
+        userInput.disabled = isBusy || !state.scenePrompt;
         if (text !== undefined) {
             setStatus(text);
         }
@@ -40,9 +42,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function resetConversation() {
-        state.imageDescription = '';
+        state.scenePrompt = '';
         state.chatHistory = '';
-        descriptionEl.textContent = 'Analyze the selected image to generate a description.';
+        fullTagsEl.textContent = 'Analyze the selected image to generate tags.';
+        filteredTagsEl.textContent = 'Analyze the selected image to generate filtered tags.';
+        scenePromptEl.textContent = 'Analyze the selected image to build the chat prompt.';
         threadEl.innerHTML = '';
         userInput.value = '';
         userInput.disabled = true;
@@ -123,7 +127,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function generateInitialReply() {
         setBusy(true, 'Generating first chat response...');
         const data = await postJson('/api/chat/reply', {
-            imageDescription: state.imageDescription,
+            scenePrompt: state.scenePrompt,
             chatHistory: state.chatHistory
         });
         state.chatHistory += `\nAssistant: ${data.reply}`;
@@ -140,9 +144,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await postJson('/api/chat/describe', {
                 imageUrl: state.selectedImage
             });
-            state.imageDescription = data.description;
+            state.scenePrompt = data.scenePrompt || data.description || '';
             state.chatHistory = 'User: (looking at you)';
-            descriptionEl.textContent = data.description;
+            fullTagsEl.textContent = Array.isArray(data.fullTags) && data.fullTags.length
+                ? data.fullTags.join('\n')
+                : 'No tags returned.';
+            filteredTagsEl.textContent = Array.isArray(data.filteredTags) && data.filteredTags.length
+                ? data.filteredTags.join(', ')
+                : 'No filtered tags returned.';
+            scenePromptEl.textContent = state.scenePrompt || 'No prompt returned.';
             await generateInitialReply();
         } catch (err) {
             setBusy(false, '');
@@ -152,7 +162,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function sendMessage() {
         const message = userInput.value.trim();
-        if (!message || !state.imageDescription) return;
+        if (!message || !state.scenePrompt) return;
 
         appendBubble('user', message);
         state.chatHistory += `\nUser: ${message}`;
@@ -161,7 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             setBusy(true, 'Generating reply...');
             const data = await postJson('/api/chat/reply', {
-                imageDescription: state.imageDescription,
+                scenePrompt: state.scenePrompt,
                 chatHistory: state.chatHistory
             });
             state.chatHistory += `\nAssistant: ${data.reply}`;

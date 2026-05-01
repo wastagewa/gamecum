@@ -134,8 +134,13 @@
             gap: 18px;
         }
 
-        .chat-description {
+        .chat-model-output {
             margin-top: 14px;
+            display: grid;
+            gap: 12px;
+        }
+
+        .chat-output-box {
             padding: 14px;
             min-height: 96px;
             border-radius: 10px;
@@ -143,6 +148,20 @@
             border: 1px solid rgba(255,255,255,0.08);
             color: var(--text-color);
             white-space: pre-wrap;
+            max-height: 220px;
+            overflow: auto;
+        }
+
+        .chat-output-box h3 {
+            margin: 0 0 8px;
+            font-size: 0.95rem;
+            color: var(--text-color);
+        }
+
+        .chat-output-box .chat-output-content {
+            color: var(--muted-text);
+            font-size: 0.92rem;
+            line-height: 1.45;
         }
 
         .chat-thread {
@@ -248,7 +267,20 @@
                     <button id="chatAnalyzeBtn" class="btn btn-primary" type="button" style="margin-top:14px;width:100%;">
                         <i class="fas fa-wand-magic-sparkles"></i> Analyze Image
                     </button>
-                    <div id="chatDescription" class="chat-description">Choose an image to begin.</div>
+                    <div class="chat-model-output">
+                        <div class="chat-output-box">
+                            <h3>Generated Tags</h3>
+                            <div id="chatFullTags" class="chat-output-content">Choose an image to begin.</div>
+                        </div>
+                        <div class="chat-output-box">
+                            <h3>Filtered Tags</h3>
+                            <div id="chatFilteredTags" class="chat-output-content">Choose an image to begin.</div>
+                        </div>
+                        <div class="chat-output-box">
+                            <h3>Chat Prompt</h3>
+                            <div id="chatScenePrompt" class="chat-output-content">Choose an image to begin.</div>
+                        </div>
+                    </div>
                     <div id="chatStatus" class="chat-status"></div>
                 </div>
 

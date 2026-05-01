@@ -829,10 +829,17 @@ def api_chat_describe():
         if not image_path:
             return jsonify({'success': False, 'error': 'Invalid or missing image'}), 400
 
-        from llava_image_describe import describe_image_file
+        from llava_image_describe import analyze_image_file
 
-        description = describe_image_file(image_path)
-        return jsonify({'success': True, 'description': description})
+        analysis = analyze_image_file(image_path)
+        scene_prompt = analysis.get('scene_prompt', '')
+        return jsonify({
+            'success': True,
+            'description': scene_prompt,
+            'scenePrompt': scene_prompt,
+            'fullTags': analysis.get('full_tags', []),
+            'filteredTags': analysis.get('filtered_tags', [])
+        })
     except Exception as exc:
         return jsonify({'success': False, 'error': str(exc)}), 500
 
@@ -842,17 +849,17 @@ def api_chat_reply():
     """Generate a chat response using llava_image_describe.py."""
     try:
         data = request.get_json() or {}
-        image_description = str(data.get('imageDescription') or '').strip()
+        scene_prompt = str(data.get('scenePrompt') or data.get('imageDescription') or '').strip()
         chat_history = str(data.get('chatHistory') or '').strip()
 
-        if not image_description:
+        if not scene_prompt:
             return jsonify({'success': False, 'error': 'Missing image description'}), 400
         if not chat_history:
             chat_history = 'User: (looking at you)'
 
         from llava_image_describe import generate_chat_response
 
-        reply = generate_chat_response(chat_history, image_description)
+        reply = generate_chat_response(chat_history, scene_prompt)
         return jsonify({'success': True, 'reply': reply})
     except Exception as exc:
         return jsonify({'success': False, 'error': str(exc)}), 500

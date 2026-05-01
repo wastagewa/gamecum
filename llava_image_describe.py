@@ -181,9 +181,12 @@ Assistant:"""
 
     output = llm(
         prompt,
-        max_tokens=400,
-        temperature=0.7,
+        max_tokens=200,
+        temperature=0.9,
         top_p=0.9,
+        repeat_penalty=1.2,      # 🔥 MOST IMPORTANT
+        frequency_penalty=0.3,   # reduces reuse of same words
+        presence_penalty=0.4,    # forces new ideas
         stop=["User:", "Assistant:"]   # 🔥 CRITICAL FIX
     )
 
@@ -194,6 +197,22 @@ Assistant:"""
         text = text.split("User:")[0].strip()
 
     return text or "I slowly watch you, waiting for your next move..."
+
+def analyze_image_file(image_path):
+    image = Image.open(image_path).convert("RGB")
+    full_tags, filtered_tags = extract_tags(image)
+    scene_prompt = build_scene_prompt(filtered_tags)
+    return {
+        "full_tags": full_tags,
+        "filtered_tags": filtered_tags,
+        "scene_prompt": scene_prompt
+    }
+
+def describe_image_file(image_path):
+    return analyze_image_file(image_path)["scene_prompt"]
+
+def generate_chat_response(chat_history, scene_prompt):
+    return generate_reply(chat_history[-3000:], scene_prompt)
 
 # =========================
 # ❤️ MAIN LOOP
