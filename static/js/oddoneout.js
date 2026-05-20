@@ -20,7 +20,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const gridEl         = document.getElementById('oddGrid');
     const timerWrap      = document.getElementById('oddRoundTimerWrap');
     const timerBar       = document.getElementById('oddRoundTimerBar');
-    const difficultySelect = document.getElementById('oddDifficulty');
+    const roundTimeSlider  = document.getElementById('oddRoundTime');
+    const roundTimeValEl   = document.getElementById('oddRoundTimeVal');
     const usernameInput  = document.getElementById('oddUsernameInput');
     const container      = document.getElementById('oddContainer');
 
@@ -48,13 +49,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         sharedTag: null,
     };
 
-    // ── Difficulty config ─────────────────────────────────────────────────────
-    const DIFFICULTY = {
-        easy:   { roundMs: 12000 },
-        medium: { roundMs:  8000 },
-        hard:   { roundMs:  5000 },
-        insane: { roundMs:  3000 },
-    };
+    // ── Round time helper ─────────────────────────────────────────────────────
+    function getRoundMs() {
+        return (parseInt(roundTimeSlider ? roundTimeSlider.value : 10, 10) || 10) * 1000;
+    }
+
+    // Live label update
+    if (roundTimeSlider) {
+        roundTimeSlider.addEventListener('input', () => {
+            if (roundTimeValEl) roundTimeValEl.textContent = roundTimeSlider.value + 's';
+        });
+    }
 
     // ── Load collection images with tags ──────────────────────────────────────
     async function loadImages() {
@@ -225,8 +230,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         messageEl.innerHTML = '<p class="odd-prompt">Which image does <strong>NOT</strong> belong with the others?</p>';
 
-        const cfg = DIFFICULTY[difficultySelect.value] || DIFFICULTY.medium;
-        startRoundTimer(cfg.roundMs);
+        startRoundTimer(getRoundMs());
     }
 
     // ── Answer handling ───────────────────────────────────────────────────────

@@ -120,14 +120,13 @@
 
             <!-- Settings -->
             <div class="snap-settings">
-                <div class="settings-group">
-                    <label for="snapDifficulty">Speed:</label>
-                    <select id="snapDifficulty" class="setting-select">
-                        <option value="easy">Chill (6s)</option>
-                        <option value="medium" selected>Normal (4s)</option>
-                        <option value="hard">Fast (2.5s)</option>
-                        <option value="insane">Lightning (1.5s)</option>
-                    </select>
+                <div class="settings-group sp-slider-group">
+                    <label for="snapBaseTime">
+                        Starting time: <strong id="snapBaseTimeVal">4s</strong>
+                        <span class="slider-sub">(shrinks each round)</span>
+                    </label>
+                    <input type="range" id="snapBaseTime" class="setting-slider" min="2" max="10" step="1" value="4">
+                    <div class="slider-hints"><span>2s (fast)</span><span>10s (chill)</span></div>
                 </div>
                 <div class="settings-group">
                     <label for="snapUsernameInput">Username:</label>

@@ -23,7 +23,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const timerFill     = document.getElementById('sortTimerFill');
     const yesBtn        = document.getElementById('sortYesBtn');
     const noBtn         = document.getElementById('sortNoBtn');
-    const diffSel       = document.getElementById('sortDifficulty');
+    const imageTimeSlider = document.getElementById('sortImageTime');
+    const imageTimeValEl  = document.getElementById('sortImageTimeVal');
     const roundsSel     = document.getElementById('sortRounds');
     const usernameInput = document.getElementById('sortUsernameInput');
     const container     = document.getElementById('sortContainer');
@@ -52,12 +53,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         currentHasTag: false,
     };
 
-    const DIFFICULTY = {
-        easy:   { ms: 6000 },
-        medium: { ms: 4000 },
-        hard:   { ms: 2500 },
-        insane: { ms: 1500 },
-    };
+    // ── Time-per-image helper ─────────────────────────────────────────────────
+    function getImageMs() {
+        return (parseInt(imageTimeSlider ? imageTimeSlider.value : 4, 10) || 4) * 1000;
+    }
+
+    if (imageTimeSlider) {
+        imageTimeSlider.addEventListener('input', () => {
+            if (imageTimeValEl) imageTimeValEl.textContent = imageTimeSlider.value + 's';
+        });
+    }
 
     // ── Data loading ──────────────────────────────────────────────────────────
     async function loadImages() {
@@ -172,8 +177,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         messageEl.innerHTML = '';
 
-        const cfg = DIFFICULTY[diffSel.value] || DIFFICULTY.medium;
-        startTimerBar(cfg.ms);
+        startTimerBar(getImageMs());
     }
 
     // ── Time out ──────────────────────────────────────────────────────────────

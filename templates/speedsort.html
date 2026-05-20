@@ -118,14 +118,13 @@
 
             <!-- Settings -->
             <div class="sort-settings">
-                <div class="settings-group">
-                    <label for="sortDifficulty">Difficulty:</label>
-                    <select id="sortDifficulty" class="setting-select">
-                        <option value="easy">Easy (6s per image)</option>
-                        <option value="medium" selected>Medium (4s per image)</option>
-                        <option value="hard">Hard (2.5s per image)</option>
-                        <option value="insane">Insane (1.5s per image)</option>
-                    </select>
+                <div class="settings-group sp-slider-group">
+                    <label for="sortImageTime">
+                        Time per image: <strong id="sortImageTimeVal">4s</strong>
+                        <span class="slider-sub">(shorter = harder)</span>
+                    </label>
+                    <input type="range" id="sortImageTime" class="setting-slider" min="1" max="10" step="1" value="4">
+                    <div class="slider-hints"><span>1s (insane)</span><span>10s (chill)</span></div>
                 </div>
                 <div class="settings-group">
                     <label for="sortRounds">Images per round:</label>

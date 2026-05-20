@@ -87,14 +87,13 @@
           <option value="5">5 tags (easiest)</option>
         </select>
       </div>
-      <div class="settings-group">
-        <label>Time per round:</label>
-        <select id="wtTimeLimit" class="setting-select">
-          <option value="0">No limit</option>
-          <option value="10000">10 seconds</option>
-          <option value="7000" selected>7 seconds</option>
-          <option value="5000">5 seconds</option>
-        </select>
+      <div class="settings-group sp-slider-group">
+        <label for="wtTimeLimit">
+          Time per round: <strong id="wtTimeLimitVal">7s</strong>
+          <span class="slider-sub">(0 = no limit)</span>
+        </label>
+        <input type="range" id="wtTimeLimit" class="setting-slider" min="0" max="20" step="1" value="7">
+        <div class="slider-hints"><span>0 (∞)</span><span>20s</span></div>
       </div>
       <div class="settings-group">
         <label>Username:</label>

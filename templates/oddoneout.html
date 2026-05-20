@@ -100,14 +100,13 @@
 
             <!-- Settings -->
             <div class="odd-settings">
-                <div class="settings-group">
-                    <label for="oddDifficulty">Difficulty:</label>
-                    <select id="oddDifficulty" class="setting-select">
-                        <option value="easy">Easy (12s per round)</option>
-                        <option value="medium" selected>Medium (8s per round)</option>
-                        <option value="hard">Hard (5s per round)</option>
-                        <option value="insane">Insane (3s per round)</option>
-                    </select>
+                <div class="settings-group sp-slider-group">
+                    <label for="oddRoundTime">
+                        Round time: <strong id="oddRoundTimeVal">10s</strong>
+                        <span class="slider-sub">(shorter = harder)</span>
+                    </label>
+                    <input type="range" id="oddRoundTime" class="setting-slider" min="3" max="30" step="1" value="10">
+                    <div class="slider-hints"><span>3s (insane)</span><span>30s (chill)</span></div>
                 </div>
                 <div class="settings-group">
                     <label for="oddUsernameInput">Username:</label>

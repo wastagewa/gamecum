@@ -82,14 +82,37 @@
     </div>
 
     <div class="sp-settings">
+
+      <!-- Reveal time slider -->
       <div class="settings-group sp-slider-group">
         <label for="spExposeTime">
           Reveal time: <strong id="spExposeTimeVal">20s</strong>
-          <span style="color:var(--muted-text);font-size:0.8em;margin-left:6px;">(shorter = harder)</span>
+          <span class="slider-sub">(shorter = harder)</span>
         </label>
         <input type="range" id="spExposeTime" class="setting-slider" min="5" max="60" step="5" value="20">
-        <div class="slider-hints"><span>5s</span><span>60s</span></div>
+        <div class="slider-hints"><span>5s fast</span><span>60s slow</span></div>
       </div>
+
+      <!-- Spotlight size slider -->
+      <div class="settings-group sp-slider-group">
+        <label for="spSpotSize">
+          Spotlight size: <strong id="spSpotSizeVal">30px</strong>
+        </label>
+        <input type="range" id="spSpotSize" class="setting-slider" min="15" max="160" step="5" value="30">
+        <div class="slider-hints"><span>15px (tiny)</span><span>160px (big)</span></div>
+      </div>
+
+      <!-- Fixed size toggle -->
+      <div class="settings-group">
+        <label class="sp-toggle-label">
+          <input type="checkbox" id="spFixedSize" class="setting-checkbox">
+          <span class="sp-toggle-text">
+            <i class="fas fa-lock-open" id="spFixedIcon"></i>
+            Fixed size <small>(spotlight won't grow)</small>
+          </span>
+        </label>
+      </div>
+
       <div class="settings-group">
         <label>Options:</label>
         <select id="spNumOptions" class="setting-select">
@@ -102,6 +125,7 @@
         <label>Username:</label>
         <input type="text" id="spUsername" class="setting-input" placeholder="Anonymous" maxlength="20">
       </div>
+
     </div>
 
   </div>

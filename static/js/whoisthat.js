@@ -20,11 +20,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     const timerFillEl    = document.getElementById('wtTimerFill');
     const lineupEl       = document.getElementById('wtLineup');
     const tagCountSel    = document.getElementById('wtTagCount');
-    const timeLimitSel   = document.getElementById('wtTimeLimit');
+    const timeLimitSlider = document.getElementById('wtTimeLimit');
+    const timeLimitValEl  = document.getElementById('wtTimeLimitVal');
     const usernameInput  = document.getElementById('wtUsername');
 
     const savedUser = localStorage.getItem('imgur.username');
     if (savedUser) usernameInput.value = savedUser;
+
+    // ── Slider live label ─────────────────────────────────────────────────────
+    function getTimeLimitMs() {
+        const v = parseInt(timeLimitSlider ? timeLimitSlider.value : 7, 10) || 0;
+        return v * 1000;   // 0 = no limit
+    }
+
+    function updateTimeLimitLabel() {
+        if (!timeLimitSlider || !timeLimitValEl) return;
+        const v = parseInt(timeLimitSlider.value, 10);
+        timeLimitValEl.textContent = v === 0 ? '∞ No limit' : v + 's';
+    }
+
+    if (timeLimitSlider) {
+        timeLimitSlider.addEventListener('input', updateTimeLimitLabel);
+        updateTimeLimitLabel(); // set initial label
+    }
 
     // ── Data ──────────────────────────────────────────────────────────────────
     let allImages = [];   // [{url, filename, tags:[]}]
@@ -182,7 +200,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
 
         // Timer
-        const ms = parseInt(timeLimitSel.value, 10) || 0;
+        const ms = getTimeLimitMs();
         startTimerBar(ms);
     }
 
@@ -198,7 +216,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Fewer tags = harder = more base points
         const basePoints = { 2: 500, 3: 300, 4: 200, 5: 150 }[numTags] || 200;
         // Speed bonus when timer active
-        const ms = parseInt(timeLimitSel.value, 10) || 0;
+        const ms = getTimeLimitMs();
         const speedPts = (ms > 0 && roundDeadline)
             ? Math.floor(Math.max(0, roundDeadline - Date.now()) / 100)
             : 0;

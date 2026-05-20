@@ -24,7 +24,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const noBtn         = document.getElementById('snapNoBtn');
     const cardLeft      = document.getElementById('snapCardLeft');
     const cardRight     = document.getElementById('snapCardRight');
-    const diffSel       = document.getElementById('snapDifficulty');
+    const baseTimeSlider = document.getElementById('snapBaseTime');
+    const baseTimeValEl  = document.getElementById('snapBaseTimeVal');
     const usernameInput = document.getElementById('snapUsernameInput');
     const container     = document.getElementById('snapContainer');
 
@@ -51,12 +52,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         img2:        null,
     };
 
-    const BASE_DIFFICULTY = {
-        easy:   6000,
-        medium: 4000,
-        hard:   2500,
-        insane: 1500,
-    };
+    // ── Base-time helper ──────────────────────────────────────────────────────
+    function getBaseMs() {
+        return (parseInt(baseTimeSlider ? baseTimeSlider.value : 4, 10) || 4) * 1000;
+    }
+
+    if (baseTimeSlider) {
+        baseTimeSlider.addEventListener('input', () => {
+            if (baseTimeValEl) baseTimeValEl.textContent = baseTimeSlider.value + 's';
+        });
+    }
 
     // ── Load images ───────────────────────────────────────────────────────────
     async function loadImages() {
@@ -117,8 +122,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // ── Timer bar ─────────────────────────────────────────────────────────────
     function roundMs() {
-        const base = BASE_DIFFICULTY[diffSel.value] || 4000;
-        // Timer shrinks slowly with consecutive rounds (5% per round, min 40%)
+        const base   = getBaseMs();
+        // Timer shrinks 5% per round, floors at 40% of base
         const factor = Math.max(0.4, 1 - state.round * 0.05);
         return Math.floor(base * factor);
     }

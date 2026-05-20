@@ -26,6 +26,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const exposurePct    = document.getElementById('spExposurePct');
     const exposeSlider   = document.getElementById('spExposeTime');
     const exposeValEl    = document.getElementById('spExposeTimeVal');
+    const spotSizeSlider = document.getElementById('spSpotSize');
+    const spotSizeValEl  = document.getElementById('spSpotSizeVal');
+    const fixedCheckbox  = document.getElementById('spFixedSize');
+    const fixedIcon      = document.getElementById('spFixedIcon');
     const numOptSel      = document.getElementById('spNumOptions');
     const usernameInput  = document.getElementById('spUsername');
 
@@ -34,9 +38,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     const savedUser = localStorage.getItem('imgur.username');
     if (savedUser) usernameInput.value = savedUser;
 
-    // ── Slider live preview ───────────────────────────────────────────────────
+    // ── Slider / toggle live preview ──────────────────────────────────────────
     exposeSlider.addEventListener('input', () => {
         exposeValEl.textContent = exposeSlider.value + 's';
+    });
+
+    spotSizeSlider.addEventListener('input', () => {
+        spotSizeValEl.textContent = spotSizeSlider.value + 'px';
+    });
+
+    fixedCheckbox.addEventListener('change', () => {
+        if (fixedIcon) {
+            fixedIcon.className = fixedCheckbox.checked
+                ? 'fas fa-lock'
+                : 'fas fa-lock-open';
+        }
     });
 
     // ── Data ──────────────────────────────────────────────────────────────────
@@ -60,18 +76,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // ── Spotlight animation ───────────────────────────────────────────────────
-    // growSpeed is computed from the slider: px per frame so that the image
-    // is fully uncovered in exactly `expose time` seconds (@ 60fps target).
+    // growSpeed: px per frame so full reveal takes exactly `expose time` seconds.
     function calcGrowSpeed() {
-        const timeSec = parseInt(exposeSlider.value, 10) || 20;
-        const startR  = 22;
-        // maxRadius approximation (updated properly in initSpot)
+        const timeSec   = parseInt(exposeSlider.value, 10) || 20;
+        const startR    = parseInt(spotSizeSlider.value, 10) || 22;
         const approxMax = Math.sqrt(stageW * stageW + stageH * stageH) / 2;
         return (approxMax - startR) / (timeSec * 60);
     }
 
     let spotX, spotY, velX, velY, radius, maxRadius, animFrame, answered;
     let stageW = 350, stageH = 350;
+    let roundStartTime = 0;   // used for fixed-size countdown
 
     function initSpot() {
         stageW  = stageEl.offsetWidth  || 350;
@@ -87,9 +102,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         velX = Math.cos(angle) * speed;
         velY = Math.sin(angle) * speed;
 
-        radius    = 22;
-        maxRadius = Math.sqrt(stageW * stageW + stageH * stageH) / 2;
-        answered  = false;
+        radius       = parseInt(spotSizeSlider.value, 10) || 22;
+        maxRadius    = Math.sqrt(stageW * stageW + stageH * stageH) / 2;
+        answered     = false;
+        roundStartTime = Date.now();
     }
 
     // Resize canvas while preserving exposure level (for fullscreen transitions)
@@ -126,36 +142,66 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function updateExposureBar() {
-        const pct = Math.round(exposureRatio() * 100);
-        exposureBar.style.width = pct + '%';
-        const h = Math.round(120 - pct * 1.2);
-        exposureBar.style.background = `hsl(${h},85%,52%)`;
-        exposurePct.textContent = pct + '%';
-        const bonus = Math.max(0, Math.round(500 * (1 - exposureRatio())));
-        bonusEl.textContent = bonus > 0 ? '+' + bonus : '0';
+        const isFixed  = fixedCheckbox && fixedCheckbox.checked;
+        const timeSec  = parseInt(exposeSlider.value, 10) || 20;
+
+        if (isFixed) {
+            // In fixed mode: bar shows time remaining as countdown
+            const elapsed   = (Date.now() - roundStartTime) / 1000;
+            const remaining = Math.max(0, 1 - elapsed / timeSec);
+            const pct       = Math.round(remaining * 100);
+            exposureBar.style.width      = pct + '%';
+            const h = Math.round(120 * remaining);   // green → red
+            exposureBar.style.background = `hsl(${h},85%,52%)`;
+            const secsLeft = Math.ceil(remaining * timeSec);
+            exposurePct.textContent = secsLeft + 's';
+            bonusEl.textContent     = '+' + Math.round(500 * remaining);
+        } else {
+            // Grow mode: bar shows how much has been exposed
+            const pct = Math.round(exposureRatio() * 100);
+            exposureBar.style.width      = pct + '%';
+            const h = Math.round(120 - pct * 1.2);
+            exposureBar.style.background = `hsl(${h},85%,52%)`;
+            exposurePct.textContent = pct + '%';
+            const bonus = Math.max(0, Math.round(500 * (1 - exposureRatio())));
+            bonusEl.textContent = bonus > 0 ? '+' + bonus : '0';
+        }
     }
 
     function animateSpot() {
         if (answered) return;
 
-        const grow = calcGrowSpeed();
-        radius = Math.min(radius + grow, maxRadius);
+        const isFixed = fixedCheckbox && fixedCheckbox.checked;
+        const timeSec = parseInt(exposeSlider.value, 10) || 20;
 
+        if (isFixed) {
+            // Fixed size: drift but don't grow; end round when time expires
+            const elapsed = (Date.now() - roundStartTime) / 1000;
+            if (elapsed >= timeSec) {
+                answered = true;
+                revealAll();
+                return;
+            }
+        } else {
+            // Grow mode: expand radius over time
+            const grow = calcGrowSpeed();
+            radius = Math.min(radius + grow, maxRadius);
+            if (radius >= maxRadius) {
+                answered = true;
+                revealAll();
+                return;
+            }
+        }
+
+        // Drift spotlight
         spotX += velX;
         spotY += velY;
-        const pad = 60;
+        const pad = Math.max(40, radius);
         if (spotX < pad || spotX > stageW - pad) { velX *= -1; spotX = Math.max(pad, Math.min(stageW - pad, spotX)); }
         if (spotY < pad || spotY > stageH - pad) { velY *= -1; spotY = Math.max(pad, Math.min(stageH - pad, spotY)); }
 
         drawSpot();
         updateExposureBar();
-
-        if (radius >= maxRadius) {
-            answered = true;
-            revealAll();
-            return;
-        }
-
         animFrame = requestAnimationFrame(animateSpot);
     }
 
@@ -230,7 +276,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         const isCorrect = (url === state.targetUrl);
 
         if (isCorrect) {
-            const bonus  = Math.max(0, Math.round(500 * (1 - exposureRatio())));
+            const isFixed   = fixedCheckbox && fixedCheckbox.checked;
+            const timeSec   = parseInt(exposeSlider.value, 10) || 20;
+            const remaining = isFixed
+                ? Math.max(0, 1 - (Date.now() - roundStartTime) / 1000 / timeSec)
+                : (1 - exposureRatio());
+            const bonus  = Math.max(0, Math.round(500 * remaining));
             const points = 100 + bonus;
             state.score += points;
             scoreEl.textContent = state.score;

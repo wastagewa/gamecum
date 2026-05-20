@@ -6836,3 +6836,42 @@ input:checked + .toggle-slider:before {
     color: var(--muted-text);
     margin-top: 2px;
 }
+
+/* ── Spotlight fixed-size toggle ──────────────────────────────────────── */
+.sp-toggle-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.sp-toggle-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0.95rem;
+    color: var(--text-color);
+}
+
+.sp-toggle-text small {
+    font-size: 0.78rem;
+    color: var(--muted-text);
+}
+
+.setting-checkbox {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--primary-color);
+    cursor: pointer;
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+/* Sub-label next to slider heading */
+.slider-sub {
+    font-size: 0.78rem;
+    color: var(--muted-text);
+    font-weight: 400;
+    margin-left: 6px;
+}
