@@ -80,6 +80,12 @@ document.addEventListener('DOMContentLoaded', () => {
             url: `/collection/${CURRENT_COLLECTION}/tag-match`
         },
         {
+            name: 'Chat',
+            icon: 'fa-comment-dots',
+            description: 'Pick an image, bring the character to life, and chat with them!',
+            url: `/collection/${CURRENT_COLLECTION}/chat`
+        },
+        {
             name: 'Spotlight',
             icon: 'fa-circle-dot',
             description: 'A tiny peephole drifts across a hidden image — name it before it\'s fully exposed!',

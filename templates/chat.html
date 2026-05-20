@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Chat{% if collection %} — {{ collection }}{% endif %}</title>
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <link rel="icon" type="image/svg+xml"  href="{{ url_for('static', filename='favicon.svg') }}">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script>
+    (function(){var t=null;try{t=localStorage.getItem('imgur.theme')}catch(e){}
+    if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}
+    if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');document.documentElement.style.colorScheme='dark';}
+    else{document.documentElement.removeAttribute('data-theme');document.documentElement.style.colorScheme='light';}})();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="chat-body">
+
+<!-- ── Navbar ──────────────────────────────────────────────────────────── -->
+<nav class="navbar">
+  <div class="navbar-container">
+    <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+    <div class="navbar-menu">
+      <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+      <div class="navbar-dropdown">
+        <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> Collections <i class="fas fa-caret-down"></i></button>
+        <div class="navbar-dropdown-menu" id="collectionsDropdown"></div>
+      </div>
+      {% if collection %}
+      <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+      <button class="navbar-link" id="gamesMenuBtn"><i class="fas fa-gamepad"></i> Games</button>
+      {% endif %}
+      <a href="/manage-collections" class="navbar-link"><i class="fas fa-cog"></i> Manage</a>
+      <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Main layout ─────────────────────────────────────────────────────── -->
+<div class="chat-page">
+
+  <!-- ══ Sidebar ══════════════════════════════════════════════════════════ -->
+  <aside class="chat-sidebar" id="chatSidebar">
+
+    <!-- Selected character card -->
+    <div class="chat-char-card" id="chatCharCard">
+      <div class="chat-char-img-wrap" id="chatCharImgWrap">
+        <img id="chatCharImg" src="" alt="" style="display:none;">
+        <div class="chat-char-placeholder" id="chatCharPlaceholder">
+          <i class="fas fa-user-circle"></i>
+          <span>Pick a character</span>
+        </div>
+      </div>
+      <div class="chat-char-meta">
+        <input type="text" id="chatCharName" class="chat-char-name-input"
+               value="Character" placeholder="Name..." maxlength="30"
+               title="Edit character name">
+        <p id="chatCharDesc" class="chat-char-desc">Select an image below to begin.</p>
+        <div id="chatCharTags" class="chat-char-tags"></div>
+      </div>
+    </div>
+
+    <!-- Image grid header -->
+    <div class="chat-picker-header">
+      <i class="fas fa-images"></i>
+      <span>Choose Character</span>
+      <span id="chatImgCount" class="chat-img-count"></span>
+    </div>
+
+    <!-- Scrollable image grid -->
+    <div class="chat-img-grid" id="chatImgGrid">
+      <div class="chat-loading-imgs"><i class="fas fa-spinner fa-spin"></i> Loading…</div>
+    </div>
+
+  </aside>
+
+  <!-- ══ Main chat panel ══════════════════════════════════════════════════ -->
+  <main class="chat-main">
+
+    <!-- Topbar -->
+    <div class="chat-topbar">
+      <div class="chat-topbar-info">
+        <div class="chat-topbar-avatar-wrap" id="chatTopbarAvatarWrap">
+          <img id="chatTopbarAvatar" src="" alt="" style="display:none;">
+          <i class="fas fa-robot chat-topbar-avatar-icon" id="chatTopbarIcon"></i>
+        </div>
+        <div>
+          <div class="chat-topbar-name" id="chatTopbarName">No character selected</div>
+          <div class="chat-topbar-status" id="chatTopbarStatus">Select an image to start</div>
+        </div>
+      </div>
+      <div class="chat-topbar-btns">
+        <button class="chat-icon-btn" id="chatSidebarToggle" title="Toggle sidebar">
+          <i class="fas fa-sidebar"></i>
+        </button>
+        <button class="chat-icon-btn" id="chatClearBtn" title="Clear conversation">
+          <i class="fas fa-trash-alt"></i>
+        </button>
+        <button class="chat-icon-btn" id="chatSettingsBtn" title="Settings">
+          <i class="fas fa-cog"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Settings drawer (collapsed by default) -->
+    <div class="chat-settings-drawer" id="chatSettingsDrawer">
+      <div class="chat-settings-inner">
+
+        <div class="chat-setting-row">
+          <label class="chat-setting-label">
+            <i class="fas fa-key"></i> HuggingFace Token
+          </label>
+          <div class="chat-token-row">
+            <input type="password" id="chatHfToken" class="chat-setting-input"
+                   placeholder="hf_xxxxxxxxxxxxxxxxxx" autocomplete="off" spellcheck="false">
+            <button id="chatTokenSaveBtn" class="chat-setting-save">Save</button>
+          </div>
+          <small class="chat-setting-hint">
+            Free at
+            <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">
+              huggingface.co/settings/tokens
+            </a>.
+            Stored locally in your browser. Or set <code>HF_TOKEN</code> env var on the server.
+          </small>
+        </div>
+
+        <div class="chat-setting-row">
+          <label class="chat-setting-label">
+            <i class="fas fa-robot"></i> Model
+          </label>
+          <select id="chatModel" class="chat-setting-select">
+            <option value="mistralai/Mistral-7B-Instruct-v0.3">Mistral 7B — fast, free tier</option>
+            <option value="mistralai/Mixtral-8x7B-Instruct-v0.1">Mixtral 8×7B — better quality</option>
+            <option value="meta-llama/Meta-Llama-3.1-8B-Instruct">Llama 3.1 8B</option>
+            <option value="Qwen/Qwen2.5-72B-Instruct">Qwen 2.5 72B — best quality</option>
+            <option value="NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO">Nous Hermes 2 — roleplay</option>
+          </select>
+          <small class="chat-setting-hint">All models via HuggingFace Serverless Inference API.</small>
+        </div>
+
+        <div class="chat-setting-row">
+          <label class="chat-setting-label">
+            <i class="fas fa-thermometer-half"></i>
+            Temperature: <strong id="chatTempVal">0.92</strong>
+          </label>
+          <input type="range" id="chatTemp" class="setting-slider" min="0.1" max="1.5" step="0.05" value="0.92">
+          <div class="slider-hints"><span>0.1 focused</span><span>1.5 wild</span></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Messages area -->
+    <div class="chat-messages-wrap" id="chatMessagesWrap">
+
+      <!-- Shown until a character is selected -->
+      <div class="chat-start-hint" id="chatStartHint">
+        <i class="fas fa-comment-dots chat-start-icon"></i>
+        <p>Pick an image from the sidebar to bring a character to life</p>
+      </div>
+
+      <!-- Message bubbles land here -->
+      <div id="chatMessages"></div>
+
+      <!-- Typing indicator -->
+      <div class="chat-typing" id="chatTyping" style="display:none;">
+        <div class="chat-typing-dots">
+          <span></span><span></span><span></span>
+        </div>
+        <span id="chatTypingName" class="chat-typing-label">typing…</span>
+      </div>
+
+    </div>
+
+    <!-- Input bar -->
+    <div class="chat-input-bar" id="chatInputBar">
+      <textarea id="chatInput" class="chat-input"
+                placeholder="Say something… (Enter to send)"
+                rows="1" disabled></textarea>
+      <button id="chatSendBtn" class="chat-send-btn" disabled>
+        <i class="fas fa-paper-plane"></i>
+      </button>
+    </div>
+
+  </main>
+</div>
+
+<!-- Games modal -->
+<div id="gamesModal" class="games-modal">
+  <div class="games-modal-content">
+    <div class="games-modal-header">
+      <h2><i class="fas fa-gamepad"></i> Choose a Game</h2>
+      <button class="games-modal-close" id="gamesModalClose"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="games-grid" id="gamesGrid"></div>
+  </div>
+</div>
+
+<script>
+  const CURRENT_COLLECTION = "{{ collection }}";
+</script>
+<script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+<script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+<script src="{{ url_for('static', filename='js/games-modal.js') }}"></script>
+</body>
+</html>

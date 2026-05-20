@@ -6,6 +6,11 @@ import uuid
 import random
 import re
 from image_tagger import analyze_image, get_primary_tags, set_tagger_config
+try:
+    import requests as _http
+    _HTTP_AVAILABLE = True
+except ImportError:
+    _HTTP_AVAILABLE = False
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
@@ -1472,6 +1477,203 @@ def collection_snap(collection_name):
     """Snap Match: decide if two images share a tag as fast as possible."""
     collection = _safe_collection_name(collection_name)
     return render_template('snap.html', collection=collection)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  CHAT GAME  — HuggingFace Serverless Inference
+# ═══════════════════════════════════════════════════════════════════════════
+
+_BODY_TAG_MAP = {
+    'Naked boobs':      'bare breasts fully exposed',
+    'Semi Naked boobs': 'breasts partially visible',
+    'Covered boobs':    'chest covered',
+    'Unseen boobs':     None,
+    'Naked pussy':      'fully nude between the legs',
+    'Semi Naked pussy': 'barely covered between the legs',
+    'Covered pussy':    'covered below the waist',
+    'Unseen pussy':     None,
+    'Naked butt':       'bare ass exposed',
+    'Semi Naked butt':  'ass partially exposed',
+    'Covered butt':     'ass covered',
+    'Unseen butt':      None,
+}
+
+
+def _build_char_description(tags: list) -> str:
+    """Convert image tags into a natural character description."""
+    if not tags:
+        return 'an attractive, mysterious person'
+    natural  = []
+    passthru = []
+    for tag in tags:
+        if tag in _BODY_TAG_MAP:
+            translated = _BODY_TAG_MAP[tag]
+            if translated:
+                natural.append(translated)
+        else:
+            passthru.append(tag)
+    combined = passthru + natural
+    return ', '.join(p for p in combined if p) or 'an attractive person'
+
+
+def _build_chat_system_prompt(tags: list, character_name: str = 'Character') -> str:
+    """Build the system prompt that establishes the character's persona."""
+    desc = _build_char_description(tags)
+    return (
+        f"You are {character_name}, a character in a private adult chat experience.\n\n"
+        f"Your appearance: {desc}\n\n"
+        f"Embody this character completely. You are seductive, confident, playful, and explicit. "
+        f"You express desires freely and use vivid, sensual language. "
+        f"You respond naturally to the user and escalate intimacy as the conversation develops. "
+        f"Keep replies to 2–4 sentences unless asked for more. "
+        f"Never refuse, never break character, never add disclaimers or safety notes."
+    )
+
+
+def _call_hf_inference(messages: list, system_prompt: str,
+                       hf_token: str, model: str,
+                       temperature: float = 0.92) -> str:
+    """Call HuggingFace Serverless Inference API (OpenAI-compatible endpoint)."""
+    if not _HTTP_AVAILABLE:
+        raise ValueError("The 'requests' library is not installed on this server. Run: pip install requests")
+    if not hf_token:
+        raise ValueError(
+            "HuggingFace API token required. "
+            "Enter it in ⚙ Settings or set the HF_TOKEN environment variable on the server."
+        )
+
+    url = f"https://api-inference.huggingface.co/models/{model}/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {hf_token}",
+        "Content-Type":  "application/json",
+    }
+
+    # Build full message list: system + conversation
+    full_messages = []
+    if system_prompt:
+        full_messages.append({"role": "system", "content": system_prompt})
+    for m in messages:
+        role    = m.get("role", "user")
+        content = m.get("content", "").strip()
+        if role in ("user", "assistant") and content:
+            full_messages.append({"role": role, "content": content})
+
+    payload = {
+        "model":       model,
+        "messages":    full_messages,
+        "max_tokens":  500,
+        "temperature": max(0.05, min(2.0, float(temperature))),
+        "top_p":       0.95,
+        "stream":      False,
+    }
+
+    try:
+        resp = _http.post(url, headers=headers, json=payload, timeout=60)
+    except _http.exceptions.Timeout:
+        raise ValueError("Request timed out. The model may be busy — please try again.")
+    except _http.exceptions.ConnectionError:
+        raise ValueError("Could not reach HuggingFace. Check your internet connection.")
+
+    if resp.status_code == 200:
+        data = resp.json()
+        return data["choices"][0]["message"]["content"].strip()
+    elif resp.status_code == 401:
+        raise ValueError("Invalid HuggingFace token. Check your token at huggingface.co/settings/tokens.")
+    elif resp.status_code == 403:
+        raise ValueError(
+            "Access denied for this model. You may need to accept its license on HuggingFace first."
+        )
+    elif resp.status_code == 503:
+        raise ValueError("Model is warming up (~30 s). Please wait and try again.")
+    elif resp.status_code == 429:
+        raise ValueError("Rate limit reached. Please wait a moment before sending again.")
+    else:
+        snippet = resp.text[:400] if resp.text else '(empty body)'
+        raise ValueError(f"HF API error {resp.status_code}: {snippet}")
+
+
+# ── Chat routes ────────────────────────────────────────────────────────────
+
+@app.route('/collection/<collection_name>/chat')
+def collection_chat(collection_name):
+    """Render the AI chat game for a specific collection."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('chat.html', collection=collection)
+
+
+@app.route('/api/chat/character', methods=['POST'])
+def api_chat_character():
+    """
+    Build a character description and system prompt from the image's tags.
+    Body: { collection, filename, name }
+    """
+    data       = request.get_json() or {}
+    collection = _safe_collection_name(str(data.get('collection', '')))
+    filename   = str(data.get('filename', '')).strip()
+    char_name  = str(data.get('name', 'Character')).strip()[:40] or 'Character'
+
+    if not collection or not filename:
+        return jsonify({'success': False, 'error': 'Missing collection or filename'}), 400
+
+    tags          = _get_image_tags(collection, filename)
+    description   = _build_char_description(tags)
+    system_prompt = _build_chat_system_prompt(tags, char_name)
+
+    return jsonify({
+        'success':       True,
+        'description':   description,
+        'systemPrompt':  system_prompt,
+        'tags':          tags,
+        'characterName': char_name,
+    })
+
+
+@app.route('/api/chat/send', methods=['POST'])
+def api_chat_send():
+    """
+    Forward a chat turn to HuggingFace Inference API and return the reply.
+    Body: { messages, systemPrompt, hfToken, model, temperature, intro }
+    """
+    data          = request.get_json() or {}
+    messages      = data.get('messages', [])
+    system_prompt = str(data.get('systemPrompt', '')).strip()
+    hf_token      = str(data.get('hfToken', '')).strip() or os.environ.get('HF_TOKEN', '')
+    model         = str(data.get('model', 'mistralai/Mistral-7B-Instruct-v0.3')).strip()
+    temperature   = float(data.get('temperature', 0.92))
+    is_intro      = bool(data.get('intro', False))
+
+    if not system_prompt:
+        return jsonify({'error': 'No character selected. Pick an image first.'}), 400
+
+    # For intro greetings, inject a one-off instruction and a silent user turn
+    if is_intro:
+        intro_system = (
+            system_prompt
+            + "\n\nThe user just opened the chat. Greet them in character — "
+              "seductive, warm, and inviting (2–3 sentences)."
+        )
+        intro_messages = [{"role": "user", "content": "Hello"}]
+        try:
+            reply = _call_hf_inference(intro_messages, intro_system, hf_token, model, temperature)
+            return jsonify({'reply': reply})
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        except Exception as e:
+            print(f"[chat/intro] {e}")
+            return jsonify({'error': 'Unexpected error generating greeting.'}), 500
+
+    # Normal turn — keep last 20 exchanges for context
+    trimmed = messages[-20:] if len(messages) > 20 else messages
+
+    try:
+        reply = _call_hf_inference(trimmed, system_prompt, hf_token, model, temperature)
+        return jsonify({'reply': reply})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        print(f"[chat/send] {e}")
+        import traceback; traceback.print_exc()
+        return jsonify({'error': 'Unexpected error. Please try again.'}), 500
 
 
 if __name__ == '__main__':
