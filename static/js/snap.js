@@ -4,7 +4,7 @@
  * React fast — the timer shrinks every round, and one mistake costs a life!
  */
 document.addEventListener('DOMContentLoaded', async () => {
-    const COLLECTION = window.CURRENT_COLLECTION || 'Real';
+    const COLLECTION = CURRENT_COLLECTION || 'Real';
 
     // ── DOM refs ──────────────────────────────────────────────────────────────
     const startBtn      = document.getElementById('startSnapBtn');

@@ -5,7 +5,7 @@
  * Combo multiplier rewards consecutive correct answers.
  */
 document.addEventListener('DOMContentLoaded', async () => {
-    const COLLECTION = window.CURRENT_COLLECTION || 'Real';
+    const COLLECTION = CURRENT_COLLECTION || 'Real';
 
     // ── DOM refs ──────────────────────────────────────────────────────────────
     const startBtn      = document.getElementById('startSortBtn');
