@@ -44,19 +44,19 @@
   <!-- ══ Sidebar ══════════════════════════════════════════════════════════ -->
   <aside class="chat-sidebar" id="chatSidebar">
 
-    <!-- Selected character card -->
+    <!-- Selected character card (thumbnail left, meta right) -->
     <div class="chat-char-card" id="chatCharCard">
       <div class="chat-char-img-wrap" id="chatCharImgWrap">
         <img id="chatCharImg" src="" alt="" style="display:none;">
         <div class="chat-char-placeholder" id="chatCharPlaceholder">
           <i class="fas fa-user-circle"></i>
-          <span>Pick a character</span>
+          <span>Pick</span>
         </div>
       </div>
       <div class="chat-char-meta">
         <input type="text" id="chatCharName" class="chat-char-name-input"
                value="Character" placeholder="Name..." maxlength="30"
-               title="Edit character name">
+               title="Edit character name — rebuilds the persona">
         <p id="chatCharDesc" class="chat-char-desc">Select an image below to begin.</p>
         <div id="chatCharTags" class="chat-char-tags"></div>
       </div>
