@@ -6,6 +6,14 @@ import uuid
 import random
 import re
 from image_tagger import analyze_image, get_primary_tags, set_tagger_config
+
+# Load .env file if present (python-dotenv)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()          # reads .env in the project root into os.environ
+except ImportError:
+    pass                   # dotenv not installed — env vars must be set externally
+
 try:
     import requests as _http
     _HTTP_AVAILABLE = True
