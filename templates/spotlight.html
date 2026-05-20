@@ -75,20 +75,20 @@
     <div class="sp-options" id="spOptions"></div>
 
     <div class="sp-controls">
-      <button id="startSpBtn" class="control-btn primary"><i class="fas fa-play"></i> Start Game</button>
-      <button id="resetSpBtn" class="control-btn secondary" style="display:none;"><i class="fas fa-redo"></i> Reset</button>
-      <button id="backSpBtn"  class="control-btn secondary"><i class="fas fa-arrow-left"></i> Back</button>
+      <button id="startSpBtn"      class="control-btn primary"><i class="fas fa-play"></i> Start Game</button>
+      <button id="resetSpBtn"      class="control-btn secondary" style="display:none;"><i class="fas fa-redo"></i> Reset</button>
+      <button id="fullscreenSpBtn" class="control-btn secondary"><i class="fas fa-expand"></i> Fullscreen</button>
+      <button id="backSpBtn"       class="control-btn secondary"><i class="fas fa-arrow-left"></i> Back</button>
     </div>
 
     <div class="sp-settings">
-      <div class="settings-group">
-        <label>Difficulty:</label>
-        <select id="spDifficulty" class="setting-select">
-          <option value="easy">Easy (fast reveal)</option>
-          <option value="medium" selected>Medium</option>
-          <option value="hard">Hard (slow reveal)</option>
-          <option value="insane">Insane (crawl)</option>
-        </select>
+      <div class="settings-group sp-slider-group">
+        <label for="spExposeTime">
+          Reveal time: <strong id="spExposeTimeVal">20s</strong>
+          <span style="color:var(--muted-text);font-size:0.8em;margin-left:6px;">(shorter = harder)</span>
+        </label>
+        <input type="range" id="spExposeTime" class="setting-slider" min="5" max="60" step="5" value="20">
+        <div class="slider-hints"><span>5s</span><span>60s</span></div>
       </div>
       <div class="settings-group">
         <label>Options:</label>

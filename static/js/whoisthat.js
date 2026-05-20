@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ── DOM ───────────────────────────────────────────────────────────────────
     const startBtn       = document.getElementById('startWtBtn');
     const resetBtn       = document.getElementById('resetWtBtn');
+    const fullscreenBtn  = document.getElementById('fullscreenWtBtn');
     const backBtn        = document.getElementById('backWtBtn');
     const scoreEl        = document.getElementById('wtScore');
     const roundEl        = document.getElementById('wtRound');
@@ -290,9 +291,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         startBtn.style.display = 'inline-block'; resetBtn.style.display = 'none';
     }
 
+    // ── Native Fullscreen ─────────────────────────────────────────────────────
+    const wtContainer = document.getElementById('wtContainer');
+    if (fullscreenBtn && wtContainer) {
+        fullscreenBtn.addEventListener('click', () => {
+            if (!document.fullscreenElement) {
+                wtContainer.requestFullscreen().catch(e => console.warn('FS error:', e.message));
+            } else {
+                document.exitFullscreen();
+            }
+        });
+        document.addEventListener('fullscreenchange', () => {
+            const isFS = document.fullscreenElement === wtContainer;
+            fullscreenBtn.innerHTML = isFS
+                ? '<i class="fas fa-compress"></i> Exit Fullscreen'
+                : '<i class="fas fa-expand"></i> Fullscreen';
+        });
+    }
+
     startBtn.addEventListener('click', initGame);
     resetBtn.addEventListener('click', resetGame);
-    backBtn.addEventListener('click', () => { clearTimerBar(); window.location.href = `/collection/${COLLECTION}`; });
+    backBtn.addEventListener('click', () => {
+        clearTimerBar();
+        if (document.fullscreenElement) document.exitFullscreen();
+        window.location.href = `/collection/${COLLECTION}`;
+    });
 
     await loadImages();
     if (allImages.length < 4) {

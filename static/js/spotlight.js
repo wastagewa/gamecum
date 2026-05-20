@@ -8,29 +8,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     const COLLECTION = CURRENT_COLLECTION || 'Real';
 
     // ── DOM ───────────────────────────────────────────────────────────────────
-    const container     = document.getElementById('spContainer');
-    const startBtn      = document.getElementById('startSpBtn');
-    const resetBtn      = document.getElementById('resetSpBtn');
-    const backBtn       = document.getElementById('backSpBtn');
-    const scoreEl       = document.getElementById('spScore');
-    const roundEl       = document.getElementById('spRound');
-    const livesEl       = document.getElementById('spLives');
-    const bonusEl       = document.getElementById('spBonus');
-    const messageEl     = document.getElementById('spMessage');
-    const stageEl       = document.getElementById('spStage');
-    const targetImg     = document.getElementById('spTargetImg');
-    const canvas        = document.getElementById('spCanvas');
-    const optionsEl     = document.getElementById('spOptions');
-    const exposureBar   = document.getElementById('spExposureBar');
-    const exposurePct   = document.getElementById('spExposurePct');
-    const diffSel       = document.getElementById('spDifficulty');
-    const numOptSel     = document.getElementById('spNumOptions');
-    const usernameInput = document.getElementById('spUsername');
+    const container      = document.getElementById('spContainer');
+    const startBtn       = document.getElementById('startSpBtn');
+    const resetBtn       = document.getElementById('resetSpBtn');
+    const fullscreenBtn  = document.getElementById('fullscreenSpBtn');
+    const backBtn        = document.getElementById('backSpBtn');
+    const scoreEl        = document.getElementById('spScore');
+    const roundEl        = document.getElementById('spRound');
+    const livesEl        = document.getElementById('spLives');
+    const bonusEl        = document.getElementById('spBonus');
+    const messageEl      = document.getElementById('spMessage');
+    const stageEl        = document.getElementById('spStage');
+    const targetImg      = document.getElementById('spTargetImg');
+    const canvas         = document.getElementById('spCanvas');
+    const optionsEl      = document.getElementById('spOptions');
+    const exposureBar    = document.getElementById('spExposureBar');
+    const exposurePct    = document.getElementById('spExposurePct');
+    const exposeSlider   = document.getElementById('spExposeTime');
+    const exposeValEl    = document.getElementById('spExposeTimeVal');
+    const numOptSel      = document.getElementById('spNumOptions');
+    const usernameInput  = document.getElementById('spUsername');
 
     const ctx = canvas.getContext('2d');
 
     const savedUser = localStorage.getItem('imgur.username');
     if (savedUser) usernameInput.value = savedUser;
+
+    // ── Slider live preview ───────────────────────────────────────────────────
+    exposeSlider.addEventListener('input', () => {
+        exposeValEl.textContent = exposeSlider.value + 's';
+    });
 
     // ── Data ──────────────────────────────────────────────────────────────────
     let allImages = [];
@@ -53,45 +60,58 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // ── Spotlight animation ───────────────────────────────────────────────────
-    // grow speed (px per frame @ 60 fps)
-    const GROW = { easy: 2.5, medium: 1.4, hard: 0.7, insane: 0.35 };
+    // growSpeed is computed from the slider: px per frame so that the image
+    // is fully uncovered in exactly `expose time` seconds (@ 60fps target).
+    function calcGrowSpeed() {
+        const timeSec = parseInt(exposeSlider.value, 10) || 20;
+        const startR  = 22;
+        // maxRadius approximation (updated properly in initSpot)
+        const approxMax = Math.sqrt(stageW * stageW + stageH * stageH) / 2;
+        return (approxMax - startR) / (timeSec * 60);
+    }
 
     let spotX, spotY, velX, velY, radius, maxRadius, animFrame, answered;
-    let stageW, stageH;
+    let stageW = 350, stageH = 350;
 
     function initSpot() {
-        stageW  = stageEl.offsetWidth  || 380;
-        stageH  = stageEl.offsetHeight || 380;
+        stageW  = stageEl.offsetWidth  || 350;
+        stageH  = stageEl.offsetHeight || 350;
         canvas.width  = stageW;
         canvas.height = stageH;
 
-        // Start spotlight at random position in centre 40%
         spotX = stageW * (0.3 + Math.random() * 0.4);
         spotY = stageH * (0.3 + Math.random() * 0.4);
 
-        // Random drift velocity (slow)
         const speed = 1.2;
         const angle = Math.random() * Math.PI * 2;
         velX = Math.cos(angle) * speed;
         velY = Math.sin(angle) * speed;
 
-        // Start tiny; max radius covers the whole stage diagonal
-        radius    = 20;
+        radius    = 22;
         maxRadius = Math.sqrt(stageW * stageW + stageH * stageH) / 2;
         answered  = false;
     }
 
+    // Resize canvas while preserving exposure level (for fullscreen transitions)
+    function resizeCanvas() {
+        const prevRatio = maxRadius > 0 ? radius / maxRadius : 0;
+        stageW  = stageEl.offsetWidth  || 350;
+        stageH  = stageEl.offsetHeight || 350;
+        canvas.width  = stageW;
+        canvas.height = stageH;
+        maxRadius = Math.sqrt(stageW * stageW + stageH * stageH) / 2;
+        radius    = prevRatio * maxRadius;
+        spotX     = Math.max(60, Math.min(stageW - 60, spotX));
+        spotY     = Math.max(60, Math.min(stageH - 60, spotY));
+        if (!answered) drawSpot();
+    }
+
     function drawSpot() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // Draw dark overlay
         ctx.fillStyle = 'rgba(0,0,0,0.96)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // Cut circular hole
         ctx.globalCompositeOperation = 'destination-out';
-        // Soft edge
-        const grd = ctx.createRadialGradient(spotX, spotY, radius * 0.7, spotX, spotY, radius);
+        const grd = ctx.createRadialGradient(spotX, spotY, radius * 0.65, spotX, spotY, radius);
         grd.addColorStop(0, 'rgba(0,0,0,1)');
         grd.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.beginPath();
@@ -102,21 +122,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function exposureRatio() {
-        // Approximate % of image area exposed by the circle
-        const circleArea = Math.PI * radius * radius;
-        const stageArea  = stageW * stageH;
-        return Math.min(1, circleArea / stageArea);
+        return Math.min(1, (Math.PI * radius * radius) / (stageW * stageH));
     }
 
     function updateExposureBar() {
         const pct = Math.round(exposureRatio() * 100);
         exposureBar.style.width = pct + '%';
-        // Colour: green → yellow → red
         const h = Math.round(120 - pct * 1.2);
-        exposureBar.style.background = `hsl(${h}, 85%, 52%)`;
+        exposureBar.style.background = `hsl(${h},85%,52%)`;
         exposurePct.textContent = pct + '%';
-
-        // Bonus display: max when <10% exposed
         const bonus = Math.max(0, Math.round(500 * (1 - exposureRatio())));
         bonusEl.textContent = bonus > 0 ? '+' + bonus : '0';
     }
@@ -124,10 +138,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     function animateSpot() {
         if (answered) return;
 
-        const grow = GROW[diffSel.value] || GROW.medium;
+        const grow = calcGrowSpeed();
         radius = Math.min(radius + grow, maxRadius);
 
-        // Drift
         spotX += velX;
         spotY += velY;
         const pad = 60;
@@ -137,7 +150,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         drawSpot();
         updateExposureBar();
 
-        // Auto-answer when fully exposed
         if (radius >= maxRadius) {
             answered = true;
             revealAll();
@@ -163,20 +175,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // ── State ─────────────────────────────────────────────────────────────────
-    let state = { active: false, score: 0, round: 0, lives: 3, startTime: null,
-                  globalTimer: null, targetUrl: null };
+    let state = { active: false, score: 0, round: 0, lives: 3,
+                  startTime: null, globalTimer: null, targetUrl: null };
 
     function updateLives() {
         const h = ['❤️','❤️','❤️'];
         for (let i = state.lives; i < 3; i++) h[i] = '🖤';
         livesEl.textContent = h.join('');
-    }
-
-    function startGlobalTimer() {
-        state.globalTimer = setInterval(() => {
-            const e = Math.floor((Date.now() - state.startTime) / 1000);
-            // (no time display needed here — bonus bar takes that role)
-        }, 500);
     }
 
     // ── Round start ───────────────────────────────────────────────────────────
@@ -186,19 +191,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         state.round++;
         roundEl.textContent = state.round;
 
-        // Pick target
         const target = allImages[Math.floor(Math.random() * allImages.length)];
         state.targetUrl = target.url;
-
-        // Set image (hidden under spotlight)
         targetImg.src = target.url;
 
-        targetImg.onload = () => {
+        const doStart = () => {
             initSpot();
             updateExposureBar();
             drawSpot();
 
-            // Build options
             const opts = generateOptions(target.url);
             optionsEl.innerHTML = '';
             opts.forEach(opt => {
@@ -206,7 +207,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 card.className = 'sp-option-card';
                 const img = document.createElement('img');
                 img.src = opt.url;
-                img.alt = '';
                 card.appendChild(img);
                 card.addEventListener('click', () => handleAnswer(opt.url, card));
                 optionsEl.appendChild(card);
@@ -216,7 +216,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             animFrame = requestAnimationFrame(animateSpot);
         };
 
-        if (targetImg.complete) targetImg.onload();
+        if (targetImg.complete) { doStart(); }
+        else { targetImg.onload = doStart; }
     }
 
     // ── Answer ────────────────────────────────────────────────────────────────
@@ -224,8 +225,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!state.active || answered) return;
         answered = true;
         cancelAnimationFrame(animFrame);
-
-        // Disable all cards
         document.querySelectorAll('.sp-option-card').forEach(c => c.style.pointerEvents = 'none');
 
         const isCorrect = (url === state.targetUrl);
@@ -247,16 +246,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             state.lives--;
             updateLives();
             cardEl.classList.add('sp-wrong');
-            // Show correct
             document.querySelectorAll('.sp-option-card').forEach(c => {
-                if (c.querySelector('img').src === state.targetUrl ||
-                    c.querySelector('img').src.endsWith(state.targetUrl.replace(/^.*\//, ''))) {
+                const imgEl = c.querySelector('img');
+                if (imgEl && (imgEl.src === state.targetUrl ||
+                    imgEl.src.split('/').pop() === state.targetUrl.split('/').pop())) {
                     c.classList.add('sp-correct');
                 }
             });
             revealAll();
             messageEl.innerHTML = `<div class="feedback error"><i class="fas fa-times-circle"></i> Wrong!</div>`;
-
             if (state.lives <= 0) { setTimeout(() => endGame(), 1800); }
             else { setTimeout(() => { if (state.active) startRound(); }, 2000); }
         }
@@ -298,9 +296,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         scoreEl.textContent = '0'; roundEl.textContent = '0';
         updateLives(); bonusEl.textContent = 'MAX';
         messageEl.innerHTML = '';
-        startBtn.style.display  = 'none';
-        resetBtn.style.display  = 'inline-block';
-        startGlobalTimer();
+        startBtn.style.display = 'none';
+        resetBtn.style.display = 'inline-block';
         startRound();
     }
 
@@ -319,10 +316,36 @@ document.addEventListener('DOMContentLoaded', async () => {
         startBtn.style.display = 'inline-block'; resetBtn.style.display = 'none';
     }
 
-    // ── Wiring ─────────────────────────────────────────────────────────────────
+    // ── Native Fullscreen ─────────────────────────────────────────────────────
+    if (fullscreenBtn) {
+        fullscreenBtn.addEventListener('click', () => {
+            if (!document.fullscreenElement) {
+                container.requestFullscreen().catch(e => console.warn('FS error:', e.message));
+            } else {
+                document.exitFullscreen();
+            }
+        });
+
+        document.addEventListener('fullscreenchange', () => {
+            const isFS = document.fullscreenElement === container;
+            fullscreenBtn.innerHTML = isFS
+                ? '<i class="fas fa-compress"></i> Exit Fullscreen'
+                : '<i class="fas fa-expand"></i> Fullscreen';
+            // Resize canvas after fullscreen transition (150ms CSS transition)
+            setTimeout(() => {
+                if (!answered || state.active) resizeCanvas();
+            }, 150);
+        });
+    }
+
+    // ── Wiring ────────────────────────────────────────────────────────────────
     startBtn.addEventListener('click', initGame);
     resetBtn.addEventListener('click', resetGame);
-    backBtn.addEventListener('click', () => { cancelAnimationFrame(animFrame); window.location.href = `/collection/${COLLECTION}`; });
+    backBtn.addEventListener('click', () => {
+        cancelAnimationFrame(animFrame);
+        if (document.fullscreenElement) document.exitFullscreen();
+        window.location.href = `/collection/${COLLECTION}`;
+    });
 
     await loadImages();
     if (allImages.length < 2) {

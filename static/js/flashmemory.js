@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ── DOM ───────────────────────────────────────────────────────────────────
     const startBtn      = document.getElementById('startFmBtn');
     const resetBtn      = document.getElementById('resetFmBtn');
+    const fullscreenBtn = document.getElementById('fullscreenFmBtn');
     const backBtn       = document.getElementById('backFmBtn');
     const scoreEl       = document.getElementById('fmScore');
     const roundEl       = document.getElementById('fmRound');
@@ -250,9 +251,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         startBtn.style.display = 'inline-block'; resetBtn.style.display = 'none';
     }
 
+    // ── Native Fullscreen ─────────────────────────────────────────────────────
+    const fmContainer = document.getElementById('fmContainer');
+    if (fullscreenBtn && fmContainer) {
+        fullscreenBtn.addEventListener('click', () => {
+            if (!document.fullscreenElement) {
+                fmContainer.requestFullscreen().catch(e => console.warn('FS error:', e.message));
+            } else {
+                document.exitFullscreen();
+            }
+        });
+        document.addEventListener('fullscreenchange', () => {
+            const isFS = document.fullscreenElement === fmContainer;
+            fullscreenBtn.innerHTML = isFS
+                ? '<i class="fas fa-compress"></i> Exit Fullscreen'
+                : '<i class="fas fa-expand"></i> Fullscreen';
+        });
+    }
+
     startBtn.addEventListener('click', initGame);
     resetBtn.addEventListener('click', resetGame);
-    backBtn.addEventListener('click', () => { clearTimeout(state.flashTimeout); window.location.href = `/collection/${COLLECTION}`; });
+    backBtn.addEventListener('click', () => {
+        clearTimeout(state.flashTimeout);
+        if (document.fullscreenElement) document.exitFullscreen();
+        window.location.href = `/collection/${COLLECTION}`;
+    });
 
     await loadImages();
     if (allImages.length < 2) {

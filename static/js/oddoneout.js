@@ -383,29 +383,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         resetBtn.style.display = 'none';
     }
 
-    // ── Fullscreen ────────────────────────────────────────────────────────────
+    // ── Native Fullscreen ─────────────────────────────────────────────────────
     fullscreenBtn.addEventListener('click', () => {
-        const navbar  = document.querySelector('.navbar');
-        container.classList.toggle('fullscreen');
-        if (container.classList.contains('fullscreen')) {
-            fullscreenBtn.innerHTML = '<i class="fas fa-compress"></i> Exit Fullscreen';
-            document.body.style.overflow = 'hidden';
-            if (navbar) navbar.style.display = 'none';
+        if (!document.fullscreenElement) {
+            container.requestFullscreen().catch(e => console.warn('FS error:', e.message));
         } else {
-            fullscreenBtn.innerHTML = '<i class="fas fa-expand"></i> Fullscreen';
-            document.body.style.overflow = '';
-            if (navbar) navbar.style.display = '';
+            document.exitFullscreen();
         }
     });
 
-    document.addEventListener('keydown', e => {
-        if (e.key === 'Escape' && container.classList.contains('fullscreen')) {
-            const navbar = document.querySelector('.navbar');
-            container.classList.remove('fullscreen');
-            fullscreenBtn.innerHTML = '<i class="fas fa-expand"></i> Fullscreen';
-            document.body.style.overflow = '';
-            if (navbar) navbar.style.display = '';
-        }
+    document.addEventListener('fullscreenchange', () => {
+        const isFS = document.fullscreenElement === container;
+        fullscreenBtn.innerHTML = isFS
+            ? '<i class="fas fa-compress"></i> Exit Fullscreen'
+            : '<i class="fas fa-expand"></i> Fullscreen';
     });
 
     // ── Event listeners ───────────────────────────────────────────────────────

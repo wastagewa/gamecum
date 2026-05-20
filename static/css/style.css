@@ -6668,3 +6668,171 @@ input:checked + .toggle-slider:before {
     .wt-stats   { gap: 1rem; padding: 0.8rem 1rem; }
     .wt-clue-tag { font-size: 0.95rem; padding: 6px 14px; }
 }
+
+
+/* ═══════════════════════════════════════════════════════════════
+   NATIVE FULLSCREEN  — all game containers
+   :fullscreen gives the element width/height = 100vw/100vh.
+   We just need background + overflow so it looks polished.
+═══════════════════════════════════════════════════════════════ */
+
+/* ── Shared base rule ──────────────────────────────────────── */
+#oddContainer:fullscreen,
+#sortContainer:fullscreen,
+#snapContainer:fullscreen,
+#spContainer:fullscreen,
+#fmContainer:fullscreen,
+#wtContainer:fullscreen {
+    background: var(--background-color);
+    overflow-y: auto;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+}
+
+/* webkit prefix (Safari, older Chrome) */
+#oddContainer:-webkit-full-screen,
+#sortContainer:-webkit-full-screen,
+#snapContainer:-webkit-full-screen,
+#spContainer:-webkit-full-screen,
+#fmContainer:-webkit-full-screen,
+#wtContainer:-webkit-full-screen {
+    background: var(--background-color);
+    overflow-y: auto;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+}
+
+/* ── Spotlight: bigger stage in fullscreen ─────────────────── */
+#spContainer:fullscreen .sp-stage,
+#spContainer:-webkit-full-screen .sp-stage {
+    width:  min(60vh, 580px);
+    height: min(60vh, 580px);
+}
+
+#spContainer:fullscreen .sp-options,
+#spContainer:-webkit-full-screen .sp-options {
+    max-width: 700px;
+}
+
+#spContainer:fullscreen .sp-exposure-row,
+#spContainer:-webkit-full-screen .sp-exposure-row {
+    max-width: 600px;
+}
+
+/* ── Flash Memory: bigger flash image in fullscreen ─────────── */
+#fmContainer:fullscreen .fm-flash-img,
+#fmContainer:-webkit-full-screen .fm-flash-img {
+    width:  min(55vh, 480px);
+    height: min(55vh, 480px);
+}
+
+#fmContainer:fullscreen .fm-flash-bar-wrap,
+#fmContainer:-webkit-full-screen .fm-flash-bar-wrap {
+    width: min(55vh, 480px);
+}
+
+#fmContainer:fullscreen .fm-options,
+#fmContainer:-webkit-full-screen .fm-options {
+    max-width: 700px;
+}
+
+/* ── Odd One Out: bigger grid in fullscreen ─────────────────── */
+#oddContainer:fullscreen .odd-grid,
+#oddContainer:-webkit-full-screen .odd-grid {
+    max-width: 800px;
+}
+
+/* ── Speed Sort: bigger image in fullscreen ─────────────────── */
+#sortContainer:fullscreen .sort-image-stage,
+#sortContainer:-webkit-full-screen .sort-image-stage {
+    width:  min(55vh, 480px);
+    height: min(55vh, 480px);
+}
+
+#sortContainer:fullscreen .sort-timer-track,
+#sortContainer:-webkit-full-screen .sort-timer-track {
+    width: min(55vh, 480px);
+}
+
+/* ── Snap Match: bigger cards in fullscreen ─────────────────── */
+#snapContainer:fullscreen .snap-card,
+#snapContainer:-webkit-full-screen .snap-card {
+    width:  min(38vh, 340px);
+    height: min(38vh, 340px);
+}
+
+/* ── Who's That: bigger lineup in fullscreen ────────────────── */
+#wtContainer:fullscreen .wt-lineup,
+#wtContainer:-webkit-full-screen .wt-lineup {
+    max-width: 900px;
+}
+
+#wtContainer:fullscreen .wt-clue-tag,
+#wtContainer:-webkit-full-screen .wt-clue-tag {
+    font-size: 1.3rem;
+    padding: 10px 24px;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   RANGE SLIDER  (expose-time control in Spotlight)
+═══════════════════════════════════════════════════════════════ */
+.sp-slider-group {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 220px;
+}
+
+.setting-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 6px;
+    border-radius: 4px;
+    background: rgba(164,6,110,0.2);
+    outline: none;
+    cursor: pointer;
+    accent-color: var(--primary-color);
+}
+
+.setting-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--primary-color);
+    cursor: pointer;
+    box-shadow: 0 2px 8px var(--shadow-color);
+    transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.setting-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+    background: var(--secondary-color);
+}
+
+.setting-slider::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--primary-color);
+    cursor: pointer;
+    border: none;
+    box-shadow: 0 2px 8px var(--shadow-color);
+}
+
+.slider-hints {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    font-size: 0.75rem;
+    color: var(--muted-text);
+    margin-top: 2px;
+}
