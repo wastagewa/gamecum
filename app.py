@@ -1520,16 +1520,28 @@ def _build_char_description(tags: list) -> str:
     used      = set()                                    # track consumed tags
 
     # ── Gender ────────────────────────────────────────────────────────────────
-    FEMALE_SIGNALS = {'1girl', 'girl', 'woman', 'female', 'she', 'her', 'lady'}
-    MALE_SIGNALS   = {'1boy', 'boy', 'man', 'male', 'he', 'him', 'gentleman'}
+    # Broad female signals: explicit tags + body-part tags that imply female
+    FEMALE_SIGNALS = {
+        '1girl', 'girl', 'woman', 'female', 'she', 'her', 'lady', 'girls',
+        'women', 'girlfriend', 'wife', 'milf',
+        # NSFW body tags almost always imply female in this collection
+        'naked boobs', 'semi naked boobs', 'covered boobs', 'unseen boobs',
+        'naked pussy', 'semi naked pussy', 'covered pussy', 'unseen pussy',
+        'boobs', 'breasts', 'bra', 'bikini', 'bikini top',
+    }
+    MALE_SIGNALS = {'1boy', 'boy', 'man', 'male', 'he', 'him', 'gentleman',
+                    'men', 'boyfriend', 'husband', 'dick', 'penis', 'cock'}
+
     if any(k in tag_lower for k in FEMALE_SIGNALS):
-        gender, pronoun = 'woman', 'She'
+        gender, pronoun, be_verb = 'woman', 'She', 'is'
         used.update(tag_lower[k] for k in FEMALE_SIGNALS if k in tag_lower)
     elif any(k in tag_lower for k in MALE_SIGNALS):
-        gender, pronoun = 'man', 'He'
+        gender, pronoun, be_verb = 'man', 'He', 'is'
         used.update(tag_lower[k] for k in MALE_SIGNALS if k in tag_lower)
     else:
-        gender, pronoun = 'person', 'They'
+        # Default: assume woman for this collection rather than the
+        # grammatically awkward "They is" fallback
+        gender, pronoun, be_verb = 'woman', 'She', 'is'
 
     # ── Appearance adjectives ─────────────────────────────────────────────────
     APPEARANCE = ['beautiful', 'gorgeous', 'attractive', 'pretty', 'stunning',
@@ -1585,12 +1597,26 @@ def _build_char_description(tags: list) -> str:
         used.add(pose_found)
 
     # ── Location / scene ──────────────────────────────────────────────────────
-    LOCATION_KEYS = ['bedroom', 'bed', 'sofa', 'couch', 'beach', 'outdoor',
-                     'indoor', 'bathroom', 'shower', 'kitchen', 'living room',
-                     'floor', 'wall', 'desk', 'chair', 'pool', 'hotel']
-    loc_found = next((tag_lower[k] for k in LOCATION_KEYS if k in tag_lower), None)
-    if loc_found:
-        used.add(loc_found)
+    # (key → (original key, preposition) )
+    LOCATION_MAP = {
+        'bedroom':     'in the bedroom',      'bed':         'on the bed',
+        'sofa':        'on the sofa',          'couch':       'on the couch',
+        'beach':       'on the beach',         'outdoor':     'outdoors',
+        'indoor':      'indoors',              'bathroom':    'in the bathroom',
+        'shower':      'in the shower',        'kitchen':     'in the kitchen',
+        'living room': 'in the living room',   'floor':       'on the floor',
+        'wall':        'against the wall',     'desk':        'at the desk',
+        'chair':       'on a chair',           'pool':        'by the pool',
+        'hotel':       'in a hotel room',
+    }
+    loc_found      = None
+    loc_phrase     = None
+    for k, phrase in LOCATION_MAP.items():
+        if k in tag_lower:
+            loc_found  = tag_lower[k]
+            loc_phrase = phrase
+            used.add(loc_found)
+            break
 
     # ── Mood / expression ─────────────────────────────────────────────────────
     MOOD_KEYS = ['smiling', 'smile', 'seductive', 'sensual', 'moaning',
@@ -1625,20 +1651,20 @@ def _build_char_description(tags: list) -> str:
     sentences.append(subj)
 
     # Sentence 2: pose + location
-    if pose_found and loc_found:
-        sentences.append(f'{pronoun} is {pose_found} on/in the {loc_found}')
+    if pose_found and loc_phrase:
+        sentences.append(f'{pronoun} {be_verb} {pose_found} {loc_phrase}')
     elif pose_found:
-        sentences.append(f'{pronoun} is {pose_found}')
-    elif loc_found:
-        sentences.append(f'{pronoun} is in a {loc_found}')
+        sentences.append(f'{pronoun} {be_verb} {pose_found}')
+    elif loc_phrase:
+        sentences.append(f'{pronoun} {be_verb} {loc_phrase}')
 
     # Sentence 3: mood
     if mood_found:
-        sentences.append(f'{pronoun} is {mood_found}')
+        sentences.append(f'{pronoun} {be_verb} {mood_found}')
 
     # Sentence 4: body state (NSFW)
     if body_state:
-        sentences.append(f'{pronoun} is {", and ".join(body_state)}')
+        sentences.append(f'{pronoun} {be_verb} {", and ".join(body_state)}')
 
     # Sentence 5: remaining notable tags not yet used
     SKIP_ALWAYS = {
@@ -1772,6 +1798,18 @@ def _call_hf_inference(messages: list, system_prompt: str,
 
 
 # ── Chat routes ────────────────────────────────────────────────────────────
+
+@app.route('/api/chat/token')
+def api_chat_token():
+    """
+    Return the server-configured HF token to the browser so it can call
+    HuggingFace directly (bypasses server-side DNS / network restrictions).
+    Only exposes the token if HF_TOKEN is set in the environment / .env file.
+    This endpoint is intentionally simple — only use this on a private/local server.
+    """
+    token = os.environ.get('HF_TOKEN', '').strip()
+    return jsonify({'token': token, 'configured': bool(token)})
+
 
 @app.route('/collection/<collection_name>/chat')
 def collection_chat(collection_name):

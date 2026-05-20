@@ -55,14 +55,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (savedToken) hfTokenInput.value = savedToken;
 
     const savedModel = localStorage.getItem('chat_model');
-    if (savedModel && modelSelect) {
-        modelSelect.value = savedModel;
-    }
+    if (savedModel && modelSelect) modelSelect.value = savedModel;
 
     const savedTemp = localStorage.getItem('chat_temp');
     if (savedTemp && tempSlider) {
         tempSlider.value = savedTemp;
         if (tempValEl) tempValEl.textContent = savedTemp;
+    }
+
+    // ── Auto-load server token if browser doesn't have one ────────────────────
+    // The server reads HF_TOKEN from .env; expose it here so the browser can
+    // call HuggingFace directly (avoids server-side DNS/network issues).
+    if (!savedToken) {
+        try {
+            const tr = await fetch('/api/chat/token');
+            const td = await tr.json();
+            if (td.token) {
+                hfTokenInput.value = td.token;
+                localStorage.setItem('chat_hf_token', td.token);
+            }
+        } catch (e) { /* silently ignore — user can enter manually */ }
     }
 
     // ── Settings listeners ────────────────────────────────────────────────────
@@ -276,28 +288,74 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // ── Call backend → HF API ─────────────────────────────────────────────────
+    // ── Call HuggingFace API DIRECTLY from the browser ───────────────────────
+    // This bypasses the server's DNS/network entirely.
+    // The server's HF_TOKEN is loaded from .env on page init above.
     async function callChatApi(messages, isIntro = false) {
         const hfToken = hfTokenInput.value.trim() || localStorage.getItem('chat_hf_token') || '';
         const model   = modelSelect ? modelSelect.value : 'mistralai/Mistral-7B-Instruct-v0.3';
         const temp    = tempSlider ? parseFloat(tempSlider.value) : 0.92;
 
-        const res = await fetch('/api/chat/send', {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
+        if (!hfToken) {
+            throw new Error(
+                'HuggingFace token missing. Click ⚙ Settings and paste your token ' +
+                'from huggingface.co/settings/tokens'
+            );
+        }
+
+        // Build the full message list for HF
+        let sysPrompt = state.systemPrompt;
+        if (isIntro) {
+            sysPrompt +=
+                '\n\nThe user just opened the chat. ' +
+                'Greet them in character — seductive, warm, and inviting (2–3 sentences).';
+        }
+
+        const fullMessages = [];
+        if (sysPrompt) fullMessages.push({ role: 'system', content: sysPrompt });
+
+        const turns = isIntro
+            ? [{ role: 'user', content: 'Hello' }]
+            : messages.slice(-20);
+        fullMessages.push(...turns);
+
+        // HuggingFace Serverless Inference API (Messages / OpenAI-compatible)
+        const res = await fetch('https://api-inference.huggingface.co/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${hfToken}`,
+                'Content-Type':  'application/json',
+                'x-use-cache':   '0',
+            },
             body: JSON.stringify({
-                messages:     messages.slice(-20),   // last 20 for context window
-                systemPrompt: state.systemPrompt,
-                hfToken:      hfToken,
-                model:        model,
-                temperature:  temp,
-                intro:        isIntro,
+                model:       model,
+                messages:    fullMessages,
+                max_tokens:  500,
+                temperature: Math.max(0.05, Math.min(2.0, temp)),
+                top_p:       0.95,
+                stream:      false,
             }),
         });
 
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-        return data.reply;
+        if (res.ok) {
+            const data = await res.json();
+            return data.choices[0].message.content.trim();
+        }
+
+        // Handle errors
+        let errText = '';
+        try { errText = (await res.json()).error?.message || await res.text(); }
+        catch (e) { errText = `HTTP ${res.status}`; }
+
+        if (res.status === 401)
+            throw new Error('Invalid HuggingFace token. Check it at huggingface.co/settings/tokens.');
+        if (res.status === 403)
+            throw new Error('Access denied. You may need to accept this model\'s license on HuggingFace.');
+        if (res.status === 503)
+            throw new Error('Model is warming up (~30 s). Please wait and try again.');
+        if (res.status === 429)
+            throw new Error('Rate limit reached. Wait a moment before sending again.');
+        throw new Error(`HuggingFace API error ${res.status}: ${String(errText).slice(0, 200)}`);
     }
 
     // ── Render chat bubbles ───────────────────────────────────────────────────
