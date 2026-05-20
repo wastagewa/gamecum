@@ -540,7 +540,7 @@ def submit_score():
             return jsonify({'error': 'Invalid or missing collection'}), 400
         
         game_type = str(data.get('gameType', 'memory')).lower()
-        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match']
+        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap']
         if game_type not in allowed_games:
             game_type = 'memory'
         
@@ -1430,6 +1430,27 @@ def api_images_by_tags():
                 })
     
     return jsonify({'success': True, 'images': matching_images, 'count': len(matching_images)})
+
+
+@app.route('/collection/<collection_name>/oddoneout')
+def collection_oddoneout(collection_name):
+    """Odd One Out: find the image that doesn't share a tag with the other three."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('oddoneout.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/speedsort')
+def collection_speedsort(collection_name):
+    """Speed Sort: decide whether each image has the target tag before time runs out."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('speedsort.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/snap')
+def collection_snap(collection_name):
+    """Snap Match: decide if two images share a tag as fast as possible."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('snap.html', collection=collection)
 
 
 if __name__ == '__main__':

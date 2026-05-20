@@ -79,6 +79,24 @@ document.addEventListener('DOMContentLoaded', () => {
             description: 'Match tag cards with images containing those tags',
             url: `/collection/${CURRENT_COLLECTION}/tag-match`
         },
+        {
+            name: 'Odd One Out',
+            icon: 'fa-question-circle',
+            description: 'Three images share a hidden tag — find the one that doesn\'t!',
+            url: `/collection/${CURRENT_COLLECTION}/oddoneout`
+        },
+        {
+            name: 'Speed Sort',
+            icon: 'fa-bolt',
+            description: 'Tag appears — quickly sort each image as YES or NO before time runs out!',
+            url: `/collection/${CURRENT_COLLECTION}/speedsort`
+        },
+        {
+            name: 'Snap Match',
+            icon: 'fa-camera-retro',
+            description: 'Two images flash up — do they share a tag? React fast!',
+            url: `/collection/${CURRENT_COLLECTION}/snap`
+        },
 
     ];
 
