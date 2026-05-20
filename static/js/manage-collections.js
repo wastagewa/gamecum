@@ -55,6 +55,71 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentImageForCopy = { collection: '', filename: '', targetFilename: '', allImages: [] };
     let selectedSourceImageTags = [];
 
+    // ── Lightbox state ──────────────────────────────────────────────────────
+    let lightboxImages  = [];   // current collection image objects [{url, filename, ...}]
+    let lightboxIndex   = 0;
+
+    const lightboxEl       = document.getElementById('imageLightbox');
+    const lightboxImgEl    = document.getElementById('lightboxImg');
+    const lightboxFilename = document.getElementById('lightboxFilename');
+    const lightboxCounter  = document.getElementById('lightboxCounter');
+    const lightboxClose    = document.getElementById('lightboxClose');
+    const lightboxPrev     = document.getElementById('lightboxPrev');
+    const lightboxNext     = document.getElementById('lightboxNext');
+    const lightboxBackdrop = document.getElementById('lightboxBackdrop');
+
+    function openLightbox(index) {
+        if (!lightboxImages.length) return;
+        lightboxIndex = Math.max(0, Math.min(index, lightboxImages.length - 1));
+        renderLightbox();
+        lightboxEl.style.display = 'flex';
+        // Trigger animation on next frame
+        requestAnimationFrame(() => lightboxEl.classList.add('lb-active'));
+    }
+
+    function closeLightbox() {
+        lightboxEl.classList.remove('lb-active');
+        setTimeout(() => {
+            lightboxEl.style.display = 'none';
+            lightboxImgEl.src = '';
+        }, 220);
+    }
+
+    function renderLightbox() {
+        const img = lightboxImages[lightboxIndex];
+        if (!img) return;
+        lightboxImgEl.src      = img.url;
+        lightboxFilename.textContent = img.filename;
+        lightboxCounter.textContent  = `${lightboxIndex + 1} / ${lightboxImages.length}`;
+        lightboxPrev.style.visibility = lightboxIndex > 0                          ? 'visible' : 'hidden';
+        lightboxNext.style.visibility = lightboxIndex < lightboxImages.length - 1  ? 'visible' : 'hidden';
+    }
+
+    function lightboxStep(delta) {
+        const next = lightboxIndex + delta;
+        if (next >= 0 && next < lightboxImages.length) {
+            lightboxIndex = next;
+            // Fade image out then in
+            lightboxImgEl.classList.add('lb-img-fade');
+            setTimeout(() => {
+                renderLightbox();
+                lightboxImgEl.classList.remove('lb-img-fade');
+            }, 150);
+        }
+    }
+
+    if (lightboxClose)   lightboxClose.addEventListener('click',   () => closeLightbox());
+    if (lightboxBackdrop) lightboxBackdrop.addEventListener('click', () => closeLightbox());
+    if (lightboxPrev)    lightboxPrev.addEventListener('click',    () => lightboxStep(-1));
+    if (lightboxNext)    lightboxNext.addEventListener('click',    () => lightboxStep(1));
+
+    document.addEventListener('keydown', (e) => {
+        if (!lightboxEl || lightboxEl.style.display === 'none') return;
+        if (e.key === 'Escape')      { e.stopImmediatePropagation(); closeLightbox(); }
+        if (e.key === 'ArrowLeft')   lightboxStep(-1);
+        if (e.key === 'ArrowRight')  lightboxStep(1);
+    });
+
     // Show/hide modals - REBUILT FROM SCRATCH
     function showModal(modal) {
         if (!modal) return;
@@ -597,6 +662,9 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Store for lightbox navigation
+        lightboxImages = images;
+
         // Images are already sorted by upload time from backend
         retagImagesList.innerHTML = images.map(img => {
             // Extract all body part prefixes as three consecutive letters
@@ -643,7 +711,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
             return `
             <div class="retag-image-card" data-filename="${img.filename}" data-locked="${img.locked || false}">
-                <img src="${img.url}" alt="${img.filename}">
+                <div class="retag-thumb-wrap" data-filename="${img.filename}" title="Click to view full image">
+                    <img src="${img.url}" alt="${img.filename}" class="retag-thumb-img">
+                    <div class="retag-thumb-zoom"><i class="fas fa-search-plus"></i></div>
+                </div>
                 <div class="retag-image-info">
                     <div class="retag-image-filename">
                         ${img.filename}
@@ -688,6 +759,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function attachTagEventListeners(collection, allImages) {
+        // Thumbnail click → open lightbox
+        document.querySelectorAll('.retag-thumb-wrap').forEach(wrap => {
+            wrap.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const filename = wrap.dataset.filename;
+                const idx = lightboxImages.findIndex(img => img.filename === filename);
+                if (idx >= 0) openLightbox(idx);
+            });
+        });
+
         // Remove tag buttons
         document.querySelectorAll('.remove-tag').forEach(btn => {
             btn.addEventListener('click', async (e) => {
