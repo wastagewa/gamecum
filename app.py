@@ -540,7 +540,7 @@ def submit_score():
             return jsonify({'error': 'Invalid or missing collection'}), 400
         
         game_type = str(data.get('gameType', 'memory')).lower()
-        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap']
+        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap', 'spotlight', 'flashmemory', 'whoisthat']
         if game_type not in allowed_games:
             game_type = 'memory'
         
@@ -1430,6 +1430,27 @@ def api_images_by_tags():
                 })
     
     return jsonify({'success': True, 'images': matching_images, 'count': len(matching_images)})
+
+
+@app.route('/collection/<collection_name>/spotlight')
+def collection_spotlight(collection_name):
+    """Spotlight: drifting peephole reveals image; identify it before fully exposed."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('spotlight.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/flashmemory')
+def collection_flashmemory(collection_name):
+    """Flash Memory: image flashes briefly, then pick it from a lineup."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('flashmemory.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/whoisthat')
+def collection_whoisthat(collection_name):
+    """Who's That?: tags shown, no image — find which one in the lineup matches."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('whoisthat.html', collection=collection)
 
 
 @app.route('/collection/<collection_name>/oddoneout')

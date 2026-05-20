@@ -80,6 +80,24 @@ document.addEventListener('DOMContentLoaded', () => {
             url: `/collection/${CURRENT_COLLECTION}/tag-match`
         },
         {
+            name: 'Spotlight',
+            icon: 'fa-circle-dot',
+            description: 'A tiny peephole drifts across a hidden image — name it before it\'s fully exposed!',
+            url: `/collection/${CURRENT_COLLECTION}/spotlight`
+        },
+        {
+            name: 'Flash Memory',
+            icon: 'fa-bolt',
+            description: 'Image flashes on screen for a shrinking window of time — pick it from the lineup!',
+            url: `/collection/${CURRENT_COLLECTION}/flashmemory`
+        },
+        {
+            name: 'Who\'s That?',
+            icon: 'fa-masks-theater',
+            description: 'Tags shown, no image — find which one in the lineup has ALL those tags!',
+            url: `/collection/${CURRENT_COLLECTION}/whoisthat`
+        },
+        {
             name: 'Odd One Out',
             icon: 'fa-question-circle',
             description: 'Three images share a hidden tag — find the one that doesn\'t!',

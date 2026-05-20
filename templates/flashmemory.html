@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Flash Memory{% if collection %} - {{ collection }}{% endif %}</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/svg+xml"  href="{{ url_for('static', filename='favicon.svg') }}">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        (function(){var t=null;try{t=localStorage.getItem('imgur.theme')}catch(e){}
+        if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}
+        if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');document.documentElement.style.colorScheme='dark';}
+        else{document.documentElement.removeAttribute('data-theme');document.documentElement.style.colorScheme='light';}})();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<nav class="navbar">
+  <div class="navbar-container">
+    <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+    <div class="navbar-menu">
+      <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+      <div class="navbar-dropdown">
+        <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+        <div class="navbar-dropdown-menu" id="collectionsDropdown"></div>
+      </div>
+      <a href="/tags" class="navbar-link"><i class="fas fa-tags"></i> Browse Tags</a>
+      {% if collection %}
+      <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+      <button class="navbar-link" id="gamesMenuBtn"><i class="fas fa-gamepad"></i> Games</button>
+      {% endif %}
+      <a href="/manage-collections" class="navbar-link"><i class="fas fa-cog"></i> Manage</a>
+      <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+    </div>
+  </div>
+</nav>
+
+<div id="fmContainer">
+  <div class="fm-content">
+
+    <div class="fm-title-bar">
+      <h1 class="fm-title"><i class="fas fa-bolt"></i> Flash Memory</h1>
+      <p class="fm-subtitle">The image flashes for a shrinking window of time — then you must pick it from the lineup!</p>
+    </div>
+
+    <div class="fm-stats">
+      <div class="stat-item"><span class="stat-label">Score</span><span class="stat-value" id="fmScore">0</span></div>
+      <div class="stat-item"><span class="stat-label">Round</span><span class="stat-value" id="fmRound">0</span></div>
+      <div class="stat-item"><span class="stat-label">Lives</span><span class="stat-value" id="fmLives">❤️❤️❤️</span></div>
+      <div class="stat-item"><span class="stat-label">Flash</span><span class="stat-value" id="fmFlashTime" style="color:var(--secondary-color)">—</span></div>
+    </div>
+
+    <div id="fmMessage" class="fm-message">
+      <p style="color:var(--muted-text);font-style:italic;">Press <strong>Start Game</strong> — burn it into your memory!</p>
+    </div>
+
+    <!-- Flash stage -->
+    <div class="fm-stage" id="fmStage">
+      <!-- Phase A: image flash -->
+      <div class="fm-flash-area" id="fmFlashArea" style="display:none;">
+        <img id="fmFlashImg" class="fm-flash-img" src="" alt="">
+        <div class="fm-flash-bar-wrap">
+          <div id="fmFlashBar" class="fm-flash-bar"></div>
+        </div>
+        <div class="fm-flash-label" id="fmFlashLabel">Memorise this!</div>
+      </div>
+
+      <!-- Phase B: hidden placeholder -->
+      <div class="fm-hidden-area" id="fmHiddenArea" style="display:none;">
+        <div class="fm-hidden-icon"><i class="fas fa-eye-slash"></i></div>
+        <p class="fm-hidden-text">What was that image?</p>
+      </div>
+    </div>
+
+    <!-- Options -->
+    <div class="fm-options" id="fmOptions"></div>
+
+    <div class="fm-controls">
+      <button id="startFmBtn" class="control-btn primary"><i class="fas fa-play"></i> Start Game</button>
+      <button id="resetFmBtn" class="control-btn secondary" style="display:none;"><i class="fas fa-redo"></i> Reset</button>
+      <button id="backFmBtn"  class="control-btn secondary"><i class="fas fa-arrow-left"></i> Back</button>
+    </div>
+
+    <div class="fm-settings">
+      <div class="settings-group">
+        <label>Starting flash:</label>
+        <select id="fmStartTime" class="setting-select">
+          <option value="4000">4 seconds (easy)</option>
+          <option value="3000" selected>3 seconds</option>
+          <option value="2000">2 seconds</option>
+          <option value="1000">1 second (hard)</option>
+        </select>
+      </div>
+      <div class="settings-group">
+        <label>Options:</label>
+        <select id="fmNumOptions" class="setting-select">
+          <option value="3">3 options</option>
+          <option value="4" selected>4 options</option>
+          <option value="6">6 options</option>
+        </select>
+      </div>
+      <div class="settings-group">
+        <label>Username:</label>
+        <input type="text" id="fmUsername" class="setting-input" placeholder="Anonymous" maxlength="20">
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div id="gamesModal" class="games-modal">
+  <div class="games-modal-content">
+    <div class="games-modal-header">
+      <h2><i class="fas fa-gamepad"></i> Choose a Game</h2>
+      <button class="games-modal-close" id="gamesModalClose"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="games-grid" id="gamesGrid"></div>
+  </div>
+</div>
+
+<script>const CURRENT_COLLECTION = "{{ collection }}";</script>
+<script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+<script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+<script src="{{ url_for('static', filename='js/flashmemory.js') }}"></script>
+<script src="{{ url_for('static', filename='js/games-modal.js') }}"></script>
+</body>
+</html>
