@@ -54,8 +54,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     const savedToken = localStorage.getItem('chat_hf_token');
     if (savedToken) hfTokenInput.value = savedToken;
 
+    // Only restore saved model if it's still in the dropdown
     const savedModel = localStorage.getItem('chat_model');
-    if (savedModel && modelSelect) modelSelect.value = savedModel;
+    if (savedModel && modelSelect) {
+        const exists = Array.from(modelSelect.options).some(o => o.value === savedModel);
+        if (exists) {
+            modelSelect.value = savedModel;
+        } else {
+            // Saved model no longer available — clear and use new default
+            localStorage.removeItem('chat_model');
+        }
+    }
 
     const savedTemp = localStorage.getItem('chat_temp');
     if (savedTemp && tempSlider) {
@@ -319,44 +328,51 @@ document.addEventListener('DOMContentLoaded', async () => {
             : messages.slice(-20);
         fullMessages.push(...turns);
 
-        // HuggingFace Serverless Inference API — use router.huggingface.co
-        // (api-inference.huggingface.co has DNS issues on some networks)
-        const res = await fetch('https://router.huggingface.co/hf-inference/v1/chat/completions', {
+        // Correct HF router URL — /v1/ NOT /hf-inference/v1/
+        const payload = {
+            model,
+            messages:    fullMessages,
+            max_tokens:  500,
+            temperature: Math.max(0.1, Math.min(2.0, temp)),
+        };
+
+        console.debug('[Chat] POST router.huggingface.co/v1/chat/completions', { model, msgs: fullMessages.length });
+
+        const res = await fetch('https://router.huggingface.co/v1/chat/completions', {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${hfToken}`,
                 'Content-Type':  'application/json',
-                'x-use-cache':   '0',
             },
-            body: JSON.stringify({
-                model:       model,
-                messages:    fullMessages,
-                max_tokens:  500,
-                temperature: Math.max(0.05, Math.min(2.0, temp)),
-                top_p:       0.95,
-                stream:      false,
-            }),
+            body: JSON.stringify(payload),
         });
 
+        // Read body once, then branch
+        const rawBody = await res.text();
         if (res.ok) {
-            const data = await res.json();
-            return data.choices[0].message.content.trim();
+            try {
+                const data = JSON.parse(rawBody);
+                return data.choices[0].message.content.trim();
+            } catch (e) {
+                throw new Error(`Unexpected response format: ${rawBody.slice(0, 120)}`);
+            }
         }
 
-        // Handle errors
-        let errText = '';
-        try { errText = (await res.json()).error?.message || await res.text(); }
-        catch (e) { errText = `HTTP ${res.status}`; }
+        // Parse error message from HF response body
+        let errMsg = `HTTP ${res.status}`;
+        try {
+            const errData = JSON.parse(rawBody);
+            errMsg = errData?.error?.message || errData?.error || errData?.message || rawBody.slice(0, 200);
+        } catch { errMsg = rawBody.slice(0, 200) || `HTTP ${res.status}`; }
 
-        if (res.status === 401)
-            throw new Error('Invalid HuggingFace token. Check it at huggingface.co/settings/tokens.');
-        if (res.status === 403)
-            throw new Error('Access denied. You may need to accept this model\'s license on HuggingFace.');
-        if (res.status === 503)
-            throw new Error('Model is warming up (~30 s). Please wait and try again.');
-        if (res.status === 429)
-            throw new Error('Rate limit reached. Wait a moment before sending again.');
-        throw new Error(`HuggingFace API error ${res.status}: ${String(errText).slice(0, 200)}`);
+        console.error('[Chat] HF error', res.status, errMsg);
+
+        if (res.status === 401) throw new Error('Invalid HuggingFace token. Check it at huggingface.co/settings/tokens.');
+        if (res.status === 403) throw new Error(`Access denied for model "${model}". Try a different model or accept its license on HuggingFace.`);
+        if (res.status === 503) throw new Error('Model warming up. Please wait ~30 seconds and try again.');
+        if (res.status === 429) throw new Error('Rate limited. Wait a moment before sending again.');
+        if (res.status === 400) throw new Error(`Model error: ${errMsg}`);
+        throw new Error(`HuggingFace API error ${res.status}: ${errMsg}`);
     }
 
     // ── Render chat bubbles ───────────────────────────────────────────────────

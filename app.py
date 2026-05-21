@@ -1715,13 +1715,11 @@ def _call_hf_inference(messages: list, system_prompt: str,
             "Set HF_TOKEN in .env or enter it in ⚙ Settings."
         )
 
-    # ── HuggingFace Serverless Inference endpoints ────────────────────────────
-    # router.huggingface.co is the current recommended host (resolves correctly).
-    # api-inference.huggingface.co is kept as a fallback.
+    # ── HuggingFace router (confirmed working endpoint) ───────────────────────
+    # router.huggingface.co/v1/ is the correct path — WITHOUT /hf-inference/
+    # api-inference.huggingface.co doesn't resolve on this network at all.
     URLS = [
-        "https://router.huggingface.co/hf-inference/v1/chat/completions",
-        "https://api-inference.huggingface.co/v1/chat/completions",
-        f"https://api-inference.huggingface.co/models/{model}/v1/chat/completions",
+        "https://router.huggingface.co/v1/chat/completions",
     ]
 
     headers = {
@@ -1860,7 +1858,7 @@ def api_chat_send():
     messages      = data.get('messages', [])
     system_prompt = str(data.get('systemPrompt', '')).strip()
     hf_token      = str(data.get('hfToken', '')).strip() or os.environ.get('HF_TOKEN', '')
-    model         = str(data.get('model', 'mistralai/Mistral-7B-Instruct-v0.3')).strip()
+    model         = str(data.get('model', 'Qwen/Qwen2.5-72B-Instruct')).strip()
     temperature   = float(data.get('temperature', 0.92))
     is_intro      = bool(data.get('intro', False))
 

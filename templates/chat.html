@@ -131,13 +131,10 @@
             <i class="fas fa-robot"></i> Model
           </label>
           <select id="chatModel" class="chat-setting-select">
-            <option value="mistralai/Mistral-7B-Instruct-v0.3">Mistral 7B — fast, free tier</option>
-            <option value="mistralai/Mixtral-8x7B-Instruct-v0.1">Mixtral 8×7B — better quality</option>
-            <option value="meta-llama/Meta-Llama-3.1-8B-Instruct">Llama 3.1 8B</option>
-            <option value="Qwen/Qwen2.5-72B-Instruct">Qwen 2.5 72B — best quality</option>
-            <option value="NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO">Nous Hermes 2 — roleplay</option>
+            <option value="Qwen/Qwen2.5-72B-Instruct" selected>Qwen 2.5 72B — best quality ✓</option>
+            <option value="meta-llama/Llama-3.2-1B-Instruct">Llama 3.2 1B — fastest ✓</option>
           </select>
-          <small class="chat-setting-hint">All models via HuggingFace Serverless Inference API.</small>
+          <small class="chat-setting-hint">Models confirmed working with your HuggingFace free tier.</small>
         </div>
 
         <div class="chat-setting-row">
