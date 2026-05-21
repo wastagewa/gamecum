@@ -319,8 +319,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             : messages.slice(-20);
         fullMessages.push(...turns);
 
-        // HuggingFace Serverless Inference API (Messages / OpenAI-compatible)
-        const res = await fetch('https://api-inference.huggingface.co/v1/chat/completions', {
+        // HuggingFace Serverless Inference API — use router.huggingface.co
+        // (api-inference.huggingface.co has DNS issues on some networks)
+        const res = await fetch('https://router.huggingface.co/hf-inference/v1/chat/completions', {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${hfToken}`,

@@ -1492,17 +1492,17 @@ def collection_snap(collection_name):
 # ═══════════════════════════════════════════════════════════════════════════
 
 _BODY_TAG_MAP = {
-    'Naked boobs':      'bare breasts fully exposed',
-    'Semi Naked boobs': 'breasts partially visible',
-    'Covered boobs':    'chest covered',
+    'Naked boobs':      'fully bare, exposed breasts',
+    'Semi Naked boobs': 'partially exposed breasts',
+    'Covered boobs':    'a covered chest',
     'Unseen boobs':     None,
-    'Naked pussy':      'fully nude between the legs',
-    'Semi Naked pussy': 'barely covered between the legs',
-    'Covered pussy':    'covered below the waist',
+    'Naked pussy':      'a completely exposed pussy',
+    'Semi Naked pussy': 'a barely covered pussy',
+    'Covered pussy':    'a covered lower half',
     'Unseen pussy':     None,
-    'Naked butt':       'bare ass exposed',
-    'Semi Naked butt':  'ass partially exposed',
-    'Covered butt':     'ass covered',
+    'Naked butt':       'a completely bare ass',
+    'Semi Naked butt':  'a partially exposed ass',
+    'Covered butt':     'a covered behind',
     'Unseen butt':      None,
 }
 
@@ -1638,11 +1638,13 @@ def _build_char_description(tags: list) -> str:
     # ── Assemble natural paragraph ────────────────────────────────────────────
     sentences = []
 
-    # Sentence 1: subject with appearance + hair + eyes
-    subj = 'A'
+    # Sentence 1: subject — always include a beauty/sensuality descriptor
     if appearance_found:
-        subj += ' ' + ', '.join(appearance_found[:2])
-    subj += f' {gender}'
+        adj = ', '.join(appearance_found[:2])
+    else:
+        adj = 'beautiful and sensual'   # default when BLIP didn't tag appearance
+
+    subj = f'A {adj} {gender}'
     if hair_parts:
         subj += f' with {", ".join(hair_parts[:2])}'
     if eye_found:
@@ -1658,13 +1660,15 @@ def _build_char_description(tags: list) -> str:
     elif loc_phrase:
         sentences.append(f'{pronoun} {be_verb} {loc_phrase}')
 
-    # Sentence 3: mood
+    # Sentence 3: mood / expression
     if mood_found:
         sentences.append(f'{pronoun} {be_verb} {mood_found}')
 
     # Sentence 4: body state (NSFW)
+    # Use "has" so these noun phrases read naturally:
+    # "She has fully bare breasts and a completely bare ass."
     if body_state:
-        sentences.append(f'{pronoun} {be_verb} {", and ".join(body_state)}')
+        sentences.append(f'{pronoun} has {" and ".join(body_state)}')
 
     # Sentence 5: remaining notable tags not yet used
     SKIP_ALWAYS = {
@@ -1711,10 +1715,11 @@ def _call_hf_inference(messages: list, system_prompt: str,
             "Set HF_TOKEN in .env or enter it in ⚙ Settings."
         )
 
-    # ── Correct HF Serverless Inference API endpoint (2024+) ─────────────────
-    # Primary:  https://api-inference.huggingface.co/v1/chat/completions
-    # Fallback: https://api-inference.huggingface.co/models/{model}/v1/chat/completions
+    # ── HuggingFace Serverless Inference endpoints ────────────────────────────
+    # router.huggingface.co is the current recommended host (resolves correctly).
+    # api-inference.huggingface.co is kept as a fallback.
     URLS = [
+        "https://router.huggingface.co/hf-inference/v1/chat/completions",
         "https://api-inference.huggingface.co/v1/chat/completions",
         f"https://api-inference.huggingface.co/models/{model}/v1/chat/completions",
     ]
