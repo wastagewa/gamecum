@@ -4,122 +4,150 @@ document.addEventListener('DOMContentLoaded', () => {
     const gamesModal = document.getElementById('gamesModal');
     const gamesModalClose = document.getElementById('gamesModalClose');
     const gamesGrid = document.getElementById('gamesGrid');
-    const CURRENT_COLLECTION = window.CURRENT_COLLECTION || "Real";
+    // Read the collection name injected by the template:
+    //   <script>const CURRENT_COLLECTION = "{{ collection }}";</script>
+    // `const` at script-tag level is NOT a window property, so
+    // window.CURRENT_COLLECTION is always undefined — reference it directly.
+    const _coll = (typeof CURRENT_COLLECTION !== 'undefined' ? CURRENT_COLLECTION : '') || 'Real';
 
     const games = [
         {
             name: 'Memory Game',
             icon: 'fa-gamepad',
             description: 'Classic memory card matching game',
-            url: `/collection/${CURRENT_COLLECTION}/game`
+            url: `/collection/${_coll}/game`
         },
         {
             name: 'Jigsaw Puzzle',
             icon: 'fa-puzzle-piece',
             description: 'Piece together jigsaw puzzles',
-            url: `/collection/${CURRENT_COLLECTION}/puzzle`
+            url: `/collection/${_coll}/puzzle`
         },
         {
             name: 'Sequence Memory',
             icon: 'fa-brain',
             description: 'Remember and repeat sequences',
-            url: `/collection/${CURRENT_COLLECTION}/sequence`
+            url: `/collection/${_coll}/sequence`
         },
         {
             name: 'Flash Cards',
             icon: 'fa-images',
             description: 'Study with animated flash cards',
-            url: `/collection/${CURRENT_COLLECTION}/flashcards`
+            url: `/collection/${_coll}/flashcards`
         },
         {
             name: 'Image Hunt',
             icon: 'fa-search',
             description: 'Find specific images quickly',
-            url: `/collection/${CURRENT_COLLECTION}/hunt`
+            url: `/collection/${_coll}/hunt`
         },
         {
             name: 'Zoom Challenge',
             icon: 'fa-search-plus',
             description: 'Identify zoomed-in image portions',
-            url: `/collection/${CURRENT_COLLECTION}/zoom`
+            url: `/collection/${_coll}/zoom`
         },
         {
             name: 'Whack-a-Mole',
             icon: 'fa-hammer',
             description: 'Click images as they appear on screen',
-            url: `/collection/${CURRENT_COLLECTION}/whack`
+            url: `/collection/${_coll}/whack`
         },
         {
             name: 'Recall Grid',
             icon: 'fa-location-dot',
             description: 'Memorize where each image was placed',
-            url: `/collection/${CURRENT_COLLECTION}/recall`
+            url: `/collection/${_coll}/recall`
         },
         {
             name: 'Missing Piece',
             icon: 'fa-eye-slash',
             description: 'Spot which image disappeared from the grid',
-            url: `/collection/${CURRENT_COLLECTION}/missing`
+            url: `/collection/${_coll}/missing`
         },
         {
             name: 'Trail Trace',
             icon: 'fa-route',
             description: 'Memorize the image grid, then follow a logic path',
-            url: `/collection/${CURRENT_COLLECTION}/trail`
+            url: `/collection/${_coll}/trail`
         },
         {
             name: 'Remix Match',
             icon: 'fa-wand-magic-sparkles',
             description: 'Match the target image to its remixed visual clone',
-            url: `/collection/${CURRENT_COLLECTION}/remix`
+            url: `/collection/${_coll}/remix`
         },
         {
             name: 'Tag Match',
             icon: 'fa-tag',
             description: 'Match tag cards with images containing those tags',
-            url: `/collection/${CURRENT_COLLECTION}/tag-match`
+            url: `/collection/${_coll}/tag-match`
         },
         {
             name: 'Chat',
             icon: 'fa-comment-dots',
             description: 'Pick an image, bring the character to life, and chat with them!',
-            url: `/collection/${CURRENT_COLLECTION}/chat`
+            url: `/collection/${_coll}/chat`
         },
         {
             name: 'Spotlight',
             icon: 'fa-circle-dot',
             description: 'A tiny peephole drifts across a hidden image — name it before it\'s fully exposed!',
-            url: `/collection/${CURRENT_COLLECTION}/spotlight`
+            url: `/collection/${_coll}/spotlight`
         },
         {
             name: 'Flash Memory',
             icon: 'fa-bolt',
             description: 'Image flashes on screen for a shrinking window of time — pick it from the lineup!',
-            url: `/collection/${CURRENT_COLLECTION}/flashmemory`
+            url: `/collection/${_coll}/flashmemory`
         },
         {
             name: 'Who\'s That?',
             icon: 'fa-masks-theater',
             description: 'Tags shown, no image — find which one in the lineup has ALL those tags!',
-            url: `/collection/${CURRENT_COLLECTION}/whoisthat`
+            url: `/collection/${_coll}/whoisthat`
         },
         {
             name: 'Odd One Out',
             icon: 'fa-question-circle',
             description: 'Three images share a hidden tag — find the one that doesn\'t!',
-            url: `/collection/${CURRENT_COLLECTION}/oddoneout`
+            url: `/collection/${_coll}/oddoneout`
         },
         {
             name: 'Speed Sort',
             icon: 'fa-bolt',
             description: 'Tag appears — quickly sort each image as YES or NO before time runs out!',
-            url: `/collection/${CURRENT_COLLECTION}/speedsort`
+            url: `/collection/${_coll}/speedsort`
         },
         {
             name: 'Snap Match',
             icon: 'fa-camera-retro',
             description: 'Two images flash up — do they share a tag? React fast!',
-            url: `/collection/${CURRENT_COLLECTION}/snap`
+            url: `/collection/${_coll}/snap`
+        },
+        {
+            name: 'Hot Bracket',
+            icon: 'fa-fire',
+            description: 'Two images face off — click your favourite to vote. Crown the champion!',
+            url: `/collection/${_coll}/bracket`
+        },
+        {
+            name: 'Scratch Card',
+            icon: 'fa-hand-sparkles',
+            description: 'Drag to scratch away tiles and reveal the hidden image — then guess!',
+            url: `/collection/${_coll}/scratch`
+        },
+        {
+            name: 'Behind the Blur',
+            icon: 'fa-eye',
+            description: 'The image clears slowly — identify it before the fog lifts completely!',
+            url: `/collection/${_coll}/behindblur`
+        },
+        {
+            name: 'Silhouette Strike',
+            icon: 'fa-user-secret',
+            description: 'A black shadow bleeds to colour over time — name it before the full reveal!',
+            url: `/collection/${_coll}/silhouette`
         },
 
     ];
