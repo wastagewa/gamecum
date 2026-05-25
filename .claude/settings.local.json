@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'feat: Add three new tag-based games — Odd One Out, Speed Sort, Snap Match *)",
+      "Bash(git commit -m 'feat: Add full-image lightbox preview inside Retag modal *)",
+      "Bash(python static/chat_append.py)",
+      "Bash(del static\\\\chat_append.py)"
+    ]
+  }
+}

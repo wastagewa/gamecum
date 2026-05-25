@@ -553,7 +553,7 @@ def submit_score():
             return jsonify({'error': 'Invalid or missing collection'}), 400
         
         game_type = str(data.get('gameType', 'memory')).lower()
-        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap', 'spotlight', 'flashmemory', 'whoisthat']
+        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap', 'spotlight', 'flashmemory', 'whoisthat', 'bracket', 'scratch', 'behindblur', 'silhouette', 'towerdefense']
         if game_type not in allowed_games:
             game_type = 'memory'
         
@@ -1485,6 +1485,41 @@ def collection_snap(collection_name):
     """Snap Match: decide if two images share a tag as fast as possible."""
     collection = _safe_collection_name(collection_name)
     return render_template('snap.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/bracket')
+def collection_bracket(collection_name):
+    """Hot Bracket: vote between two images; track win-rates; declare a champion."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('bracket.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/scratch')
+def collection_scratch(collection_name):
+    """Striptease Scratch Card: scratch away tiles to reveal a hidden image, then identify it."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('scratch.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/behindblur')
+def collection_behindblur(collection_name):
+    """Behind the Blur: image clears over time — identify it before it's crystal clear."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('behindblur.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/silhouette')
+def collection_silhouette(collection_name):
+    """Silhouette Strike: image reveals from black silhouette to full colour — name it fast."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('silhouette.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/towerdefense')
+def collection_towerdefense(collection_name):
+    """Tower Defense Viewer: images march across a conveyor — save your favourites before they scroll away."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('towerdefense.html', collection=collection)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

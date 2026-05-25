@@ -149,6 +149,12 @@ document.addEventListener('DOMContentLoaded', () => {
             description: 'A black shadow bleeds to colour over time — name it before the full reveal!',
             url: `/collection/${_coll}/silhouette`
         },
+        {
+            name: 'Tower Defense',
+            icon: 'fa-shield-heart',
+            description: 'Images march across the belt — click to save your favourites before they scroll away!',
+            url: `/collection/${_coll}/towerdefense`
+        },
 
     ];
 
