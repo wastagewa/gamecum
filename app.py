@@ -553,7 +553,7 @@ def submit_score():
             return jsonify({'error': 'Invalid or missing collection'}), 400
         
         game_type = str(data.get('gameType', 'memory')).lower()
-        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap', 'spotlight', 'flashmemory', 'whoisthat', 'bracket', 'scratch', 'behindblur', 'silhouette', 'towerdefense']
+        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap', 'spotlight', 'flashmemory', 'whoisthat', 'bracket', 'scratch', 'behindblur', 'silhouette', 'towerdefense', 'heatmap', 'gallerywalk', 'breakout', 'bubbleburst']
         if game_type not in allowed_games:
             game_type = 'memory'
         
@@ -1520,6 +1520,34 @@ def collection_towerdefense(collection_name):
     """Tower Defense Viewer: images march across a conveyor — save your favourites before they scroll away."""
     collection = _safe_collection_name(collection_name)
     return render_template('towerdefense.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/bubbleburst')
+def collection_bubbleburst(collection_name):
+    """Bubble Burst: pop rising bubbles that contain the target image before they escape."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('bubbleburst.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/breakout')
+def collection_breakout(collection_name):
+    """Image Pong (Breakout): break tiles to reveal a hidden image, guess it fast for max score."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('breakout.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/heatmap')
+def collection_heatmap(collection_name):
+    """Heat Map: paint on each image to show what draws your eye."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('heatmap.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/gallerywalk')
+def collection_gallerywalk(collection_name):
+    """Gallery Walk: stroll through a virtual art gallery of your collection."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('gallerywalk.html', collection=collection)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

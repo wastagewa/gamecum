@@ -155,6 +155,30 @@ document.addEventListener('DOMContentLoaded', () => {
             description: 'Images march across the belt — click to save your favourites before they scroll away!',
             url: `/collection/${_coll}/towerdefense`
         },
+        {
+            name: 'Bubble Burst',
+            icon: 'fa-soap',
+            description: 'Bubbles float up from the dark — pop every one containing the target image, dodge the decoys!',
+            url: `/collection/${_coll}/bubbleburst`
+        },
+        {
+            name: 'Image Pong',
+            icon: 'fa-table-tennis-paddle-ball',
+            description: 'Break tiles with a paddle and ball to reveal the hidden image — guess it fast for bonus points!',
+            url: `/collection/${_coll}/breakout`
+        },
+        {
+            name: 'Heat Map',
+            icon: 'fa-fire',
+            description: 'Hold and drag to paint what draws your eye — see your attention as a glowing heat map!',
+            url: `/collection/${_coll}/heatmap`
+        },
+        {
+            name: 'Gallery Walk',
+            icon: 'fa-archway',
+            description: 'Stroll through a private art gallery of your collection. Click any painting to examine it up close.',
+            url: `/collection/${_coll}/gallerywalk`
+        },
 
     ];
 

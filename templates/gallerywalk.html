@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Gallery Walk{% if collection %} - {{ collection }}{% endif %}</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/svg+xml"  href="{{ url_for('static', filename='favicon.svg') }}">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        (function(){var t=null;try{t=localStorage.getItem('imgur.theme')}catch(e){}
+        if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}
+        if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');document.documentElement.style.colorScheme='dark';}
+        else{document.documentElement.removeAttribute('data-theme');document.documentElement.style.colorScheme='light';}})();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<nav class="navbar">
+  <div class="navbar-container">
+    <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+    <div class="navbar-menu">
+      <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+      <div class="navbar-dropdown">
+        <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+        <div class="navbar-dropdown-menu" id="collectionsDropdown"></div>
+      </div>
+      <a href="/tags" class="navbar-link"><i class="fas fa-tags"></i> Browse Tags</a>
+      {% if collection %}
+      <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+      <button class="navbar-link" id="gamesMenuBtn"><i class="fas fa-gamepad"></i> Games</button>
+      {% endif %}
+      <a href="/manage-collections" class="navbar-link"><i class="fas fa-cog"></i> Manage</a>
+      <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+    </div>
+  </div>
+</nav>
+
+<div id="gwContainer">
+
+  <!-- ── Gallery scene ────────────────────────────────────────── -->
+  <div class="gw-scene" id="gwScene">
+    <!-- Atmospheric layers -->
+    <div class="gw-ceiling"></div>
+    <div class="gw-floor"></div>
+    <div class="gw-spotlight" id="gwSpotlight"></div>
+
+    <!-- Coverflow of frames -->
+    <div class="gw-gallery" id="gwGallery"></div>
+
+    <!-- In-scene nav arrows -->
+    <button class="gw-arrow gw-arrow--left"  id="gwPrev" style="display:none">
+      <i class="fas fa-chevron-left"></i>
+    </button>
+    <button class="gw-arrow gw-arrow--right" id="gwNext" style="display:none">
+      <i class="fas fa-chevron-right"></i>
+    </button>
+
+    <!-- Counter + hint -->
+    <div class="gw-counter" id="gwCounter" style="display:none">— / —</div>
+    <div class="gw-hint"    id="gwHint"    style="display:none">
+      <i class="fas fa-keyboard"></i> ← → navigate &nbsp;·&nbsp;
+      <i class="fas fa-mouse-pointer"></i> click to examine
+    </div>
+
+    <!-- Lobby overlay shown before entering -->
+    <div class="gw-lobby" id="gwLobby">
+      <div class="gw-lobby-inner">
+        <i class="fas fa-archway gw-lobby-icon"></i>
+        <h2 class="gw-lobby-title">Gallery Walk</h2>
+        <p class="gw-lobby-sub">Stroll through your collection as a private art gallery.<br>
+           Use ← → arrows or keyboard to move. Click any painting to examine it up close.</p>
+        <button id="startGwBtn" class="control-btn primary gw-enter-btn">
+          <i class="fas fa-door-open"></i> Enter Gallery
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Examine overlay ──────────────────────────────────────── -->
+  <div class="gw-placard" id="gwPlacard">
+    <div class="gw-placard-bg" id="gwPlacardBg"></div>
+    <div class="gw-placard-content">
+      <div class="gw-placard-frame-wrap">
+        <img id="gwPlacardImg" src="" alt="" class="gw-placard-img">
+      </div>
+      <div class="gw-placard-caption">
+        <span class="gw-placard-num" id="gwPlacardNum">Painting #1</span>
+        <p class="gw-placard-tags" id="gwPlacardTags"></p>
+      </div>
+      <button class="gw-placard-close" id="gwPlacardClose">
+        <i class="fas fa-arrow-left"></i> Step Back
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Bottom controls (always visible) ─────────────────────── -->
+  <div class="gw-bottom">
+    <div class="gw-bottom-controls">
+      <button id="fullscreenGwBtn" class="control-btn secondary"><i class="fas fa-expand"></i> Fullscreen</button>
+      <button id="exitGwBtn"       class="control-btn secondary" style="display:none"><i class="fas fa-sign-out-alt"></i> Exit Gallery</button>
+      <button id="backGwBtn"       class="control-btn secondary"><i class="fas fa-arrow-left"></i> Back</button>
+    </div>
+    <div class="gw-bottom-settings">
+      <label>Username:</label>
+      <input type="text" id="gwUsername" class="setting-input" placeholder="Anonymous" maxlength="20">
+      <span class="gw-stat">Examined: <strong id="gwExamined">0</strong></span>
+    </div>
+  </div>
+
+</div>
+
+<div id="gamesModal" class="games-modal">
+  <div class="games-modal-content">
+    <div class="games-modal-header">
+      <h2><i class="fas fa-gamepad"></i> Choose a Game</h2>
+      <button class="games-modal-close" id="gamesModalClose"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="games-grid" id="gamesGrid"></div>
+  </div>
+</div>
+
+<script>const CURRENT_COLLECTION = "{{ collection }}";</script>
+<script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+<script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+<script src="{{ url_for('static', filename='js/gallerywalk.js') }}"></script>
+<script src="{{ url_for('static', filename='js/games-modal.js') }}"></script>
+</body>
+</html>
