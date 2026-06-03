@@ -5,7 +5,6 @@ from werkzeug.utils import secure_filename
 import uuid
 import random
 import re
-from image_tagger import analyze_image, get_primary_tags, set_tagger_config
 
 # Load .env file if present (python-dotenv)
 try:
@@ -340,23 +339,7 @@ def upload_file(collection=None):
         file_path = os.path.join(save_folder, filename)
         file.save(file_path)
 
-        # Analyze image and extract tags
-        # BLIP produces natural, descriptive tags for realistic images
-        try:
-            tags_result = analyze_image(file_path, top_k=25, threshold=0.20)
-            tags = [t['tag'] for t in tags_result]
-
-            # Store tags
-            all_tags = _load_tags()
-            image_key = _get_image_key(collection, filename)
-            all_tags[image_key] = {
-                'tags': tags,
-                'detailed': tags_result
-            }
-            _save_tags(all_tags)
-        except Exception as e:
-            print(f"Error tagging image: {e}")
-            tags = []
+        tags = []
         
         url_path = f'/static/uploads/{collection}/{filename}' if collection else f'/static/uploads/{filename}'
         return jsonify({
@@ -1036,72 +1019,14 @@ def api_update_image_tags(collection_name, filename):
 
 @app.route('/api/images/<collection_name>/<filename>/retag', methods=['POST'])
 def api_retag_image(collection_name, filename):
-    """Auto-generate tags for a specific image."""
-    safe_name = _safe_collection_name(collection_name)
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name, filename)
-    
-    if not os.path.exists(file_path):
-        return jsonify({'success': False, 'error': 'Image not found'}), 404
-    
-    try:
-        # Use the image tagger to get primary tags (returns list of strings)
-        from image_tagger import get_primary_tags
-        tags = get_primary_tags(file_path, max_tags=10)
-        
-        # Save the tags
-        image_key = _get_image_key(safe_name, filename)
-        tags_data = _load_tags()
-        tags_data[image_key] = tags
-        _save_tags(tags_data)
-        
-        return jsonify({'success': True, 'tags': tags})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+    """Auto-generate tags for a specific image (disabled — no tagger configured)."""
+    return jsonify({'success': False, 'error': 'Auto-tagging is not available'}), 501
 
 
 @app.route('/api/collections/<collection_name>/retag-all', methods=['POST'])
 def api_retag_all_images(collection_name):
-    """Auto-generate tags for all images in a collection, skipping locked images."""
-    safe_name = _safe_collection_name(collection_name)
-    folder_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name)
-    
-    if not os.path.exists(folder_path):
-        return jsonify({'success': False, 'error': 'Collection not found'}), 404
-    
-    try:
-        from image_tagger import get_primary_tags
-        tags_data = _load_tags()
-        processed = 0
-        errors = 0
-        skipped_locked = 0
-        
-        for filename in os.listdir(folder_path):
-            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                # Check if image is locked
-                if _get_image_locked_status(safe_name, filename):
-                    skipped_locked += 1
-                    continue
-                
-                try:
-                    file_path = os.path.join(folder_path, filename)
-                    # Use get_primary_tags to get list of strings instead of dicts
-                    tags = get_primary_tags(file_path, max_tags=10)
-                    
-                    # Use the new function to set tags while preserving locked status
-                    _set_image_tags(safe_name, filename, tags)
-                    processed += 1
-                except Exception as e:
-                    errors += 1
-        
-        return jsonify({
-            'success': True,
-            'processed': processed,
-            'errors': errors,
-            'skipped_locked': skipped_locked,
-            'message': f'Processed {processed} images with {errors} errors ({skipped_locked} locked images skipped)'
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+    """Auto-generate tags for all images in a collection (disabled — no tagger configured)."""
+    return jsonify({'success': False, 'error': 'Auto-tagging is not available'}), 501
 
 
 @app.route('/api/images/<collection_name>/<filename>/lock', methods=['POST'])
@@ -1251,33 +1176,8 @@ def update_image_tags(collection, filename):
 
 @app.route('/api/retag/<collection>/<filename>', methods=['POST'])
 def retag_image(collection, filename):
-    """Re-analyze and update tags for an existing image."""
-    collection = _safe_collection_name(collection)
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], collection, filename)
-    
-    if not os.path.exists(file_path):
-        return jsonify({'error': 'Image not found'}), 404
-    
-    try:
-        # BLIP produces natural, descriptive tags for realistic images
-        tags_result = analyze_image(file_path, top_k=25, threshold=0.20)
-        tags = [t['tag'] for t in tags_result]
-        
-        all_tags = _load_tags()
-        image_key = _get_image_key(collection, filename)
-        all_tags[image_key] = {
-            'tags': tags,
-            'detailed': tags_result
-        }
-        _save_tags(all_tags)
-        
-        return jsonify({
-            'success': True,
-            'tags': tags,
-            'detailed': tags_result
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    """Re-analyze and update tags for an existing image (disabled — no tagger configured)."""
+    return jsonify({'error': 'Auto-tagging is not available'}), 501
 
 
 @app.route('/api/search-by-tag')
@@ -1315,34 +1215,8 @@ def search_by_tag():
 
 @app.route('/api/tagger-config', methods=['GET', 'POST'])
 def api_tagger_config():
-    """Configure or read the tagger backend.
-    GET -> returns info message (paths not exposed for security)
-    POST JSON: { backend: 'clip'|'wd14', modelPath: str, labelsPath: str, backendOverrides: { <collection>: 'clip'|'wd14', ... } }
-    Stores configuration for WD14 local model usage.
-    """
-    try:
-        if request.method == 'GET':
-            # Only expose backend type to clients; paths are sensitive
-            # Read current backend from the config file via image_tagger (no direct file read here)
-            # We can't import private state; provide a generic ok and hint backend is configurable.
-            return jsonify({'success': True, 'message': 'Use POST to set backend to clip or wd14. Optional: backendOverrides per collection.'})
-        data = request.get_json() or {}
-        backend = str(data.get('backend', 'clip')).lower()
-        conf = {'backend': backend}
-        if backend == 'wd14':
-            model_path = data.get('modelPath')
-            labels_path = data.get('labelsPath')
-            if not model_path or not labels_path:
-                return jsonify({'error': 'modelPath and labelsPath required for wd14 backend'}), 400
-            conf['model_path'] = model_path
-            conf['labels_path'] = labels_path
-        # Optional per-collection backend overrides
-        if 'backendOverrides' in data and isinstance(data.get('backendOverrides'), dict):
-            conf['backend_overrides'] = data['backendOverrides']
-        set_tagger_config(conf)
-        return jsonify({'success': True, 'backend': backend})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    """Tagger configuration endpoint (disabled — auto-tagging is not available)."""
+    return jsonify({'success': False, 'message': 'Auto-tagging is not available'}), 501
 
 
 @app.route('/tags')
@@ -1566,14 +1440,27 @@ _BODY_TAG_MAP = {
     'Semi Naked boobs': 'partially exposed breasts',
     'Covered boobs':    'a covered chest',
     'Unseen boobs':     None,
+    'None boobs':       None,
     'Naked pussy':      'a completely exposed pussy',
     'Semi Naked pussy': 'a barely covered pussy',
     'Covered pussy':    'a covered lower half',
     'Unseen pussy':     None,
+    'None pussy':       None,
     'Naked butt':       'a completely bare ass',
     'Semi Naked butt':  'a partially exposed ass',
     'Covered butt':     'a covered behind',
     'Unseen butt':      None,
+    'None butt':        None,
+    'Naked chest':      'a bare chest',
+    'Semi Naked chest': 'a partially exposed chest',
+    'Covered chest':    None,
+    'Unseen chest':     None,
+    'None chest':       None,
+    'Naked penis':      'a completely exposed penis',
+    'Semi Naked penis': 'a partially exposed penis',
+    'Covered penis':    None,
+    'Unseen penis':     None,
+    'None penis':       None,
 }
 
 

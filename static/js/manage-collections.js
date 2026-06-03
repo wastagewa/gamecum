@@ -22,10 +22,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const retagCollectionNameSpan = document.getElementById('retagCollectionName');
     const retagImagesList = document.getElementById('retagImagesList');
     const retagMessage = document.getElementById('retagMessage');
-    const retagAllBtn = document.getElementById('retagAllBtn');
-    const retagProgress = document.getElementById('retagProgress');
-    const retagProgressBar = document.getElementById('retagProgressBar');
-    const retagProgressText = document.getElementById('retagProgressText');
     const closeRetagBtn = document.getElementById('closeRetagBtn');
     const closeRetagFooterBtn = document.getElementById('closeRetagFooterBtn');
     
@@ -667,23 +663,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Images are already sorted by upload time from backend
         retagImagesList.innerHTML = images.map(img => {
-            // Extract all body part prefixes as three consecutive letters
+            // Extract all body part prefixes as five consecutive letters
             const getAllBodyPartPrefixes = () => {
                 const fieldMap = {
-                    'boobs': ['Covered boobs', 'Semi Naked boobs', 'Naked boobs', 'Unseen boobs'],
-                    'pussy': ['Covered pussy', 'Semi Naked pussy', 'Naked pussy', 'Unseen pussy'],
-                    'butt': ['Covered butt', 'Semi Naked butt', 'Naked butt', 'Unseen butt']
+                    'boobs': ['Covered boobs', 'Semi Naked boobs', 'Naked boobs', 'Unseen boobs', 'None boobs'],
+                    'pussy': ['Covered pussy', 'Semi Naked pussy', 'Naked pussy', 'Unseen pussy', 'None pussy'],
+                    'butt':  ['Covered butt',  'Semi Naked butt',  'Naked butt',  'Unseen butt',  'None butt'],
+                    'chest': ['Covered chest', 'Semi Naked chest', 'Naked chest', 'Unseen chest', 'None chest'],
+                    'penis': ['Covered penis', 'Semi Naked penis', 'Naked penis', 'Unseen penis', 'None penis']
                 };
-                
+
                 const abbreviationMap = {
                     'Covered': 'c',
                     'Semi Naked': 's',
                     'Naked': 'n',
-                    'Unseen': 'u'
+                    'Unseen': 'u',
+                    'None': 'x'
                 };
                 
                 const result = [];
-                const fields = ['boobs', 'pussy', 'butt'];
+                const fields = ['boobs', 'pussy', 'butt', 'chest', 'penis'];
                 
                 for (const fieldName of fields) {
                     const tags = fieldMap[fieldName] || [];
@@ -731,17 +730,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                         <div class="retag-body-parts">
                             <label>Body Parts (Boobs, Pussy, Butt):</label>
-                            <input type="text" class="body-parts-combined-input" data-filename="${img.filename}" value="${getAllBodyPartPrefixes()}" placeholder="e.g., csn" maxlength="3">
-                            <small style="display: block; margin-top: 4px; color: var(--text-secondary);">Format: 3 letters (c=Covered, s=Semi Naked, n=Naked, u=Unseen). e.g., "csn" for Covered boobs, Semi Naked pussy, Naked butt</small>
+                            <input type="text" class="body-parts-combined-input" data-filename="${img.filename}" value="${getAllBodyPartPrefixes()}" placeholder="e.g., ccxnn" maxlength="5">
+                            <small style="display: block; margin-top: 4px; color: var(--text-secondary);">Format: 5 letters for boobs/pussy/butt/chest/penis (c=Covered, s=Semi Naked, n=Naked, u=Unseen, x=None). e.g., "ccxxx" = Covered boobs, Covered pussy, None butt, None chest, None penis.</small>
                         </div>
                         <div class="retag-button-group">
                             <button class="btn-add-tag" data-filename="${img.filename}">
                                 <i class="fas fa-plus"></i> Add
                             </button>
-                            <button class="btn-auto-tag" data-filename="${img.filename}">
-                                <i class="fas fa-magic"></i> Auto-Tag
-                            </button>
-                            <button class="btn-copy-tags" data-filename="${img.filename}">
+<button class="btn-copy-tags" data-filename="${img.filename}">
                                 <i class="fas fa-copy"></i> Copy From
                             </button>
                             <button class="btn-lock-tag ${img.locked ? 'locked' : ''}" data-filename="${img.filename}" title="${img.locked ? 'Unlock tags' : 'Lock tags'}">
@@ -825,7 +821,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        // Body part input handlers (combined input with three consecutive letters)
+        // Body part input handlers (combined input with five consecutive letters)
         document.querySelectorAll('.body-parts-combined-input').forEach(input => {
             input.addEventListener('change', async (e) => {
                 const card = e.target.closest('.retag-image-card');
@@ -842,12 +838,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     'c': 'Covered',
                     's': 'Semi Naked',
                     'n': 'Naked',
-                    'u': 'Unseen'
+                    'u': 'Unseen',
+                    'x': 'None'
                 };
-                
-                // Remove any existing body part tags (all Covered/Semi Naked/Naked/Unseen + boobs/pussy/butt)
-                const validPrefixes = ['Covered', 'Semi Naked', 'Naked', 'Unseen'];
-                const bodyParts = ['boobs', 'pussy', 'butt'];
+
+                // Remove any existing body part tags
+                const validPrefixes = ['Covered', 'Semi Naked', 'Naked', 'Unseen', 'None'];
+                const bodyParts = ['boobs', 'pussy', 'butt', 'chest', 'penis'];
                 let newTags = currentTags.filter(tag => {
                     // Keep tags that don't match any body part pattern
                     for (const validPrefix of validPrefixes) {
@@ -860,12 +857,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     return true;
                 });
                 
-                // Parse three consecutive letters
+                // Parse five consecutive letters
                 if (inputValue) {
-                    const fieldNames = ['boobs', 'pussy', 'butt'];
-                    
-                    // Add new tags for each body part (up to 3 letters)
-                    for (let i = 0; i < Math.min(inputValue.length, 3); i++) {
+                    const fieldNames = ['boobs', 'pussy', 'butt', 'chest', 'penis'];
+
+                    // Add new tags for each body part (up to 5 letters)
+                    for (let i = 0; i < Math.min(inputValue.length, 5); i++) {
                         const abbrev = inputValue[i].toLowerCase();
                         const fieldName = fieldNames[i];
                         
@@ -914,34 +911,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        // Auto-tag buttons
-        document.querySelectorAll('.btn-auto-tag').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const card = e.target.closest('.retag-image-card');
-                const filename = card.dataset.filename;
-                btn.disabled = true;
-                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Tagging...';
-                
-                try {
-                    const res = await fetch(`/api/images/${collection}/${filename}/retag`, {
-                        method: 'POST'
-                    });
-                    const data = await res.json();
-                    
-                    if (data.success) {
-                        await loadCollectionImages(currentCollection);
-                    } else {
-                        alert('Failed to auto-tag image: ' + data.error);
-                        btn.disabled = false;
-                        btn.innerHTML = '<i class="fas fa-magic"></i> Auto-Tag';
-                    }
-                } catch (err) {
-                    alert('Error auto-tagging image');
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="fas fa-magic"></i> Auto-Tag';
-                }
-            });
-        });
     }
 
     async function updateImageTags(collection, filename, tags) {
@@ -955,51 +924,6 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (err) {
             return { success: false, error: 'Network error' };
         }
-    }
-
-    // Auto-tag all images in collection
-    if (retagAllBtn) {
-        retagAllBtn.addEventListener('click', async () => {
-            if (!confirm(`Auto-tag all images in ${currentCollection}? This will replace existing tags.`)) {
-                return;
-            }
-
-            retagAllBtn.disabled = true;
-            retagProgress.style.display = 'block';
-            retagProgressText.textContent = 'Processing images...';
-            retagProgressBar.style.width = '0%';
-
-            try {
-                const res = await fetch(`/api/collections/${currentCollection}/retag-all`, {
-                    method: 'POST'
-                });
-                const data = await res.json();
-
-                if (data.success) {
-                    retagProgressBar.style.width = '100%';
-                    retagProgressText.textContent = data.message;
-                    retagMessage.textContent = `Successfully processed ${data.processed} images`;
-                    retagMessage.className = 'message success';
-                    
-                    // Reload images
-                    setTimeout(async () => {
-                        await loadCollectionImages(currentCollection);
-                        retagProgress.style.display = 'none';
-                        retagAllBtn.disabled = false;
-                    }, 1500);
-                } else {
-                    retagMessage.textContent = data.error || 'Failed to auto-tag images';
-                    retagMessage.className = 'message error';
-                    retagProgress.style.display = 'none';
-                    retagAllBtn.disabled = false;
-                }
-            } catch (err) {
-                retagMessage.textContent = 'Error processing images';
-                retagMessage.className = 'message error';
-                retagProgress.style.display = 'none';
-                retagAllBtn.disabled = false;
-            }
-        });
     }
 
     // Close buttons for other modals
