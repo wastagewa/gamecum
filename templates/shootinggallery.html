@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>3D Shooting Gallery{% if collection %} - {{ collection }}{% endif %}</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/svg+xml"  href="{{ url_for('static', filename='favicon.svg') }}">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        (function(){var t=null;try{t=localStorage.getItem('imgur.theme')}catch(e){}
+        if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}
+        if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');document.documentElement.style.colorScheme='dark';}
+        else{document.documentElement.removeAttribute('data-theme');document.documentElement.style.colorScheme='light';}})();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <!-- Three.js r134 — stable global THREE object -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+</head>
+<body>
+<nav class="navbar">
+  <div class="navbar-container">
+    <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+    <div class="navbar-menu">
+      <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+      <div class="navbar-dropdown">
+        <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+        <div class="navbar-dropdown-menu" id="collectionsDropdown"></div>
+      </div>
+      <a href="/tags" class="navbar-link"><i class="fas fa-tags"></i> Browse Tags</a>
+      {% if collection %}
+      <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+      <button class="navbar-link" id="gamesMenuBtn"><i class="fas fa-gamepad"></i> Games</button>
+      {% endif %}
+      <a href="/manage-collections" class="navbar-link"><i class="fas fa-cog"></i> Manage</a>
+      <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+    </div>
+  </div>
+</nav>
+
+<div id="sgContainer">
+  <div class="sg-content">
+
+    <div class="sg-title-bar">
+      <h1 class="sg-title"><i class="fas fa-crosshairs"></i> 3D Shooting Gallery</h1>
+      <p class="sg-subtitle">Shoot every target matching the card — don't hit the decoys!</p>
+    </div>
+
+    <!-- HUD: target card + stats -->
+    <div class="sg-hud">
+      <div class="sg-target-panel">
+        <span class="sg-target-label">TARGET</span>
+        <div class="sg-target-frame" id="sgTargetFrame">
+          <img id="sgTargetImg" src="" alt="">
+        </div>
+        <span class="sg-target-sub">Find &amp; shoot</span>
+      </div>
+      <div class="sg-stats">
+        <div class="stat-item"><span class="stat-label">Score</span><span class="stat-value" id="sgScore">0</span></div>
+        <div class="stat-item"><span class="stat-label">Time</span><span class="stat-value"><span id="sgTimer">60</span>s</span></div>
+        <div class="stat-item"><span class="stat-label">Lives</span><span class="stat-value" id="sgLives">❤️❤️❤️</span></div>
+        <div class="stat-item"><span class="stat-label">Combo</span><span class="stat-value sg-combo" id="sgCombo">×1</span></div>
+      </div>
+    </div>
+
+    <!-- Message -->
+    <div id="sgMessage" class="sg-message"></div>
+
+    <!-- 3D canvas area -->
+    <div class="sg-canvas-wrap" id="sgCanvasWrap">
+      <!-- renderer.domElement injected by JS -->
+
+      <!-- Custom crosshair (CSS overlay, pointer-events:none) -->
+      <div class="sg-crosshair" id="sgCrosshair">
+        <div class="sg-ch-h"></div>
+        <div class="sg-ch-v"></div>
+        <div class="sg-ch-ring"></div>
+        <div class="sg-ch-dot"></div>
+      </div>
+
+      <!-- Floating score texts (HTML divs projected from 3D world) -->
+      <div class="sg-floats-layer" id="sgFloatsLayer"></div>
+
+      <!-- Screen-flash overlay (wrong shot = red, correct = green) -->
+      <div class="sg-flash" id="sgFlash"></div>
+    </div>
+
+    <!-- Controls -->
+    <div class="sg-controls">
+      <button id="startSgBtn"      class="control-btn primary"><i class="fas fa-play"></i> Start</button>
+      <button id="resetSgBtn"      class="control-btn secondary" style="display:none"><i class="fas fa-redo"></i> Reset</button>
+      <button id="fullscreenSgBtn" class="control-btn secondary"><i class="fas fa-expand"></i> Fullscreen</button>
+      <button id="backSgBtn"       class="control-btn secondary"><i class="fas fa-arrow-left"></i> Back</button>
+    </div>
+
+    <!-- Settings -->
+    <div class="sg-settings">
+      <div class="settings-group sg-slider-group">
+        <label for="sgDuration">
+          Game length: <strong id="sgDurationVal">60</strong>s
+          <span class="slider-sub">(longer sessions = higher possible score)</span>
+        </label>
+        <input type="range" id="sgDuration" class="setting-slider" min="30" max="120" step="15" value="60">
+        <div class="slider-hints"><span>30s sprint</span><span>120s marathon</span></div>
+      </div>
+      <div class="settings-group">
+        <label>Username:</label>
+        <input type="text" id="sgUsername" class="setting-input" placeholder="Anonymous" maxlength="20">
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div id="gamesModal" class="games-modal">
+  <div class="games-modal-content">
+    <div class="games-modal-header">
+      <h2><i class="fas fa-gamepad"></i> Choose a Game</h2>
+      <button class="games-modal-close" id="gamesModalClose"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="games-grid" id="gamesGrid"></div>
+  </div>
+</div>
+
+<script>const CURRENT_COLLECTION = "{{ collection }}";</script>
+<script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+<script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+<script src="{{ url_for('static', filename='js/shootinggallery.js') }}"></script>
+<script src="{{ url_for('static', filename='js/games-modal.js') }}"></script>
+</body>
+</html>

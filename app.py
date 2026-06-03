@@ -553,7 +553,7 @@ def submit_score():
             return jsonify({'error': 'Invalid or missing collection'}), 400
         
         game_type = str(data.get('gameType', 'memory')).lower()
-        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap', 'spotlight', 'flashmemory', 'whoisthat', 'bracket', 'scratch', 'behindblur', 'silhouette', 'towerdefense', 'heatmap', 'gallerywalk', 'breakout', 'bubbleburst']
+        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap', 'spotlight', 'flashmemory', 'whoisthat', 'bracket', 'scratch', 'behindblur', 'silhouette', 'towerdefense', 'heatmap', 'gallerywalk', 'breakout', 'bubbleburst', 'shootinggallery']
         if game_type not in allowed_games:
             game_type = 'memory'
         
@@ -1522,6 +1522,13 @@ def collection_towerdefense(collection_name):
     return render_template('towerdefense.html', collection=collection)
 
 
+@app.route('/collection/<collection_name>/shootinggallery')
+def collection_shootinggallery(collection_name):
+    """3D Shooting Gallery: shoot target images on a fairground range, avoid decoys."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('shootinggallery.html', collection=collection)
+
+
 @app.route('/collection/<collection_name>/bubbleburst')
 def collection_bubbleburst(collection_name):
     """Bubble Burst: pop rising bubbles that contain the target image before they escape."""
@@ -1969,4 +1976,4 @@ if __name__ == '__main__':
     print("Cleaning up tags data...")
     _cleanup_tags()
     print("Tags cleanup complete!")
-    app.run(debug=True)
+    app.run()

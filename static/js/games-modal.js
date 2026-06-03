@@ -156,6 +156,12 @@ document.addEventListener('DOMContentLoaded', () => {
             url: `/collection/${_coll}/towerdefense`
         },
         {
+            name: '3D Shooting Gallery',
+            icon: 'fa-crosshairs',
+            description: 'A real 3D fairground shooting range — targets slide and pop behind barriers. Shoot the target, dodge the decoys!',
+            url: `/collection/${_coll}/shootinggallery`
+        },
+        {
             name: 'Bubble Burst',
             icon: 'fa-soap',
             description: 'Bubbles float up from the dark — pop every one containing the target image, dodge the decoys!',
