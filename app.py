@@ -364,7 +364,7 @@ def get_quote():
         collection = request.args.get('collection', '')
         
         # Load quotes from JSON - use gquotes.json for collections starting with 'G'
-        if collection and collection.startswith('G'):
+        if collection and collection.lower().startswith('g'):
             quotes_path = os.path.join('static', 'gquotes.json')
         else:
             quotes_path = os.path.join('static', 'quotes.json')

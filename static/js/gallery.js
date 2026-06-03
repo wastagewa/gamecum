@@ -26,6 +26,20 @@ document.addEventListener('DOMContentLoaded', () => {
         let currentImageIndex = 0;
         let allImages = [];
 
+        function imageQuoteUrl(imageUrl) {
+            try {
+                const path = new URL(imageUrl, window.location.origin).pathname;
+                const parts = path.split('/').filter(Boolean);
+                const idx = parts.indexOf('uploads');
+                if (idx !== -1 && parts.length > idx + 2) {
+                    const col = parts[idx + 1];
+                    const fn  = parts[idx + 2];
+                    return `/get-quote?collection=${encodeURIComponent(col)}&filename=${encodeURIComponent(fn)}`;
+                }
+            } catch (e) {}
+            return '/get-quote';
+        }
+
         function updateNavigationButtons() {
             if (prevBtn && nextBtn) {
                 prevBtn.style.display = currentImageIndex > 0 ? 'flex' : 'none';
@@ -52,9 +66,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 modalImg.src = allImages[currentImageIndex];
                 updateNavigationButtons();
             
-                // Get a new random quote
+                // Get a tag-matched quote for this image
                 try {
-                    const quoteResponse = await fetch('/get-quote');
+                    const quoteResponse = await fetch(imageQuoteUrl(allImages[currentImageIndex]));
                     const quoteData = await quoteResponse.json();
                     if (quoteData.quote) {
                         const quoteElement = document.getElementById('modalQuote');
@@ -102,9 +116,9 @@ document.addEventListener('DOMContentLoaded', () => {
             allImages = Array.from(document.querySelectorAll('.gallery-image')).map(img => img.src);
             updateNavigationButtons();
 
-            // Fetch a random quote and show it (if available)
+            // Fetch a tag-matched quote for this image
             try {
-                const quoteResponse = await fetch('/get-quote');
+                const quoteResponse = await fetch(imageQuoteUrl(imageUrl));
                 const quoteData = await quoteResponse.json();
                 if (quoteData && quoteData.quote) {
                     const quoteElement = document.getElementById('modalQuote');
