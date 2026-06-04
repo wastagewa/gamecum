@@ -49,10 +49,61 @@
         return 'fas fa-folder';
     }
 
+    async function loadUserNav() {
+        const menu = document.querySelector('.navbar-menu');
+        if (!menu) return;
+        try {
+            const res = await fetch('/api/auth/me');
+            const d = await res.json();
+
+            // Remove any existing user-nav element
+            document.getElementById('user-nav-item')?.remove();
+
+            const el = document.createElement('div');
+            el.id = 'user-nav-item';
+            el.style.cssText = 'display:flex;align-items:center;gap:.5rem;';
+
+            if (d.authenticated) {
+                const avatar = d.avatar_url
+                    ? `<img src="${d.avatar_url}" style="width:26px;height:26px;border-radius:50%;object-fit:cover;" alt="">`
+                    : `<span style="width:26px;height:26px;border-radius:50%;background:var(--primary-color);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;">${d.username[0].toUpperCase()}</span>`;
+                const adminLink = d.is_admin
+                    ? `<a href="/admin" class="navbar-link" title="Admin"><i class="fas fa-shield-alt"></i></a>`
+                    : '';
+                el.innerHTML = `
+                    ${adminLink}
+                    <span class="navbar-link" style="cursor:default;gap:.45rem;">
+                        ${avatar}
+                        <span style="font-size:.85rem;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.username}</span>
+                    </span>
+                    <a href="/logout" class="navbar-link" title="Logout"><i class="fas fa-sign-out-alt"></i></a>`;
+            } else if (d.is_guest) {
+                el.innerHTML = `
+                    <span class="navbar-link" style="cursor:default;font-size:.85rem;color:var(--muted-text);">
+                        <i class="fas fa-user-secret"></i> ${d.username}
+                    </span>
+                    <a href="/logout" class="navbar-link" title="Sign In"><i class="fas fa-sign-in-alt"></i></a>`;
+            } else {
+                el.innerHTML = `<a href="/login" class="navbar-link"><i class="fas fa-sign-in-alt"></i> Sign In</a>`;
+            }
+
+            // Insert before theme toggle
+            const themeBtn = menu.querySelector('.navbar-theme-toggle');
+            if (themeBtn) menu.insertBefore(el, themeBtn);
+            else menu.appendChild(el);
+
+            // Start heartbeat for authenticated users
+            if (d.authenticated) {
+                setInterval(() => fetch('/api/heartbeat', {method:'POST'}), 120000);
+            }
+        } catch (e) { /* silent */ }
+    }
+
     // Load collections when DOM is ready
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', loadCollections);
+        document.addEventListener('DOMContentLoaded', () => { loadCollections(); loadUserNav(); });
     } else {
         loadCollections();
+        loadUserNav();
     }
 })();

@@ -1,16 +1,20 @@
-from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for
+from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for, session
 import os
 import json
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 import uuid
 import random
 import re
+from functools import wraps
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
 import psycopg2
 import psycopg2.pool
 import psycopg2.extras
+from flask_login import LoginManager, UserMixin, login_user, logout_user, current_user
+from authlib.integrations.flask_client import OAuth
 
 # Load .env file if present (python-dotenv)
 try:
@@ -35,6 +39,24 @@ cloudinary.config(
     api_key=os.environ.get('CLOUDINARY_API_KEY'),
     api_secret=os.environ.get('CLOUDINARY_API_SECRET'),
     secure=True
+)
+
+# ── Auth setup ────────────────────────────────────────────────────────────────
+
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+login_manager = LoginManager(app)
+login_manager.login_view = 'login_page'
+login_manager.login_message = ''
+
+_oauth = OAuth(app)
+google_oauth = _oauth.register(
+    name='google',
+    client_id=os.environ.get('GOOGLE_CLIENT_ID'),
+    client_secret=os.environ.get('GOOGLE_CLIENT_SECRET'),
+    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    client_kwargs={'scope': 'openid email profile'},
 )
 
 # ── Database layer ────────────────────────────────────────────────────────────
@@ -89,8 +111,45 @@ def init_db():
                 collection_name VARCHAR(255) NOT NULL,
                 game_type       VARCHAR(100) NOT NULL,
                 data            JSONB NOT NULL DEFAULT '{}',
+                user_id         INTEGER,
                 created_at      TIMESTAMPTZ DEFAULT NOW()
             )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id                  SERIAL PRIMARY KEY,
+                email               VARCHAR(255) UNIQUE NOT NULL,
+                username            VARCHAR(100) NOT NULL,
+                password_hash       VARCHAR(255),
+                google_id           VARCHAR(255) UNIQUE,
+                is_admin            BOOLEAN DEFAULT FALSE,
+                is_permanent_admin  BOOLEAN DEFAULT FALSE,
+                avatar_url          TEXT,
+                created_at          TIMESTAMPTZ DEFAULT NOW(),
+                last_seen           TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                id              SERIAL PRIMARY KEY,
+                user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                ip_address      VARCHAR(100),
+                user_agent      TEXT,
+                logged_in_at    TIMESTAMPTZ DEFAULT NOW(),
+                last_seen_at    TIMESTAMPTZ DEFAULT NOW(),
+                logged_out_at   TIMESTAMPTZ,
+                is_active       BOOLEAN DEFAULT TRUE
+            )
+        """)
+        # Add uploaded_by to images if not present (safe on existing DBs)
+        cur.execute("""
+            ALTER TABLE images
+            ADD COLUMN IF NOT EXISTS uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+        """)
+        # Add user_id FK to scores if not present
+        cur.execute("""
+            ALTER TABLE scores
+            ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE SET NULL
         """)
         cur.close()
         print("DB tables ready.")
@@ -183,17 +242,18 @@ def _save_tags(tags: dict):
     finally:
         _release_db(conn)
 
-def _db_insert_image(collection: str, filename: str, url: str):
+def _db_insert_image(collection: str, filename: str, url: str, user_id: int = None):
     """Insert a new image row, ensuring its collection exists first."""
     _ensure_collection(collection)
     conn = _get_db()
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO images (collection_name, filename, url, tags, locked)
-            VALUES (%s, %s, %s, '{}', FALSE)
-            ON CONFLICT (collection_name, filename) DO UPDATE SET url = EXCLUDED.url
-        """, (collection, filename, url))
+            INSERT INTO images (collection_name, filename, url, tags, locked, uploaded_by)
+            VALUES (%s, %s, %s, '{}', FALSE, %s)
+            ON CONFLICT (collection_name, filename) DO UPDATE
+                SET url = EXCLUDED.url, uploaded_by = COALESCE(EXCLUDED.uploaded_by, images.uploaded_by)
+        """, (collection, filename, url, user_id))
         conn.commit()
     finally:
         _release_db(conn)
@@ -319,6 +379,105 @@ def _load_scores():
 def _save_scores(scores: dict):
     pass  # no-op — scores are written directly in submit_score()
 
+# ── User model ────────────────────────────────────────────────────────────────
+
+class User(UserMixin):
+    def __init__(self, row: dict):
+        self.id                 = row['id']
+        self.email              = row['email']
+        self.username           = row['username']
+        self.is_admin           = bool(row.get('is_admin', False))
+        self.is_permanent_admin = bool(row.get('is_permanent_admin', False))
+        self.avatar_url         = row.get('avatar_url')
+
+    def get_id(self):
+        return str(self.id)
+
+@login_manager.user_loader
+def load_user(user_id):
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM users WHERE id = %s", (int(user_id),))
+        row = cur.fetchone()
+        return User(dict(row)) if row else None
+    except Exception:
+        return None
+    finally:
+        _release_db(conn)
+
+# ── Auth decorators ───────────────────────────────────────────────────────────
+
+def admin_required(f):
+    """For API routes — returns JSON 403 if not admin."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return jsonify({'error': 'Authentication required'}), 401
+        if not current_user.is_admin:
+            return jsonify({'error': 'Admin access required'}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+def auth_or_guest(f):
+    """For page routes — redirect to /login if neither logged in nor a guest session."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not current_user.is_authenticated and not session.get('is_guest'):
+            return redirect(url_for('login_page'))
+        return f(*args, **kwargs)
+    return decorated
+
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+
+def _seed_admin():
+    """Ensure the permanent admin account exists."""
+    conn = psycopg2.connect(_db_url())
+    try:
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO users (email, username, password_hash, is_admin, is_permanent_admin)
+            VALUES (%s, %s, %s, TRUE, TRUE)
+            ON CONFLICT (email) DO UPDATE
+                SET is_admin           = TRUE,
+                    is_permanent_admin = TRUE,
+                    password_hash      = EXCLUDED.password_hash
+        """, ('wastagemail2@gmail.com', 'Admin',
+               generate_password_hash('LoveGunOSM@123')))
+        cur.close()
+    except Exception as e:
+        print(f"Admin seed failed: {e}")
+    finally:
+        conn.close()
+
+def _record_login(user_id: int):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO user_sessions (user_id, ip_address, user_agent)
+            VALUES (%s, %s, %s)
+        """, (user_id, request.remote_addr,
+               (request.user_agent.string or '')[:500]))
+        cur.execute("UPDATE users SET last_seen = NOW() WHERE id = %s", (user_id,))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _record_logout(user_id: int):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE user_sessions
+            SET is_active = FALSE, logged_out_at = NOW()
+            WHERE user_id = %s AND is_active = TRUE
+        """, (user_id,))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
 def _get_image_key(collection: str, filename: str):
     """Generate a unique key for an image."""
     return f"{collection}/{filename}" if collection else filename
@@ -352,6 +511,7 @@ def _get_collection_image_urls(collection: str):
     return urls
 
 @app.route('/')
+@auth_or_guest
 def index():
     # Render a home page that lists collections and image counts, plus top scores.
     scores_data = _load_scores()
@@ -387,6 +547,7 @@ def _safe_collection_name(name: str):
 
 
 @app.route('/collection/<collection_name>')
+@auth_or_guest
 def collection_view(collection_name):
     collection = _safe_collection_name(collection_name)
     tags_data = _load_tags()
@@ -445,7 +606,8 @@ def upload_file(collection=None):
         url = result['secure_url']
 
         if collection:
-            _db_insert_image(collection, filename, url)
+            user_id = current_user.id if current_user.is_authenticated else None
+            _db_insert_image(collection, filename, url, user_id=user_id)
 
         return jsonify({
             'success': True,
@@ -595,6 +757,7 @@ def _find_matching_quote_key(tag, quote_keys):
 
 
 @app.route('/create-collection', methods=['POST'])
+@admin_required
 def create_collection():
     try:
         data = request.get_json() or {}
@@ -629,10 +792,11 @@ def _calculate_score(time_val: int, wrong_val: int, pairs: int, match_size: int)
 
 @app.route('/api/submit-score', methods=['POST'])
 def submit_score():
-    """Accept a finished game score and compute/persist top scores per collection per game type.
-    Expects JSON: { collection: str, gameType: str, time: int, wrong: int, moves: int, username: str, pairs: int, matchSize: int, score: int, level: int }
-    Stores top 10 scores per collection per game type (leaderboard).
-    """
+    """Accept a finished game score — guests get a response but scores are not saved."""
+    # Guests do not have scores persisted
+    if not current_user.is_authenticated:
+        return jsonify({'success': True, 'updated': False, 'score': 0,
+                        'leaderboard': [], 'guest': True})
     try:
         data = request.get_json() or {}
         collection = _safe_collection_name(str(data.get('collection') or ''))
@@ -715,8 +879,8 @@ def submit_score():
             cur = conn.cursor()
             # Insert new score row
             cur.execute(
-                "INSERT INTO scores (collection_name, game_type, data) VALUES (%s, %s, %s)",
-                (collection, game_type, json.dumps(entry))
+                "INSERT INTO scores (collection_name, game_type, data, user_id) VALUES (%s, %s, %s, %s)",
+                (collection, game_type, json.dumps(entry), current_user.id)
             )
             # Keep only top 10 for this (collection, game_type)
             cur.execute("""
@@ -947,6 +1111,7 @@ def manage_collections():
 
 
 @app.route('/api/collections/create', methods=['POST'])
+@admin_required
 def api_create_collection():
     """Register a new collection (Cloudinary folder is created on first upload)."""
     data = request.get_json()
@@ -970,6 +1135,7 @@ def api_create_collection():
 
 
 @app.route('/api/collections/rename', methods=['POST'])
+@admin_required
 def api_rename_collection():
     """Rename a collection: moves all Cloudinary assets and updates tags.json."""
     data = request.get_json()
@@ -1046,6 +1212,7 @@ def api_rename_collection():
 
 
 @app.route('/api/collections/delete', methods=['POST'])
+@admin_required
 def api_delete_collection():
     """Delete a collection and all its Cloudinary images."""
     data = request.get_json()
@@ -1114,6 +1281,7 @@ def api_collection_images(collection_name):
 
 
 @app.route('/api/images/<collection_name>/<filename>/tags', methods=['POST'])
+@admin_required
 def api_update_image_tags(collection_name, filename):
     """Update tags for a specific image."""
     data = request.get_json()
@@ -1147,6 +1315,7 @@ def api_retag_all_images(collection_name):
 
 
 @app.route('/api/images/<collection_name>/<filename>/lock', methods=['POST'])
+@admin_required
 def api_lock_image(collection_name, filename):
     """Lock an image so it won't be retagged during retag-all."""
     safe_name = _safe_collection_name(collection_name)
@@ -1157,6 +1326,7 @@ def api_lock_image(collection_name, filename):
 
 
 @app.route('/api/images/<collection_name>/<filename>/unlock', methods=['POST'])
+@admin_required
 def api_unlock_image(collection_name, filename):
     """Unlock an image so it can be retagged."""
     safe_name = _safe_collection_name(collection_name)
@@ -1176,6 +1346,7 @@ def api_get_lock_status(collection_name, filename):
 
 
 @app.route('/api/images/<collection_name>/<source_filename>/copy-tags/<target_filename>', methods=['POST'])
+@admin_required
 def api_copy_image_tags(collection_name, source_filename, target_filename):
     """Copy tags from source image to target image."""
     safe_name = _safe_collection_name(collection_name)
@@ -1933,9 +2104,247 @@ def api_chat_send():
         return jsonify({'error': 'Unexpected error. Please try again.'}), 500
 
 
+# ── Auth routes ───────────────────────────────────────────────────────────────
+
+@app.route('/login')
+def login_page():
+    if current_user.is_authenticated or session.get('is_guest'):
+        return redirect(url_for('index'))
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    if current_user.is_authenticated:
+        _record_logout(current_user.id)
+        logout_user()
+    session.pop('guest_username', None)
+    session.pop('is_guest', None)
+    return redirect(url_for('login_page'))
+
+@app.route('/api/auth/login', methods=['POST'])
+def api_login():
+    data = request.get_json() or {}
+    email    = str(data.get('email', '')).strip().lower()
+    password = str(data.get('password', ''))
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM users WHERE email = %s", (email,))
+        row = cur.fetchone()
+    finally:
+        _release_db(conn)
+    if not row or not row.get('password_hash'):
+        return jsonify({'error': 'Invalid email or password'}), 401
+    if not check_password_hash(row['password_hash'], password):
+        return jsonify({'error': 'Invalid email or password'}), 401
+    user = User(dict(row))
+    login_user(user, remember=True)
+    _record_login(user.id)
+    return jsonify({'success': True, 'is_admin': user.is_admin})
+
+@app.route('/api/auth/register', methods=['POST'])
+def api_register():
+    data     = request.get_json() or {}
+    email    = str(data.get('email', '')).strip().lower()
+    username = str(data.get('username', '')).strip()[:50]
+    password = str(data.get('password', ''))
+    if not email or not username or not password:
+        return jsonify({'error': 'Email, username and password are required'}), 400
+    if len(password) < 6:
+        return jsonify({'error': 'Password must be at least 6 characters'}), 400
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cur.execute("""
+                INSERT INTO users (email, username, password_hash)
+                VALUES (%s, %s, %s) RETURNING *
+            """, (email, username, generate_password_hash(password)))
+            row = dict(cur.fetchone())
+            conn.commit()
+        except psycopg2.IntegrityError:
+            conn.rollback()
+            return jsonify({'error': 'Email already registered'}), 409
+    finally:
+        _release_db(conn)
+    user = User(row)
+    login_user(user, remember=True)
+    _record_login(user.id)
+    return jsonify({'success': True})
+
+@app.route('/api/auth/guest', methods=['POST'])
+def api_guest():
+    data = request.get_json() or {}
+    name = str(data.get('username', 'Guest')).strip()[:30] or 'Guest'
+    session['guest_username'] = name
+    session['is_guest'] = True
+    return jsonify({'success': True})
+
+@app.route('/api/auth/me')
+def api_auth_me():
+    if current_user.is_authenticated:
+        return jsonify({
+            'authenticated': True,
+            'id':         current_user.id,
+            'username':   current_user.username,
+            'email':      current_user.email,
+            'is_admin':   current_user.is_admin,
+            'avatar_url': current_user.avatar_url,
+        })
+    if session.get('is_guest'):
+        return jsonify({'authenticated': False, 'is_guest': True,
+                        'username': session.get('guest_username', 'Guest')})
+    return jsonify({'authenticated': False, 'is_guest': False})
+
+@app.route('/api/heartbeat', methods=['POST'])
+def api_heartbeat():
+    if current_user.is_authenticated:
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("UPDATE users SET last_seen = NOW() WHERE id = %s", (current_user.id,))
+            cur.execute("""UPDATE user_sessions SET last_seen_at = NOW()
+                           WHERE user_id = %s AND is_active = TRUE""", (current_user.id,))
+            conn.commit()
+        finally:
+            _release_db(conn)
+    return '', 204
+
+@app.route('/auth/google')
+def auth_google():
+    redirect_uri = url_for('auth_google_callback', _external=True)
+    return google_oauth.authorize_redirect(redirect_uri)
+
+@app.route('/auth/google/callback')
+def auth_google_callback():
+    try:
+        token    = google_oauth.authorize_access_token()
+        userinfo = token.get('userinfo') or {}
+        google_id = userinfo.get('sub')
+        email     = (userinfo.get('email') or '').lower()
+        name      = userinfo.get('name') or email.split('@')[0]
+        avatar    = userinfo.get('picture')
+        if not google_id or not email:
+            return redirect(url_for('login_page') + '?error=google_failed')
+        conn = _get_db()
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("SELECT * FROM users WHERE google_id = %s OR email = %s",
+                        (google_id, email))
+            row = cur.fetchone()
+            if row:
+                row = dict(row)
+                if not row.get('google_id'):
+                    conn.cursor().execute(
+                        "UPDATE users SET google_id=%s, avatar_url=%s WHERE id=%s",
+                        (google_id, avatar, row['id']))
+                    conn.commit()
+                    row.update({'google_id': google_id, 'avatar_url': avatar})
+            else:
+                cur2 = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cur2.execute("""
+                    INSERT INTO users (email, username, google_id, avatar_url)
+                    VALUES (%s, %s, %s, %s) RETURNING *
+                """, (email, name, google_id, avatar))
+                row = dict(cur2.fetchone())
+                conn.commit()
+        finally:
+            _release_db(conn)
+        user = User(row)
+        login_user(user, remember=True)
+        _record_login(user.id)
+        return redirect(url_for('index'))
+    except Exception as e:
+        print(f"Google auth error: {e}")
+        return redirect(url_for('login_page') + '?error=google_failed')
+
+# ── Admin routes ──────────────────────────────────────────────────────────────
+
+@app.route('/admin')
+def admin_dashboard():
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT COUNT(*) AS n FROM users")
+        total_users = cur.fetchone()['n']
+        cur.execute("SELECT COUNT(*) AS n FROM users WHERE is_admin=TRUE")
+        total_admins = cur.fetchone()['n']
+        cur.execute("SELECT COUNT(*) AS n FROM users WHERE last_seen > NOW() - INTERVAL '5 minutes'")
+        online_now = cur.fetchone()['n']
+        cur.execute("SELECT COUNT(*) AS n FROM images")
+        total_images = cur.fetchone()['n']
+        cur.execute("SELECT COUNT(*) AS n FROM scores")
+        total_scores = cur.fetchone()['n']
+        cur.execute("""
+            SELECT u.id, u.email, u.username, u.is_admin, u.is_permanent_admin,
+                   u.avatar_url, u.created_at, u.last_seen,
+                   (SELECT COUNT(*) FROM images i WHERE i.uploaded_by = u.id)  AS image_count,
+                   (SELECT COUNT(*) FROM scores s WHERE s.user_id     = u.id)  AS score_count,
+                   (u.last_seen > NOW() - INTERVAL '5 minutes')                AS is_online
+            FROM users u ORDER BY u.last_seen DESC NULLS LAST
+        """)
+        users = [dict(r) for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+    return render_template('admin.html',
+        total_users=total_users, total_admins=total_admins,
+        online_now=online_now, total_images=total_images,
+        total_scores=total_scores, users=users)
+
+@app.route('/admin/user/<int:user_id>')
+def admin_user_detail(user_id):
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+        target = cur.fetchone()
+        if not target:
+            return "User not found", 404
+        target = dict(target)
+        cur.execute("""SELECT * FROM user_sessions WHERE user_id=%s
+                       ORDER BY logged_in_at DESC LIMIT 30""", (user_id,))
+        sessions = [dict(r) for r in cur.fetchall()]
+        cur.execute("""SELECT collection_name, filename, url, created_at
+                       FROM images WHERE uploaded_by=%s ORDER BY created_at DESC LIMIT 50""", (user_id,))
+        uploads = [dict(r) for r in cur.fetchall()]
+        cur.execute("""SELECT collection_name, game_type, data, created_at
+                       FROM scores WHERE user_id=%s ORDER BY created_at DESC LIMIT 50""", (user_id,))
+        scores = [dict(r) for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+    return render_template('admin_user_detail.html',
+        target_user=target, sessions=sessions, uploads=uploads, scores=scores)
+
+@app.route('/api/admin/user/<int:user_id>/set-admin', methods=['POST'])
+@admin_required
+def api_set_admin(user_id):
+    data = request.get_json() or {}
+    make_admin = bool(data.get('is_admin', False))
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT is_permanent_admin FROM users WHERE id=%s", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({'error': 'User not found'}), 404
+        if row['is_permanent_admin']:
+            return jsonify({'error': 'Cannot modify permanent admin'}), 403
+        conn.cursor().execute("UPDATE users SET is_admin=%s WHERE id=%s", (make_admin, user_id))
+        conn.commit()
+    finally:
+        _release_db(conn)
+    return jsonify({'success': True, 'is_admin': make_admin})
+
+# ── Startup ───────────────────────────────────────────────────────────────────
+
 # Initialise DB tables on every startup (safe — uses IF NOT EXISTS)
 try:
     init_db()
+    _seed_admin()
 except Exception as _init_err:
     print(f"WARNING: DB init skipped: {_init_err}")
 

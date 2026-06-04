@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Admin Dashboard — ImgurMemory</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script>
+    (function(){var t=null;try{t=localStorage.getItem('imgur.theme');}catch(e){}
+    if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}})();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    .adm-wrap{max-width:1200px;margin:0 auto;padding:2rem 1.5rem;}
+    .adm-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:2rem;flex-wrap:wrap;gap:1rem;}
+    .adm-header h1{font-size:1.7rem;font-weight:700;}
+    .adm-header h1 i{color:var(--primary-color);margin-right:.5rem;}
+    .adm-back{color:var(--muted-text);text-decoration:none;font-size:.9rem;display:flex;align-items:center;gap:.4rem;}
+    .adm-back:hover{color:var(--primary-color);}
+
+    /* Stats */
+    .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:2rem;}
+    .stat{
+      background:var(--surface-color);border-radius:1rem;padding:1.2rem 1.4rem;
+      border:1px solid rgba(164,6,110,.1);
+      box-shadow:0 2px 12px var(--shadow-color);
+    }
+    .stat-icon{font-size:1.5rem;color:var(--primary-color);margin-bottom:.5rem;}
+    .stat-val{font-size:1.9rem;font-weight:800;line-height:1;}
+    .stat-lbl{font-size:.78rem;color:var(--muted-text);margin-top:.3rem;text-transform:uppercase;letter-spacing:.05em;}
+
+    /* Search */
+    .toolbar{display:flex;gap:.8rem;align-items:center;margin-bottom:1.2rem;flex-wrap:wrap;}
+    .search-box{
+      flex:1;min-width:200px;padding:.62rem 1rem;
+      background:var(--surface-color);border:1.5px solid rgba(164,6,110,.15);
+      border-radius:.7rem;color:var(--text-color);font-size:.9rem;outline:none;
+    }
+    .search-box:focus{border-color:var(--primary-color);}
+
+    /* Table */
+    .tbl-wrap{overflow-x:auto;background:var(--surface-color);border-radius:1.1rem;
+      border:1px solid rgba(164,6,110,.1);box-shadow:0 2px 12px var(--shadow-color);}
+    table{width:100%;border-collapse:collapse;font-size:.88rem;}
+    th{padding:.85rem 1rem;text-align:left;font-size:.75rem;text-transform:uppercase;
+      letter-spacing:.06em;color:var(--muted-text);border-bottom:1px solid rgba(164,6,110,.1);
+      white-space:nowrap;}
+    td{padding:.8rem 1rem;border-bottom:1px solid rgba(164,6,110,.06);vertical-align:middle;}
+    tr:last-child td{border-bottom:none;}
+    tr:hover td{background:rgba(164,6,110,.03);}
+
+    /* Avatar */
+    .av{width:34px;height:34px;border-radius:50%;object-fit:cover;
+        background:linear-gradient(135deg,var(--primary-color),var(--secondary-color));
+        display:inline-flex;align-items:center;justify-content:center;
+        color:#fff;font-size:.85rem;font-weight:700;flex-shrink:0;}
+    .user-cell{display:flex;align-items:center;gap:.65rem;}
+    .user-info .name{font-weight:600;}
+    .user-info .email{font-size:.78rem;color:var(--muted-text);}
+
+    /* Badges */
+    .badge{display:inline-block;padding:.2rem .6rem;border-radius:.4rem;font-size:.73rem;font-weight:700;white-space:nowrap;}
+    .badge-admin{background:rgba(164,6,110,.15);color:var(--primary-color);}
+    .badge-perm{background:linear-gradient(135deg,var(--primary-color),var(--secondary-color));color:#fff;}
+    .badge-user{background:rgba(100,100,100,.12);color:var(--muted-text);}
+
+    /* Online dot */
+    .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:.4rem;}
+    .dot-on{background:#22c55e;}
+    .dot-off{background:#6b7280;}
+
+    /* Action buttons */
+    .action-btn{
+      padding:.3rem .75rem;border-radius:.5rem;border:1.5px solid;
+      font-size:.78rem;font-weight:700;cursor:pointer;transition:all .18s;
+      display:inline-flex;align-items:center;gap:.3rem;
+    }
+    .action-btn.make-admin{color:var(--primary-color);border-color:var(--primary-color);background:transparent;}
+    .action-btn.make-admin:hover{background:var(--primary-color);color:#fff;}
+    .action-btn.rem-admin{color:#ef4444;border-color:#ef4444;background:transparent;}
+    .action-btn.rem-admin:hover{background:#ef4444;color:#fff;}
+    .action-btn.view{color:var(--secondary-color);border-color:var(--secondary-color);background:transparent;}
+    .action-btn.view:hover{background:var(--secondary-color);color:#fff;}
+    .action-btn:disabled{opacity:.4;cursor:not-allowed;}
+    .actions{display:flex;gap:.45rem;flex-wrap:wrap;}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-container">
+      <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+      <div class="navbar-menu">
+        <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+        <a href="/admin" class="navbar-link active"><i class="fas fa-shield-alt"></i> Admin</a>
+        <a href="/logout" class="navbar-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="adm-wrap">
+    <div class="adm-header">
+      <h1><i class="fas fa-shield-alt"></i> Admin Dashboard</h1>
+      <span style="color:var(--muted-text);font-size:.9rem;">Signed in as <strong>{{ current_user.email }}</strong></span>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-icon"><i class="fas fa-users"></i></div>
+        <div class="stat-val">{{ total_users }}</div>
+        <div class="stat-lbl">Total Users</div>
+      </div>
+      <div class="stat">
+        <div class="stat-icon"><i class="fas fa-user-shield"></i></div>
+        <div class="stat-val">{{ total_admins }}</div>
+        <div class="stat-lbl">Admins</div>
+      </div>
+      <div class="stat">
+        <div class="stat-icon" style="color:#22c55e;"><i class="fas fa-circle"></i></div>
+        <div class="stat-val">{{ online_now }}</div>
+        <div class="stat-lbl">Online Now</div>
+      </div>
+      <div class="stat">
+        <div class="stat-icon"><i class="fas fa-images"></i></div>
+        <div class="stat-val">{{ total_images }}</div>
+        <div class="stat-lbl">Total Images</div>
+      </div>
+      <div class="stat">
+        <div class="stat-icon"><i class="fas fa-trophy"></i></div>
+        <div class="stat-val">{{ total_scores }}</div>
+        <div class="stat-lbl">Total Scores</div>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <input class="search-box" type="text" id="search" placeholder="Search by name or email…" oninput="filterUsers()">
+      <span style="font-size:.85rem;color:var(--muted-text);">{{ users|length }} users</span>
+    </div>
+
+    <!-- Users table -->
+    <div class="tbl-wrap">
+      <table id="utbl">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Role</th>
+            <th>Status</th>
+            <th>Last Seen</th>
+            <th>Images</th>
+            <th>Scores</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in users %}
+          <tr data-name="{{ u.username|lower }}" data-email="{{ u.email|lower }}">
+            <td>
+              <div class="user-cell">
+                {% if u.avatar_url %}
+                  <img src="{{ u.avatar_url }}" class="av" alt="">
+                {% else %}
+                  <div class="av">{{ u.username[0]|upper }}</div>
+                {% endif %}
+                <div class="user-info">
+                  <div class="name">{{ u.username }}</div>
+                  <div class="email">{{ u.email }}</div>
+                </div>
+              </div>
+            </td>
+            <td>
+              {% if u.is_permanent_admin %}
+                <span class="badge badge-perm"><i class="fas fa-crown"></i> Super Admin</span>
+              {% elif u.is_admin %}
+                <span class="badge badge-admin"><i class="fas fa-shield-alt"></i> Admin</span>
+              {% else %}
+                <span class="badge badge-user">User</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if u.is_online %}
+                <span class="dot dot-on"></span> Online
+              {% else %}
+                <span class="dot dot-off"></span> Offline
+              {% endif %}
+            </td>
+            <td style="color:var(--muted-text);white-space:nowrap;">
+              {% if u.last_seen %}{{ u.last_seen.strftime('%d %b %Y %H:%M') }}{% else %}—{% endif %}
+            </td>
+            <td>{{ u.image_count }}</td>
+            <td>{{ u.score_count }}</td>
+            <td>
+              <div class="actions">
+                <a href="/admin/user/{{ u.id }}" class="action-btn view">
+                  <i class="fas fa-eye"></i> View
+                </a>
+                {% if not u.is_permanent_admin %}
+                  {% if u.is_admin %}
+                    <button class="action-btn rem-admin"
+                      onclick="setAdmin({{ u.id }}, false, this)">
+                      <i class="fas fa-user-minus"></i> Remove Admin
+                    </button>
+                  {% else %}
+                    <button class="action-btn make-admin"
+                      onclick="setAdmin({{ u.id }}, true, this)">
+                      <i class="fas fa-user-plus"></i> Make Admin
+                    </button>
+                  {% endif %}
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script>
+    function filterUsers(){
+      const q=document.getElementById('search').value.toLowerCase();
+      document.querySelectorAll('#utbl tbody tr').forEach(r=>{
+        const match=r.dataset.name.includes(q)||r.dataset.email.includes(q);
+        r.style.display=match?'':'none';
+      });
+    }
+
+    async function setAdmin(userId, makeAdmin, btn){
+      btn.disabled=true;
+      try{
+        const r=await fetch(`/api/admin/user/${userId}/set-admin`,{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({is_admin:makeAdmin})
+        });
+        const d=await r.json();
+        if(d.success){location.reload();}
+        else{alert(d.error||'Failed');btn.disabled=false;}
+      }catch{alert('Network error');btn.disabled=false;}
+    }
+  </script>
+</body>
+</html>

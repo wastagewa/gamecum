@@ -48,3 +48,5 @@ image_recognition_model/
 
 *.jpg
 *.png
+
+.claude/

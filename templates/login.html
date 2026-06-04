@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome — ImgurMemory</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script>
+    (function(){
+      var t=null;try{t=localStorage.getItem('imgur.theme');}catch(e){}
+      if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+      if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}
+    })();
+  </script>
+  <style>
+    :root{
+      --pri:#a4066e;--sec:#ff6b81;--bg:#fff7fb;--surf:#ffffff;
+      --txt:#2b2233;--muted:#5c5361;--ring:rgba(255,107,129,.45);
+    }
+    [data-theme="dark"]{
+      --pri:#ff8ab3;--sec:#caa0ff;--bg:#0e0b12;--surf:#15111b;
+      --txt:#f5ecff;--muted:#c7bdd3;--ring:rgba(202,160,255,.35);
+    }
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{
+      background:var(--bg);color:var(--txt);
+      font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;
+      min-height:100vh;overflow:hidden;
+    }
+    canvas#hc{position:fixed;inset:0;pointer-events:none;z-index:0;}
+
+    /* ── Layout ── */
+    .wrap{display:grid;grid-template-columns:1fr 1fr;min-height:100vh;position:relative;z-index:1;}
+    @media(max-width:720px){.wrap{grid-template-columns:1fr;}.hero{display:none!important;}}
+
+    /* ── Hero panel ── */
+    .hero{
+      background:linear-gradient(145deg,#120018 0%,#2a0040 45%,#0d001a 100%);
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      padding:3rem;position:relative;overflow:hidden;
+    }
+    .hero::before{
+      content:'';position:absolute;inset:0;
+      background:radial-gradient(ellipse at 40% 50%,rgba(255,138,179,.12) 0%,transparent 65%);
+    }
+    .hero-inner{position:relative;z-index:1;text-align:center;}
+    .hero-icon{font-size:5rem;color:var(--pri);animation:beat 1.6s ease-in-out infinite;display:block;margin-bottom:1.4rem;}
+    @keyframes beat{0%,100%{transform:scale(1);}50%{transform:scale(1.12);}}
+    .hero h1{
+      font-size:2.4rem;font-weight:800;
+      background:linear-gradient(135deg,var(--pri),var(--sec));
+      -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+      margin-bottom:.9rem;
+    }
+    .hero p{color:rgba(245,236,255,.6);font-size:1.05rem;line-height:1.65;max-width:290px;margin:0 auto;}
+    .rose-row{display:flex;gap:1.1rem;justify-content:center;margin-top:2.2rem;font-size:2rem;opacity:.35;}
+    .rose-row span{display:inline-block;animation:float 3s ease-in-out infinite;}
+    .rose-row span:nth-child(2n){animation-delay:.6s;}
+    .rose-row span:nth-child(3n){animation-delay:1.2s;}
+    .rose-row span:nth-child(4n){animation-delay:1.8s;}
+    @keyframes float{0%,100%{transform:translateY(0) rotate(0deg);}50%{transform:translateY(-9px) rotate(6deg);}}
+
+    /* ── Form panel ── */
+    .form-panel{display:flex;align-items:center;justify-content:center;padding:2rem;background:var(--bg);}
+    .card{
+      width:100%;max-width:400px;
+      background:var(--surf);border-radius:1.4rem;padding:2.2rem 2rem;
+      box-shadow:0 18px 55px rgba(164,6,110,.14);
+      border:1px solid rgba(164,6,110,.1);
+    }
+    .card-title{font-size:1.4rem;font-weight:700;margin-bottom:.25rem;}
+    .card-sub{font-size:.85rem;color:var(--muted);margin-bottom:1.6rem;}
+
+    /* ── Tabs ── */
+    .tabs{display:flex;gap:.2rem;background:var(--bg);padding:.22rem;border-radius:.7rem;margin-bottom:1.6rem;}
+    .tab{
+      flex:1;padding:.55rem .9rem;border:none;border-radius:.5rem;
+      background:transparent;color:var(--muted);cursor:pointer;
+      font-size:.875rem;font-weight:600;transition:all .2s;
+    }
+    .tab.on{background:var(--pri);color:#fff;box-shadow:0 2px 12px rgba(164,6,110,.35);}
+
+    /* ── Fields ── */
+    .field{margin-bottom:1.1rem;}
+    .field label{display:block;font-size:.78rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:.4rem;}
+    .field input{
+      width:100%;padding:.72rem 1rem;
+      background:var(--bg);border:1.5px solid rgba(164,6,110,.18);
+      border-radius:.7rem;color:var(--txt);font-size:.93rem;outline:none;
+      transition:border-color .2s,box-shadow .2s;
+    }
+    .field input:focus{border-color:var(--pri);box-shadow:0 0 0 3px var(--ring);}
+
+    /* ── Buttons ── */
+    .btn{
+      display:flex;align-items:center;justify-content:center;gap:.55rem;
+      width:100%;padding:.82rem 1.4rem;border-radius:.7rem;border:none;
+      cursor:pointer;font-size:.93rem;font-weight:700;transition:all .22s;
+      text-decoration:none;margin-top:.65rem;
+    }
+    .btn-primary{
+      background:linear-gradient(135deg,var(--pri),var(--sec));color:#fff;
+      box-shadow:0 4px 16px rgba(164,6,110,.32);
+    }
+    .btn-primary:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 6px 22px rgba(164,6,110,.44);}
+    .btn-primary:disabled{opacity:.65;cursor:not-allowed;}
+    .btn-google{background:var(--surf);color:var(--txt);border:1.5px solid rgba(164,6,110,.18);}
+    .btn-google:hover{border-color:var(--pri);background:var(--bg);}
+    .btn-ghost{
+      background:transparent;color:var(--muted);
+      border:1.5px dashed rgba(164,6,110,.22);font-size:.83rem;font-weight:600;
+    }
+    .btn-ghost:hover{color:var(--pri);border-color:var(--pri);}
+
+    /* ── Divider ── */
+    .div{display:flex;align-items:center;gap:.9rem;margin:1.1rem 0;color:var(--muted);font-size:.78rem;}
+    .div::before,.div::after{content:'';flex:1;height:1px;background:rgba(164,6,110,.13);}
+
+    /* ── Error ── */
+    .err{color:#f87171;font-size:.82rem;margin-top:.45rem;min-height:1rem;display:none;}
+    .err.show{display:block;}
+
+    /* ── Panes ── */
+    .pane{display:none;} .pane.on{display:block;}
+
+    /* ── Guest modal ── */
+    .modal-bg{
+      position:fixed;inset:0;background:rgba(0,0,0,.72);
+      display:none;align-items:center;justify-content:center;z-index:200;
+    }
+    .modal-bg.show{display:flex;}
+    .modal{
+      background:var(--surf);border-radius:1.2rem;padding:2rem 1.8rem;
+      width:92%;max-width:340px;text-align:center;
+      box-shadow:0 20px 60px rgba(0,0,0,.5);
+    }
+    .modal h3{font-size:1.25rem;margin-bottom:.4rem;}
+    .modal p{font-size:.87rem;color:var(--muted);margin-bottom:1.3rem;}
+    .modal .field{text-align:left;}
+  </style>
+</head>
+<body>
+<canvas id="hc"></canvas>
+
+<div class="wrap">
+  <!-- Hero -->
+  <div class="hero">
+    <div class="hero-inner">
+      <i class="fas fa-heart hero-icon"></i>
+      <h1>ImgurMemory</h1>
+      <p>Your personal gallery of cherished moments — play, explore, and fall in love with your collection.</p>
+      <div class="rose-row">
+        <span>🌹</span><span>💕</span><span>🌸</span><span>💝</span>
+        <span>💌</span><span>🌺</span><span>💗</span><span>🌷</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Form -->
+  <div class="form-panel">
+    <div class="card">
+      <p class="card-title">Welcome back 💖</p>
+      <p class="card-sub">Sign in to your account or create a new one.</p>
+
+      <div class="tabs">
+        <button class="tab on" onclick="switchTab('si')">Sign In</button>
+        <button class="tab" onclick="switchTab('su')">Create Account</button>
+      </div>
+
+      <!-- Sign In -->
+      <div class="pane on" id="pane-si">
+        <form onsubmit="doLogin(event)">
+          <div class="field"><label>Email</label>
+            <input type="email" id="si-e" placeholder="your@email.com" required autocomplete="email"></div>
+          <div class="field"><label>Password</label>
+            <input type="password" id="si-p" placeholder="••••••••" required autocomplete="current-password"></div>
+          <div class="err" id="si-err"></div>
+          <button type="submit" class="btn btn-primary" id="si-btn">
+            <i class="fas fa-heart"></i> Sign In
+          </button>
+        </form>
+        <div class="div"><span>or</span></div>
+        <a href="/auth/google" class="btn btn-google">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M17.64 9.205c0-.639-.057-1.252-.164-1.841H9v3.481h4.844a4.14 4.14 0 01-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" fill="#34A853"/><path d="M3.964 10.71A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 000 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg>
+          Continue with Google
+        </a>
+        <button class="btn btn-ghost" onclick="openGuest()">
+          <i class="fas fa-user-secret"></i> Continue as Guest
+        </button>
+        {% if request.args.get('error') == 'google_failed' %}
+        <div class="err show" style="margin-top:.8rem;">Google sign-in failed — please try again.</div>
+        {% endif %}
+      </div>
+
+      <!-- Sign Up -->
+      <div class="pane" id="pane-su">
+        <form onsubmit="doRegister(event)">
+          <div class="field"><label>Display Name</label>
+            <input type="text" id="su-n" placeholder="Your name" required></div>
+          <div class="field"><label>Email</label>
+            <input type="email" id="su-e" placeholder="your@email.com" required autocomplete="email"></div>
+          <div class="field"><label>Password <span style="font-weight:400;text-transform:none;">(min 6 chars)</span></label>
+            <input type="password" id="su-p" placeholder="••••••••" required autocomplete="new-password"></div>
+          <div class="err" id="su-err"></div>
+          <button type="submit" class="btn btn-primary" id="su-btn">
+            <i class="fas fa-heart"></i> Create Account
+          </button>
+        </form>
+        <div class="div"><span>or</span></div>
+        <a href="/auth/google" class="btn btn-google">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M17.64 9.205c0-.639-.057-1.252-.164-1.841H9v3.481h4.844a4.14 4.14 0 01-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" fill="#34A853"/><path d="M3.964 10.71A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 000 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg>
+          Sign up with Google
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Guest modal -->
+<div class="modal-bg" id="gm">
+  <div class="modal">
+    <div style="font-size:2.4rem;margin-bottom:.7rem;">👤</div>
+    <h3>Continue as Guest</h3>
+    <p>Pick a display name. Scores won't be saved.</p>
+    <div class="field">
+      <label>Guest Name</label>
+      <input type="text" id="gn" placeholder="e.g. RosePlayer" maxlength="30">
+    </div>
+    <button class="btn btn-primary" onclick="doGuest()" style="margin-top:.9rem;">
+      <i class="fas fa-play"></i> Let's Go
+    </button>
+    <button class="btn btn-ghost" onclick="closeGuest()" style="margin-top:.5rem;">Cancel</button>
+  </div>
+</div>
+
+<script>
+/* ── Tab switch ── */
+function switchTab(t){
+  document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('on',b.getAttribute('onclick').includes("'"+t+"'")));
+  document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('on',p.id==='pane-'+t));
+}
+
+/* ── Sign In ── */
+async function doLogin(e){
+  e.preventDefault();
+  const btn=document.getElementById('si-btn'), err=document.getElementById('si-err');
+  err.classList.remove('show'); btn.disabled=true;
+  btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Signing in…';
+  try{
+    const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email:document.getElementById('si-e').value,password:document.getElementById('si-p').value})});
+    const d=await r.json();
+    if(d.success){location.href='/';}
+    else{err.textContent=d.error||'Sign-in failed';err.classList.add('show');}
+  }catch{err.textContent='Network error — try again.';err.classList.add('show');}
+  finally{btn.disabled=false;btn.innerHTML='<i class="fas fa-heart"></i> Sign In';}
+}
+
+/* ── Register ── */
+async function doRegister(e){
+  e.preventDefault();
+  const btn=document.getElementById('su-btn'), err=document.getElementById('su-err');
+  err.classList.remove('show'); btn.disabled=true;
+  btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Creating…';
+  try{
+    const r=await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username:document.getElementById('su-n').value,
+        email:document.getElementById('su-e').value,password:document.getElementById('su-p').value})});
+    const d=await r.json();
+    if(d.success){location.href='/';}
+    else{err.textContent=d.error||'Registration failed';err.classList.add('show');}
+  }catch{err.textContent='Network error — try again.';err.classList.add('show');}
+  finally{btn.disabled=false;btn.innerHTML='<i class="fas fa-heart"></i> Create Account';}
+}
+
+/* ── Guest ── */
+function openGuest(){document.getElementById('gm').classList.add('show');document.getElementById('gn').focus();}
+function closeGuest(){document.getElementById('gm').classList.remove('show');}
+async function doGuest(){
+  const name=document.getElementById('gn').value.trim()||'Guest';
+  const r=await fetch('/api/auth/guest',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({username:name})});
+  if((await r.json()).success)location.href='/';
+}
+document.getElementById('gn').addEventListener('keydown',e=>{if(e.key==='Enter')doGuest();});
+
+/* ── Floating hearts canvas ── */
+const cv=document.getElementById('hc'),ctx=cv.getContext('2d');
+function resize(){cv.width=innerWidth;cv.height=innerHeight;}resize();
+window.addEventListener('resize',resize);
+class H{
+  reset(){this.x=Math.random()*cv.width;this.y=cv.height+15;
+    this.s=Math.random()*12+5;this.sp=Math.random()*.8+.25;
+    this.op=Math.random()*.35+.08;this.sw=Math.random()*1.8-.9;this.t=Math.random()*6;}
+  constructor(){this.reset();}
+  draw(){
+    ctx.save();ctx.globalAlpha=this.op;
+    ctx.fillStyle=`hsl(${325+Math.random()*30},75%,72%)`;
+    ctx.translate(this.x,this.y);
+    const k=this.s/10;ctx.beginPath();
+    ctx.moveTo(0,-3*k);ctx.bezierCurveTo(3*k,-6*k,7*k,-2*k,0,3*k);
+    ctx.bezierCurveTo(-7*k,-2*k,-3*k,-6*k,0,-3*k);
+    ctx.fill();ctx.restore();
+  }
+  update(){this.t+=.018;this.y-=this.sp;this.x+=Math.sin(this.t)*this.sw;if(this.y<-20)this.reset();}
+}
+const hearts=Array.from({length:30},()=>new H());
+(function loop(){ctx.clearRect(0,0,cv.width,cv.height);hearts.forEach(h=>{h.update();h.draw();});requestAnimationFrame(loop);})();
+</script>
+</body>
+</html>

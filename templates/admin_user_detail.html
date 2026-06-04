@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>User — {{ target_user.username }} · Admin</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script>
+    (function(){var t=null;try{t=localStorage.getItem('imgur.theme');}catch(e){}
+    if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}})();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    .wrap{max-width:1100px;margin:0 auto;padding:2rem 1.5rem;}
+    .back-link{color:var(--muted-text);text-decoration:none;font-size:.88rem;
+      display:inline-flex;align-items:center;gap:.4rem;margin-bottom:1.5rem;}
+    .back-link:hover{color:var(--primary-color);}
+
+    /* Profile card */
+    .profile-card{
+      background:var(--surface-color);border-radius:1.2rem;padding:1.8rem;
+      border:1px solid rgba(164,6,110,.1);box-shadow:0 2px 14px var(--shadow-color);
+      display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;margin-bottom:2rem;
+    }
+    .av{width:72px;height:72px;border-radius:50%;object-fit:cover;flex-shrink:0;
+        background:linear-gradient(135deg,var(--primary-color),var(--secondary-color));
+        display:flex;align-items:center;justify-content:center;
+        color:#fff;font-size:1.8rem;font-weight:700;}
+    .profile-info h2{font-size:1.4rem;font-weight:700;margin-bottom:.25rem;}
+    .profile-info .email{color:var(--muted-text);font-size:.9rem;margin-bottom:.5rem;}
+    .meta-row{display:flex;gap:.8rem;flex-wrap:wrap;font-size:.82rem;color:var(--muted-text);}
+    .meta-row span{display:flex;align-items:center;gap:.3rem;}
+    .badge{display:inline-block;padding:.22rem .65rem;border-radius:.4rem;font-size:.75rem;font-weight:700;}
+    .badge-admin{background:rgba(164,6,110,.15);color:var(--primary-color);}
+    .badge-perm{background:linear-gradient(135deg,var(--primary-color),var(--secondary-color));color:#fff;}
+    .badge-user{background:rgba(100,100,100,.12);color:var(--muted-text);}
+
+    /* Tabs */
+    .tabs{display:flex;gap:.3rem;border-bottom:2px solid rgba(164,6,110,.1);margin-bottom:1.5rem;}
+    .tab{padding:.6rem 1.2rem;border:none;background:transparent;color:var(--muted-text);
+      cursor:pointer;font-size:.9rem;font-weight:600;border-bottom:2px solid transparent;
+      margin-bottom:-2px;transition:all .2s;}
+    .tab.on{color:var(--primary-color);border-bottom-color:var(--primary-color);}
+
+    /* Panes */
+    .pane{display:none;} .pane.on{display:block;}
+
+    /* Tables */
+    .tbl-wrap{overflow-x:auto;background:var(--surface-color);border-radius:1rem;
+      border:1px solid rgba(164,6,110,.1);box-shadow:0 2px 10px var(--shadow-color);}
+    table{width:100%;border-collapse:collapse;font-size:.87rem;}
+    th{padding:.75rem 1rem;text-align:left;font-size:.74rem;text-transform:uppercase;
+      letter-spacing:.06em;color:var(--muted-text);border-bottom:1px solid rgba(164,6,110,.1);}
+    td{padding:.75rem 1rem;border-bottom:1px solid rgba(164,6,110,.05);vertical-align:middle;}
+    tr:last-child td{border-bottom:none;}
+    tr:hover td{background:rgba(164,6,110,.03);}
+    .empty{text-align:center;padding:2.5rem;color:var(--muted-text);}
+
+    /* Image grid */
+    .img-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:.8rem;}
+    .img-thumb{border-radius:.7rem;overflow:hidden;aspect-ratio:1;background:var(--surface-color);
+      border:1px solid rgba(164,6,110,.1);}
+    .img-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+    .img-thumb-label{font-size:.72rem;padding:.3rem .5rem;color:var(--muted-text);
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+    /* Active dot */
+    .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:.3rem;}
+    .dot-on{background:#22c55e;} .dot-off{background:#6b7280;}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-container">
+      <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+      <div class="navbar-menu">
+        <a href="/admin" class="navbar-link"><i class="fas fa-shield-alt"></i> Admin</a>
+        <a href="/logout" class="navbar-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        <button id="themeToggle" class="navbar-theme-toggle"><i class="fas fa-moon"></i></button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap">
+    <a href="/admin" class="back-link"><i class="fas fa-arrow-left"></i> Back to Dashboard</a>
+
+    <!-- Profile -->
+    <div class="profile-card">
+      {% if target_user.avatar_url %}
+        <img src="{{ target_user.avatar_url }}" class="av" alt="">
+      {% else %}
+        <div class="av">{{ target_user.username[0]|upper }}</div>
+      {% endif %}
+      <div class="profile-info">
+        <h2>{{ target_user.username }}
+          {% if target_user.is_permanent_admin %}
+            <span class="badge badge-perm"><i class="fas fa-crown"></i> Super Admin</span>
+          {% elif target_user.is_admin %}
+            <span class="badge badge-admin"><i class="fas fa-shield-alt"></i> Admin</span>
+          {% else %}
+            <span class="badge badge-user">User</span>
+          {% endif %}
+        </h2>
+        <div class="email">{{ target_user.email }}</div>
+        <div class="meta-row">
+          <span><i class="fas fa-calendar-plus"></i> Joined
+            {% if target_user.created_at %}{{ target_user.created_at.strftime('%d %b %Y') }}{% else %}—{% endif %}
+          </span>
+          <span><i class="fas fa-clock"></i> Last seen
+            {% if target_user.last_seen %}{{ target_user.last_seen.strftime('%d %b %Y %H:%M') }}{% else %}—{% endif %}
+          </span>
+          <span><i class="fas fa-images"></i> {{ uploads|length }} uploads</span>
+          <span><i class="fas fa-trophy"></i> {{ scores|length }} scores</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab on" onclick="switchTab('sess')"><i class="fas fa-history"></i> Sessions ({{ sessions|length }})</button>
+      <button class="tab" onclick="switchTab('imgs')"><i class="fas fa-images"></i> Uploads ({{ uploads|length }})</button>
+      <button class="tab" onclick="switchTab('scrs')"><i class="fas fa-trophy"></i> Scores ({{ scores|length }})</button>
+    </div>
+
+    <!-- Sessions pane -->
+    <div class="pane on" id="pane-sess">
+      {% if sessions %}
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Status</th><th>Logged In</th><th>Last Seen</th><th>Logged Out</th><th>IP</th><th>Browser</th></tr></thead>
+          <tbody>
+            {% for s in sessions %}
+            <tr>
+              <td>
+                {% if s.is_active %}
+                  <span class="dot dot-on"></span> Active
+                {% else %}
+                  <span class="dot dot-off"></span> Ended
+                {% endif %}
+              </td>
+              <td style="white-space:nowrap;">
+                {% if s.logged_in_at %}{{ s.logged_in_at.strftime('%d %b %Y %H:%M') }}{% else %}—{% endif %}
+              </td>
+              <td style="white-space:nowrap;">
+                {% if s.last_seen_at %}{{ s.last_seen_at.strftime('%d %b %Y %H:%M') }}{% else %}—{% endif %}
+              </td>
+              <td style="white-space:nowrap;color:var(--muted-text);">
+                {% if s.logged_out_at %}{{ s.logged_out_at.strftime('%d %b %Y %H:%M') }}{% else %}—{% endif %}
+              </td>
+              <td style="color:var(--muted-text);">{{ s.ip_address or '—' }}</td>
+              <td style="color:var(--muted-text);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                  title="{{ s.user_agent or '' }}">
+                {{ (s.user_agent or '—')[:50] }}{% if s.user_agent and s.user_agent|length > 50 %}…{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        <p class="empty"><i class="fas fa-history"></i><br>No sessions recorded yet.</p>
+      {% endif %}
+    </div>
+
+    <!-- Uploads pane -->
+    <div class="pane" id="pane-imgs">
+      {% if uploads %}
+      <div class="img-grid">
+        {% for img in uploads %}
+        <div class="img-thumb">
+          <img src="{{ img.url }}" alt="" loading="lazy">
+          <div class="img-thumb-label">
+            <i class="fas fa-folder" style="color:var(--primary-color);"></i>
+            {{ img.collection_name }}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+        <p class="empty"><i class="fas fa-images"></i><br>No uploads yet.</p>
+      {% endif %}
+    </div>
+
+    <!-- Scores pane -->
+    <div class="pane" id="pane-scrs">
+      {% if scores %}
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Collection</th><th>Game</th><th>Score</th><th>Time (s)</th><th>Date</th></tr></thead>
+          <tbody>
+            {% for sc in scores %}
+            <tr>
+              <td>{{ sc.collection_name }}</td>
+              <td><span style="text-transform:capitalize;">{{ sc.game_type }}</span></td>
+              <td><strong>{{ sc.data.get('score', '—') if sc.data else '—' }}</strong></td>
+              <td style="color:var(--muted-text);">{{ sc.data.get('time', '—') if sc.data else '—' }}</td>
+              <td style="color:var(--muted-text);white-space:nowrap;">
+                {% if sc.created_at %}{{ sc.created_at.strftime('%d %b %Y %H:%M') }}{% else %}—{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        <p class="empty"><i class="fas fa-trophy"></i><br>No scores recorded yet.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script>
+    function switchTab(id){
+      document.querySelectorAll('.tab').forEach((b,i)=>{
+        b.classList.toggle('on',b.getAttribute('onclick').includes("'"+id+"'"));
+      });
+      document.querySelectorAll('.pane').forEach(p=>{
+        p.classList.toggle('on',p.id==='pane-'+id);
+      });
+    }
+  </script>
+</body>
+</html>

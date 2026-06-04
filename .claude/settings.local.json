@@ -6,7 +6,13 @@
       "Bash(git commit -m 'feat: Add three new tag-based games — Odd One Out, Speed Sort, Snap Match *)",
       "Bash(git commit -m 'feat: Add full-image lightbox preview inside Retag modal *)",
       "Bash(python static/chat_append.py)",
-      "Bash(del static\\\\chat_append.py)"
+      "Bash(del static\\\\chat_append.py)",
+      "Bash(rm \"c:/Users/logan/OneDrive/Documents/gamecum/data/scores.json\" \"c:/Users/logan/OneDrive/Documents/gamecum/data/tags.json\" && echo \"Deleted\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path .\\\\templates -Filter *.html | Select-Object -ExpandProperty Name\")",
+      "Bash(powershell -Command \"Get-Content .\\\\templates\\\\home.html | Select-String -Pattern '\\(nav|class|href\\)' | Select-Object -First 30\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\logan\\OneDrive\\Documents\\gamecum\\data"
     ]
   }
 }
