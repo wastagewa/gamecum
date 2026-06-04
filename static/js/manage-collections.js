@@ -729,7 +729,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             `).join('')}
                         </div>
                         <div class="retag-body-parts">
-                            <label>Body Parts (Boobs, Pussy, Butt):</label>
+                            <label>Body Parts (Boobs, Pussy, Butt, Chest, Penis):</label>
                             <input type="text" class="body-parts-combined-input" data-filename="${img.filename}" value="${getAllBodyPartPrefixes()}" placeholder="e.g., ccxnn" maxlength="5">
                             <small style="display: block; margin-top: 4px; color: var(--text-secondary);">Format: 5 letters for boobs/pussy/butt/chest/penis (c=Covered, s=Semi Naked, n=Naked, u=Unseen, x=None). e.g., "ccxxx" = Covered boobs, Covered pussy, None butt, None chest, None penis.</small>
                         </div>

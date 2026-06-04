@@ -5,6 +5,9 @@ from werkzeug.utils import secure_filename
 import uuid
 import random
 import re
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
 
 # Load .env file if present (python-dotenv)
 try:
@@ -27,6 +30,14 @@ SCORES_DIR = 'data'
 SCORES_FILE = os.path.join(SCORES_DIR, 'scores.json')
 TAGS_FILE = os.path.join(SCORES_DIR, 'tags.json')
 IMAGE_METADATA_FILE = os.path.join(SCORES_DIR, 'image_metadata.json')
+COLLECTIONS_FILE = os.path.join(SCORES_DIR, 'collections.json')
+
+cloudinary.config(
+    cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME'),
+    api_key=os.environ.get('CLOUDINARY_API_KEY'),
+    api_secret=os.environ.get('CLOUDINARY_API_SECRET'),
+    secure=True
+)
 
 def _ensure_scores_file():
     os.makedirs(SCORES_DIR, exist_ok=True)
@@ -98,6 +109,46 @@ def _save_tags(tags: dict):
         print(f"ERROR saving tags: {e}")
         import traceback
         traceback.print_exc()
+
+def _load_collections():
+    """Return list of all known collection names (including empty ones)."""
+    os.makedirs(SCORES_DIR, exist_ok=True)
+    if os.path.exists(COLLECTIONS_FILE):
+        try:
+            with open(COLLECTIONS_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            pass
+    # Bootstrap from tags.json if no collections file yet
+    tags = _load_tags()
+    names = set()
+    for key in tags:
+        if '/' in key:
+            names.add(key.split('/')[0])
+    return sorted(names)
+
+def _save_collections(collections: list):
+    try:
+        os.makedirs(SCORES_DIR, exist_ok=True)
+        with open(COLLECTIONS_FILE, 'w') as f:
+            json.dump(collections, f, indent=2)
+    except Exception:
+        pass
+
+def _collection_exists(safe_name: str):
+    """Check if a collection exists in collections.json or has images in tags.json."""
+    if safe_name in _load_collections():
+        return True
+    tags = _load_tags()
+    prefix = f"{safe_name}/"
+    return any(k.startswith(prefix) for k in tags)
+
+def _image_exists_in_tags(safe_name: str, filename: str):
+    """Check if an image is tracked in tags.json (Cloudinary source of truth)."""
+    tags = _load_tags()
+    return _get_image_key(safe_name, filename) in tags
 
 def _cleanup_tags():
     """Clean up malformed tags data (convert dict objects to string lists), preserving locked status."""
@@ -177,34 +228,29 @@ def _set_image_tags(collection: str, filename: str, tags: list, locked: bool = N
     """Set tags for an image, optionally updating locked status."""
     image_key = _get_image_key(collection, filename)
     tags_data = _load_tags()
-    
-    # Get existing entry and normalize it
+
     existing = tags_data.get(image_key, {})
+    # Start from existing dict to preserve extra fields like 'url'
+    entry = dict(existing) if isinstance(existing, dict) else {}
     normalized = _normalize_tags_entry(existing)
-    
-    # Update tags
-    normalized['tags'] = [str(t).strip() for t in tags if t]
-    
-    # Update locked status if provided
+    entry['tags'] = [str(t).strip() for t in tags if t]
+    entry['locked'] = normalized.get('locked', False)
     if locked is not None:
-        normalized['locked'] = locked
-    
-    tags_data[image_key] = normalized
+        entry['locked'] = locked
+
+    tags_data[image_key] = entry
     _save_tags(tags_data)
 
 def _set_image_locked(collection: str, filename: str, locked: bool):
     """Set locked status for an image."""
     image_key = _get_image_key(collection, filename)
     tags_data = _load_tags()
-    
-    # Get existing entry and normalize it
+
     existing = tags_data.get(image_key, {})
-    normalized = _normalize_tags_entry(existing)
-    
-    # Update locked status
-    normalized['locked'] = locked
-    
-    tags_data[image_key] = normalized
+    entry = dict(existing) if isinstance(existing, dict) else {}
+    entry['locked'] = locked
+
+    tags_data[image_key] = entry
     _save_tags(tags_data)
 
 def _get_image_key(collection: str, filename: str):
@@ -230,52 +276,38 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def _get_collection_image_urls(collection: str):
-    """Return image URLs for a collection."""
-    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
-    images = []
-    try:
-        for filename in os.listdir(folder):
-            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                images.append(filename)
-    except FileNotFoundError:
-        images = []
-    return [f"/static/uploads/{collection}/{fn}" for fn in images]
+    """Return Cloudinary image URLs for a collection, read from tags.json."""
+    tags_data = _load_tags()
+    prefix = f"{collection}/"
+    urls = []
+    for key, value in tags_data.items():
+        if key.startswith(prefix) and isinstance(value, dict) and value.get('url'):
+            urls.append(value['url'])
+    return urls
 
 @app.route('/')
 def index():
     # Render a home page that lists collections and image counts, plus top scores.
-    base = app.config['UPLOAD_FOLDER']
-    collections = {}
     scores_data = _load_scores()
-    # Build top 5 leaderboard per collection
     leaderboards = {}
     for coll, entries in scores_data.items():
         if isinstance(entries, list):
             leaderboards[coll] = entries[:5]
         else:
-            # Old format (single best) - skip or convert
             leaderboards[coll] = []
-    
-    try:
-        # top-level files count as 'root' if any
-        root_count = 0
-        for filename in os.listdir(base):
-            full = os.path.join(base, filename)
-            if os.path.isfile(full) and any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                root_count += 1
-        if root_count:
-            collections['root'] = root_count
 
-        for name in os.listdir(base):
-            folder = os.path.join(base, name)
-            if os.path.isdir(folder):
-                imgs = 0
-                for filename in os.listdir(folder):
-                    if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                        imgs += 1
-                collections[name] = imgs
-    except Exception:
-        collections = {}
+    # Count images per collection from tags.json
+    tags_data = _load_tags()
+    collections = {}
+    for key in tags_data:
+        if '/' in key and isinstance(tags_data[key], dict) and tags_data[key].get('url'):
+            coll_name = key.split('/')[0]
+            collections[coll_name] = collections.get(coll_name, 0) + 1
+
+    # Include empty collections
+    for coll_name in _load_collections():
+        collections.setdefault(coll_name, 0)
+
     return render_template('home.html', collections=collections, leaderboards=leaderboards)
 
 
@@ -291,33 +323,28 @@ def _safe_collection_name(name: str):
 @app.route('/collection/<collection_name>')
 def collection_view(collection_name):
     collection = _safe_collection_name(collection_name)
-    folder = os.path.join(app.config['UPLOAD_FOLDER'], collection)
-    images = []
-    try:
-        for filename in os.listdir(folder):
-            if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                images.append(filename)
-    except FileNotFoundError:
-        images = []
-
-    # Load tags for all images
     tags_data = _load_tags()
+    images = []      # list of filenames (used as keys for tags/delete operations)
+    image_urls = {}  # filename -> Cloudinary URL
     image_tags = {}
-    for filename in images:
-        image_key = _get_image_key(collection, filename)
-        if image_key in tags_data:
-            # Tags are stored directly as a list, not as {'tags': [...]}
-            tags = tags_data[image_key]
-            if isinstance(tags, list):
-                # Ensure all items in the list are strings, not dicts
-                image_tags[filename] = [str(tag) for tag in tags if isinstance(tag, (str, int, float))]
-            elif isinstance(tags, dict) and 'tags' in tags:
-                # Handle old format where tags were stored as {'tags': [...]}
-                image_tags[filename] = tags['tags'] if isinstance(tags['tags'], list) else []
-            else:
-                image_tags[filename] = []
 
-    return render_template('index.html', images=images, collection=collection, image_tags=image_tags)
+    prefix = f"{collection}/"
+    for key, value in tags_data.items():
+        if not key.startswith(prefix):
+            continue
+        filename = key[len(prefix):]
+        if not isinstance(value, dict) or not value.get('url'):
+            continue
+        images.append(filename)
+        image_urls[filename] = value['url']
+        raw_tags = value.get('tags', [])
+        if isinstance(raw_tags, list):
+            image_tags[filename] = [str(t) for t in raw_tags if isinstance(t, (str, int, float))]
+        else:
+            image_tags[filename] = []
+
+    return render_template('index.html', images=images, collection=collection,
+                           image_tags=image_tags, image_urls=image_urls)
 
 @app.route('/upload', methods=['POST'])
 @app.route('/upload/<collection>', methods=['POST'])
@@ -330,25 +357,47 @@ def upload_file(collection=None):
         return jsonify({'error': 'No selected file'}), 400
 
     if file and allowed_file(file.filename):
-        # Handle collection from path parameter
         collection = _safe_collection_name(collection or '')
-        save_folder = os.path.join(app.config['UPLOAD_FOLDER'], collection) if collection else app.config['UPLOAD_FOLDER']
-        os.makedirs(save_folder, exist_ok=True)
-        # Generate unique filename
-        filename = str(uuid.uuid4()) + os.path.splitext(secure_filename(file.filename))[1]
-        file_path = os.path.join(save_folder, filename)
-        file.save(file_path)
+        ext = os.path.splitext(secure_filename(file.filename))[1].lower()
+        filename = str(uuid.uuid4()) + ext
 
-        tags = []
-        
-        url_path = f'/static/uploads/{collection}/{filename}' if collection else f'/static/uploads/{filename}'
+        name_no_ext = os.path.splitext(filename)[0]
+
+        upload_opts = {
+            'public_id': name_no_ext,
+            'resource_type': 'image',
+            'overwrite': False,
+        }
+        if collection:
+            upload_opts['folder'] = collection
+
+        try:
+            result = cloudinary.uploader.upload(file, **upload_opts)
+        except Exception as e:
+            return jsonify({'error': f'Cloudinary upload failed: {str(e)}'}), 500
+
+        url = result['secure_url']
+
+        # Store URL + empty tags in tags.json
+        if collection:
+            tags_data = _load_tags()
+            image_key = _get_image_key(collection, filename)
+            tags_data[image_key] = {'tags': [], 'locked': False, 'url': url}
+            _save_tags(tags_data)
+
+            # Ensure collection is registered
+            all_collections = _load_collections()
+            if collection not in all_collections:
+                all_collections.append(collection)
+                _save_collections(all_collections)
+
         return jsonify({
             'success': True,
             'filename': filename,
-            'url': url_path,
-            'tags': tags
+            'url': url,
+            'tags': []
         })
-    
+
     return jsonify({'error': 'Invalid file type'}), 400
 
 @app.route('/get-quote')
@@ -499,11 +548,12 @@ def create_collection():
         safe = _safe_collection_name(name)
         if not safe:
             return jsonify({'error': 'Invalid collection name'}), 400
-        folder = os.path.join(app.config['UPLOAD_FOLDER'], safe)
-        if not os.path.exists(folder):
-            os.makedirs(folder, exist_ok=True)
-            return jsonify({'success': True, 'name': safe})
-        return jsonify({'error': 'Collection already exists'}), 409
+        if _collection_exists(safe):
+            return jsonify({'error': 'Collection already exists'}), 409
+        all_collections = _load_collections()
+        all_collections.append(safe)
+        _save_collections(all_collections)
+        return jsonify({'success': True, 'name': safe})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -668,11 +718,9 @@ def get_high_scores(collection):
 @app.route('/delete-image/<filename>', methods=['DELETE'])
 def delete_image(filename):
     try:
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            return jsonify({'success': True})
-        return jsonify({'error': 'File not found'}), 404
+        name_no_ext = os.path.splitext(filename)[0]
+        cloudinary.uploader.destroy(name_no_ext)
+        return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -681,11 +729,18 @@ def delete_image(filename):
 def delete_image_in_collection(collection, filename):
     collection = _safe_collection_name(collection)
     try:
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], collection, filename)
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            return jsonify({'success': True})
-        return jsonify({'error': 'File not found'}), 404
+        name_no_ext = os.path.splitext(filename)[0]
+        public_id = f"{collection}/{name_no_ext}"
+        cloudinary.uploader.destroy(public_id)
+
+        # Remove from tags.json
+        tags_data = _load_tags()
+        image_key = _get_image_key(collection, filename)
+        if image_key in tags_data:
+            del tags_data[image_key]
+            _save_tags(tags_data)
+
+        return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -810,67 +865,49 @@ def collection_tag_match(collection_name):
 
 @app.route('/api/images')
 def api_images_all():
-    """Return a JSON list of all image URLs across the uploads folder and its collections."""
-    result = []
-    base = app.config['UPLOAD_FOLDER']
-    try:
-        # Top-level files
-        for filename in os.listdir(base):
-            full = os.path.join(base, filename)
-            if os.path.isfile(full) and any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                result.append(f"/static/uploads/{filename}")
-        # Subfolders (collections)
-        for name in os.listdir(base):
-            folder = os.path.join(base, name)
-            if os.path.isdir(folder):
-                for filename in os.listdir(folder):
-                    if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                        result.append(f"/static/uploads/{name}/{filename}")
-    except Exception:
-        # On any error return empty list
-        result = []
+    """Return a JSON list of all Cloudinary image URLs."""
+    tags_data = _load_tags()
+    result = [
+        v['url'] for v in tags_data.values()
+        if isinstance(v, dict) and v.get('url')
+    ]
     return jsonify({'images': result})
 
 
 @app.route('/manage-collections')
 def manage_collections():
     """Render collection management page."""
-    base = app.config['UPLOAD_FOLDER']
+    tags_data = _load_tags()
     collections = {}
-    try:
-        for name in os.listdir(base):
-            folder = os.path.join(base, name)
-            if os.path.isdir(folder):
-                imgs = 0
-                for filename in os.listdir(folder):
-                    if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                        imgs += 1
-                collections[name] = imgs
-    except Exception:
-        collections = {}
+    for key in tags_data:
+        if '/' in key and isinstance(tags_data[key], dict) and tags_data[key].get('url'):
+            coll_name = key.split('/')[0]
+            collections[coll_name] = collections.get(coll_name, 0) + 1
+    for coll_name in _load_collections():
+        collections.setdefault(coll_name, 0)
     return render_template('manage-collections.html', collections=collections)
 
 
 @app.route('/api/collections/create', methods=['POST'])
 def api_create_collection():
-    """Create a new collection folder."""
+    """Register a new collection (Cloudinary folder is created on first upload)."""
     data = request.get_json()
     name = data.get('name', '').strip()
-    
+
     if not name:
         return jsonify({'success': False, 'error': 'Collection name required'}), 400
-    
+
     safe_name = _safe_collection_name(name)
     if not safe_name or safe_name != name:
         return jsonify({'success': False, 'error': 'Invalid collection name. Use only letters, numbers, hyphens, and underscores'}), 400
-    
-    folder_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name)
-    
-    if os.path.exists(folder_path):
+
+    if _collection_exists(safe_name):
         return jsonify({'success': False, 'error': 'Collection already exists'}), 400
-    
+
     try:
-        os.makedirs(folder_path, exist_ok=True)
+        all_collections = _load_collections()
+        all_collections.append(safe_name)
+        _save_collections(all_collections)
         return jsonify({'success': True, 'message': 'Collection created'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -878,43 +915,57 @@ def api_create_collection():
 
 @app.route('/api/collections/rename', methods=['POST'])
 def api_rename_collection():
-    """Rename a collection folder."""
+    """Rename a collection: moves all Cloudinary assets and updates tags.json."""
     data = request.get_json()
     old_name = data.get('old_name', '').strip()
     new_name = data.get('new_name', '').strip()
-    
+
     if not old_name or not new_name:
         return jsonify({'success': False, 'error': 'Both names required'}), 400
-    
+
     safe_old = _safe_collection_name(old_name)
     safe_new = _safe_collection_name(new_name)
-    
+
     if not safe_new or safe_new != new_name:
         return jsonify({'success': False, 'error': 'Invalid new name'}), 400
-    
-    old_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_old)
-    new_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_new)
-    
-    if not os.path.exists(old_path):
+
+    if not _collection_exists(safe_old):
         return jsonify({'success': False, 'error': 'Collection not found'}), 404
-    
-    if os.path.exists(new_path):
+
+    if _collection_exists(safe_new):
         return jsonify({'success': False, 'error': 'Target name already exists'}), 400
-    
+
     try:
-        os.rename(old_path, new_path)
-        
-        # Update tags file
         tags_data = _load_tags()
+        prefix = f"{safe_old}/"
         updated_tags = {}
+
         for key, value in tags_data.items():
-            if key.startswith(f"{safe_old}/"):
-                new_key = key.replace(f"{safe_old}/", f"{safe_new}/", 1)
-                updated_tags[new_key] = value
+            if key.startswith(prefix):
+                filename = key[len(prefix):]
+                name_no_ext = os.path.splitext(filename)[0]
+                old_public_id = f"{safe_old}/{name_no_ext}"
+                new_public_id = f"{safe_new}/{name_no_ext}"
+                try:
+                    rename_result = cloudinary.uploader.rename(old_public_id, new_public_id)
+                    if isinstance(value, dict):
+                        value = dict(value)
+                        value['url'] = rename_result.get('secure_url', value.get('url', ''))
+                except Exception:
+                    pass
+                updated_tags[f"{safe_new}/{filename}"] = value
             else:
                 updated_tags[key] = value
+
         _save_tags(updated_tags)
-        
+
+        # Update collections registry
+        all_collections = _load_collections()
+        all_collections = [safe_new if c == safe_old else c for c in all_collections]
+        if safe_new not in all_collections:
+            all_collections.append(safe_new)
+        _save_collections(all_collections)
+
         return jsonify({'success': True, 'message': 'Collection renamed'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -922,28 +973,38 @@ def api_rename_collection():
 
 @app.route('/api/collections/delete', methods=['POST'])
 def api_delete_collection():
-    """Delete a collection folder and all its contents."""
+    """Delete a collection and all its Cloudinary images."""
     data = request.get_json()
     name = data.get('name', '').strip()
-    
+
     if not name:
         return jsonify({'success': False, 'error': 'Collection name required'}), 400
-    
+
     safe_name = _safe_collection_name(name)
-    folder_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name)
-    
-    if not os.path.exists(folder_path):
+
+    if not _collection_exists(safe_name):
         return jsonify({'success': False, 'error': 'Collection not found'}), 404
-    
+
     try:
-        import shutil
-        shutil.rmtree(folder_path)
-        
-        # Remove tags for deleted images
+        # Delete all Cloudinary resources in this folder
+        try:
+            cloudinary.api.delete_resources_by_prefix(f"{safe_name}/")
+        except Exception:
+            pass
+        try:
+            cloudinary.api.delete_folder(safe_name)
+        except Exception:
+            pass
+
+        # Remove from tags.json
         tags_data = _load_tags()
         updated_tags = {k: v for k, v in tags_data.items() if not k.startswith(f"{safe_name}/")}
         _save_tags(updated_tags)
-        
+
+        # Remove from collections registry
+        all_collections = [c for c in _load_collections() if c != safe_name]
+        _save_collections(all_collections)
+
         return jsonify({'success': True, 'message': 'Collection deleted'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -951,48 +1012,30 @@ def api_delete_collection():
 
 @app.route('/api/collections/<collection_name>/images', methods=['GET'])
 def api_collection_images(collection_name):
-    """Get all images in a collection with their tags and lock status, sorted by upload time."""
+    """Get all images in a collection with their tags and lock status."""
     safe_name = _safe_collection_name(collection_name)
-    folder_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name)
-    
-    if not os.path.exists(folder_path):
+
+    if not _collection_exists(safe_name):
         return jsonify({'success': False, 'error': 'Collection not found'}), 404
-    
-    images = []
+
     tags_data = _load_tags()
-    
-    for filename in os.listdir(folder_path):
-        if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-            image_key = _get_image_key(safe_name, filename)
-            entry = tags_data.get(image_key, {})
-            
-            # Normalize the entry
-            normalized = _normalize_tags_entry(entry)
-            image_tags = normalized['tags']
-            locked = normalized.get('locked', False)
-            
-            # Get file modification time for sorting
-            file_path = os.path.join(folder_path, filename)
-            try:
-                mod_time = os.path.getmtime(file_path)
-            except:
-                mod_time = 0
-            
-            images.append({
-                'filename': filename,
-                'url': url_for('static', filename=f'uploads/{safe_name}/{filename}'),
-                'tags': image_tags,
-                'locked': locked,
-                'upload_time': mod_time
-            })
-    
-    # Sort images by upload time (oldest first)
-    images.sort(key=lambda x: x['upload_time'])
-    
-    # Remove upload_time from response (it's only for sorting)
-    for img in images:
-        del img['upload_time']
-    
+    images = []
+    prefix = f"{safe_name}/"
+
+    for key, value in tags_data.items():
+        if not key.startswith(prefix):
+            continue
+        filename = key[len(prefix):]
+        if not isinstance(value, dict) or not value.get('url'):
+            continue
+        normalized = _normalize_tags_entry(value)
+        images.append({
+            'filename': filename,
+            'url': value['url'],
+            'tags': normalized['tags'],
+            'locked': normalized.get('locked', False)
+        })
+
     return jsonify({'success': True, 'images': images})
 
 
@@ -1033,11 +1076,8 @@ def api_retag_all_images(collection_name):
 def api_lock_image(collection_name, filename):
     """Lock an image so it won't be retagged during retag-all."""
     safe_name = _safe_collection_name(collection_name)
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name, filename)
-    
-    if not os.path.exists(file_path):
+    if not _image_exists_in_tags(safe_name, filename):
         return jsonify({'success': False, 'error': 'Image not found'}), 404
-    
     _set_image_locked(safe_name, filename, True)
     return jsonify({'success': True, 'locked': True, 'message': 'Image locked'})
 
@@ -1046,11 +1086,8 @@ def api_lock_image(collection_name, filename):
 def api_unlock_image(collection_name, filename):
     """Unlock an image so it can be retagged."""
     safe_name = _safe_collection_name(collection_name)
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name, filename)
-    
-    if not os.path.exists(file_path):
+    if not _image_exists_in_tags(safe_name, filename):
         return jsonify({'success': False, 'error': 'Image not found'}), 404
-    
     _set_image_locked(safe_name, filename, False)
     return jsonify({'success': True, 'locked': False, 'message': 'Image unlocked'})
 
@@ -1068,52 +1105,33 @@ def api_get_lock_status(collection_name, filename):
 def api_copy_image_tags(collection_name, source_filename, target_filename):
     """Copy tags from source image to target image."""
     safe_name = _safe_collection_name(collection_name)
-    
-    source_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name, source_filename)
-    target_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name, target_filename)
-    
-    if not os.path.exists(source_path):
+
+    if not _image_exists_in_tags(safe_name, source_filename):
         return jsonify({'success': False, 'error': 'Source image not found'}), 404
-    if not os.path.exists(target_path):
+    if not _image_exists_in_tags(safe_name, target_filename):
         return jsonify({'success': False, 'error': 'Target image not found'}), 404
-    
-    # Get tags from source image
+
     source_tags = _get_image_tags(safe_name, source_filename)
-    
-    # Set tags on target image (preserving target's locked status)
     _set_image_tags(safe_name, target_filename, source_tags)
-    
+
     return jsonify({'success': True, 'tags': source_tags, 'message': f'Copied {len(source_tags)} tags to target image'})
 
 
 @app.route('/api/collections')
 def api_collections():
-    """Return a JSON mapping of collection name -> list of image URLs.
-    Top-level files are returned under the key 'root'.
-    """
+    """Return a JSON mapping of collection name -> list of Cloudinary image URLs."""
+    tags_data = _load_tags()
     result = {}
-    base = app.config['UPLOAD_FOLDER']
-    try:
-        # top-level files
-        root_imgs = []
-        for filename in os.listdir(base):
-            full = os.path.join(base, filename)
-            if os.path.isfile(full) and any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                root_imgs.append(f"/static/uploads/{filename}")
-        if root_imgs:
-            result['root'] = root_imgs
+    for key, value in tags_data.items():
+        if '/' not in key or not isinstance(value, dict) or not value.get('url'):
+            continue
+        coll_name = key.split('/')[0]
+        result.setdefault(coll_name, []).append(value['url'])
 
-        # subfolders
-        for name in os.listdir(base):
-            folder = os.path.join(base, name)
-            if os.path.isdir(folder):
-                imgs = []
-                for filename in os.listdir(folder):
-                    if any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
-                        imgs.append(f"/static/uploads/{name}/{filename}")
-                result[name] = imgs
-    except Exception:
-        result = {}
+    # Include empty collections with no images yet
+    for coll_name in _load_collections():
+        result.setdefault(coll_name, [])
+
     return jsonify({'collections': result})
 
 
@@ -1191,17 +1209,12 @@ def search_by_tag():
     matching_images = []
     
     for image_key, tag_info in tags_data.items():
+        if not isinstance(tag_info, dict):
+            continue
         image_tags = [t.lower() for t in tag_info.get('tags', [])]
-        if search_tag in image_tags:
-            # Parse collection and filename from key
-            if '/' in image_key:
-                collection, filename = image_key.split('/', 1)
-                url = f"/static/uploads/{collection}/{filename}"
-            else:
-                url = f"/static/uploads/{image_key}"
-            
+        if search_tag in image_tags and tag_info.get('url'):
             matching_images.append({
-                'url': url,
+                'url': tag_info['url'],
                 'tags': tag_info.get('tags', []),
                 'key': image_key
             })
@@ -1281,38 +1294,31 @@ def api_images_by_tags():
     
     # Iterate through all tagged images
     for image_key, tags_info in tags_data.items():
-        # Extract collection and filename (format: collection/filename)
+        if not isinstance(tags_info, dict) or not tags_info.get('url'):
+            continue
         parts = image_key.split('/')
         if len(parts) < 2:
             continue
-        
+
         collection = parts[0]
-        filename = '/'.join(parts[1:])  # Handle filenames with slashes
-        
-        # Extract tags
-        tags = []
-        if isinstance(tags_info, list):
-            tags = tags_info
-        elif isinstance(tags_info, dict):
-            tags = tags_info.get('tags', [])
-        
+        filename = '/'.join(parts[1:])
+        tags = tags_info.get('tags', [])
+
         # Check if image matches filter
         if match_all:
-            # Image must have all requested tags
             if all(tag in tags for tag in tags_filter):
                 matching_images.append({
                     'filename': filename,
                     'collection': collection,
-                    'url': f'/static/uploads/{collection}/{filename}',
+                    'url': tags_info['url'],
                     'tags': tags
                 })
         else:
-            # Image must have at least one of the requested tags
             if any(tag in tags for tag in tags_filter):
                 matching_images.append({
                     'filename': filename,
                     'collection': collection,
-                    'url': f'/static/uploads/{collection}/{filename}',
+                    'url': tags_info['url'],
                     'tags': tags
                 })
     
@@ -1854,10 +1860,6 @@ def api_chat_send():
 
 
 if __name__ == '__main__':
-    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-    # Ensure default collections exist (Real and AI)
-    os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'Real'), exist_ok=True)
-    os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'AI'), exist_ok=True)
     _ensure_scores_file()
     # Clean up any malformed tags data from old format
     print("Cleaning up tags data...")

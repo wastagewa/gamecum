@@ -126,7 +126,6 @@
     </div>
 
     <div class="gallery" id="gallery">
-        {% set prefix = ('uploads/' + collection + '/') if collection else 'uploads/' %}
         {% for image in images %}
         <div class="gallery-item" data-aos="fade-up" data-filename="{{ image }}">
             <button class="item-delete" data-filename="{{ image }}" aria-label="Delete image">
@@ -135,7 +134,7 @@
             <button class="item-slideshow" data-filename="{{ image }}" aria-label="Start slideshow from here">
                 <i class="fas fa-play-circle"></i>
             </button>
-            <img src="{{ url_for('static', filename=prefix + image) }}" 
+            <img src="{{ image_urls[image] if image_urls is defined and image in image_urls else '' }}"
                  alt="Gallery Image"
                  class="gallery-image">
             {% if image_tags and image in image_tags and image_tags[image] %}
