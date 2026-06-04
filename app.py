@@ -8,6 +8,9 @@ import re
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
+import psycopg2
+import psycopg2.pool
+import psycopg2.extras
 
 # Load .env file if present (python-dotenv)
 try:
@@ -26,11 +29,6 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
-SCORES_DIR = 'data'
-SCORES_FILE = os.path.join(SCORES_DIR, 'scores.json')
-TAGS_FILE = os.path.join(SCORES_DIR, 'tags.json')
-IMAGE_METADATA_FILE = os.path.join(SCORES_DIR, 'image_metadata.json')
-COLLECTIONS_FILE = os.path.join(SCORES_DIR, 'collections.json')
 
 cloudinary.config(
     cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME'),
@@ -39,219 +37,287 @@ cloudinary.config(
     secure=True
 )
 
-def _ensure_scores_file():
-    os.makedirs(SCORES_DIR, exist_ok=True)
-    if not os.path.exists(SCORES_FILE):
+# ── Database layer ────────────────────────────────────────────────────────────
+
+_db_pool = None
+
+def _db_url():
+    return (os.environ.get('INTERNAL_POSTGRES_DATABASE_URL') or
+            os.environ.get('DATABASE_URL', ''))
+
+def _get_db():
+    global _db_pool
+    if _db_pool is None:
+        _db_pool = psycopg2.pool.ThreadedConnectionPool(1, 10, dsn=_db_url())
+    return _db_pool.getconn()
+
+def _release_db(conn):
+    global _db_pool
+    if _db_pool and conn:
         try:
-            with open(SCORES_FILE, 'w') as f:
-                json.dump({}, f)
+            _db_pool.putconn(conn)
         except Exception:
             pass
 
-def _load_scores():
-    _ensure_scores_file()
+def init_db():
+    """Create tables if they don't exist. Uses a direct connection, not the pool."""
+    conn = psycopg2.connect(_db_url())
     try:
-        with open(SCORES_FILE, 'r') as f:
-            data = json.load(f)
-            if isinstance(data, dict):
-                return data
-    except Exception:
-        pass
-    return {}
-
-def _load_image_metadata():
-    """Load image metadata (names, descriptions) from JSON file."""
-    _ensure_scores_file()
-    if not os.path.exists(IMAGE_METADATA_FILE):
-        return {}
-    try:
-        with open(IMAGE_METADATA_FILE, 'r') as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-def _save_image_metadata(metadata: dict):
-    """Save image metadata to JSON file."""
-    try:
-        _ensure_scores_file()
-        with open(IMAGE_METADATA_FILE, 'w') as f:
-            json.dump(metadata, f)
-    except Exception:
-        pass
-
-def _save_scores(scores: dict):
-    try:
-        with open(SCORES_FILE, 'w') as f:
-            json.dump(scores, f)
-    except Exception:
-        pass
-
-def _load_tags():
-    """Load image tags from JSON file."""
-    _ensure_scores_file()  # Ensure data dir exists
-    if not os.path.exists(TAGS_FILE):
-        return {}
-    try:
-        with open(TAGS_FILE, 'r') as f:
-            return json.load(f)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS collections (
+                name VARCHAR(255) PRIMARY KEY
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS images (
+                id          SERIAL PRIMARY KEY,
+                collection_name VARCHAR(255) NOT NULL
+                    REFERENCES collections(name) ON DELETE CASCADE,
+                filename    VARCHAR(500) NOT NULL,
+                url         TEXT NOT NULL,
+                tags        TEXT[]  DEFAULT '{}',
+                locked      BOOLEAN DEFAULT FALSE,
+                created_at  TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(collection_name, filename)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS scores (
+                id              SERIAL PRIMARY KEY,
+                collection_name VARCHAR(255) NOT NULL,
+                game_type       VARCHAR(100) NOT NULL,
+                data            JSONB NOT NULL DEFAULT '{}',
+                created_at      TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.close()
+        print("DB tables ready.")
     except Exception as e:
-        print(f"ERROR loading tags: {e}")
-        return {}
+        print(f"WARNING: init_db failed: {e}")
+    finally:
+        conn.close()
 
-def _save_tags(tags: dict):
-    """Save image tags to JSON file."""
-    try:
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(TAGS_FILE), exist_ok=True)
-        with open(TAGS_FILE, 'w') as f:
-            json.dump(tags, f, indent=2)
-    except Exception as e:
-        print(f"ERROR saving tags: {e}")
-        import traceback
-        traceback.print_exc()
+# ── Collections ───────────────────────────────────────────────────────────────
 
 def _load_collections():
-    """Return list of all known collection names (including empty ones)."""
-    os.makedirs(SCORES_DIR, exist_ok=True)
-    if os.path.exists(COLLECTIONS_FILE):
-        try:
-            with open(COLLECTIONS_FILE, 'r') as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return data
-        except Exception:
-            pass
-    # Bootstrap from tags.json if no collections file yet
-    tags = _load_tags()
-    names = set()
-    for key in tags:
-        if '/' in key:
-            names.add(key.split('/')[0])
-    return sorted(names)
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM collections ORDER BY name")
+        return [r[0] for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
 
 def _save_collections(collections: list):
+    pass  # no-op — use _ensure_collection() for inserts, direct DELETE for removes
+
+def _ensure_collection(safe_name: str):
+    """Insert collection into DB if it doesn't exist yet."""
+    conn = _get_db()
     try:
-        os.makedirs(SCORES_DIR, exist_ok=True)
-        with open(COLLECTIONS_FILE, 'w') as f:
-            json.dump(collections, f, indent=2)
-    except Exception:
-        pass
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO collections (name) VALUES (%s) ON CONFLICT DO NOTHING",
+            (safe_name,)
+        )
+        conn.commit()
+    finally:
+        _release_db(conn)
 
 def _collection_exists(safe_name: str):
-    """Check if a collection exists in collections.json or has images in tags.json."""
-    if safe_name in _load_collections():
-        return True
-    tags = _load_tags()
-    prefix = f"{safe_name}/"
-    return any(k.startswith(prefix) for k in tags)
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM collections WHERE name = %s", (safe_name,))
+        return cur.fetchone() is not None
+    finally:
+        _release_db(conn)
+
+# ── Images / Tags ─────────────────────────────────────────────────────────────
+
+def _get_image_key(collection: str, filename: str):
+    return f"{collection}/{filename}" if collection else filename
+
+def _load_tags():
+    """Return all images as a dict keyed by 'collection/filename'."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT collection_name, filename, url, tags, locked FROM images"
+        )
+        result = {}
+        for coll, fname, url, tags, locked in cur.fetchall():
+            result[f"{coll}/{fname}"] = {
+                'tags':   list(tags) if tags else [],
+                'locked': bool(locked),
+                'url':    url,
+            }
+        return result
+    finally:
+        _release_db(conn)
+
+def _save_tags(tags: dict):
+    """UPSERT image rows from dict. Does not delete — use _db_delete_image() for that."""
+    if not tags:
+        return
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        for key, value in tags.items():
+            if '/' not in key or not isinstance(value, dict) or not value.get('url'):
+                continue
+            coll, fname = key.split('/', 1)
+            cur.execute("""
+                INSERT INTO images (collection_name, filename, url, tags, locked)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (collection_name, filename) DO UPDATE
+                  SET url    = EXCLUDED.url,
+                      tags   = EXCLUDED.tags,
+                      locked = EXCLUDED.locked
+            """, (coll, fname, value['url'],
+                  value.get('tags', []), value.get('locked', False)))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _db_insert_image(collection: str, filename: str, url: str):
+    """Insert a new image row, ensuring its collection exists first."""
+    _ensure_collection(collection)
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO images (collection_name, filename, url, tags, locked)
+            VALUES (%s, %s, %s, '{}', FALSE)
+            ON CONFLICT (collection_name, filename) DO UPDATE SET url = EXCLUDED.url
+        """, (collection, filename, url))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _db_delete_image(collection: str, filename: str):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM images WHERE collection_name = %s AND filename = %s",
+            (collection, filename)
+        )
+        conn.commit()
+    finally:
+        _release_db(conn)
 
 def _image_exists_in_tags(safe_name: str, filename: str):
-    """Check if an image is tracked in tags.json (Cloudinary source of truth)."""
-    tags = _load_tags()
-    return _get_image_key(safe_name, filename) in tags
-
-def _cleanup_tags():
-    """Clean up malformed tags data (convert dict objects to string lists), preserving locked status."""
-    tags_data = _load_tags()
-    cleaned = False
-    
-    for key, value in tags_data.items():
-        if isinstance(value, list):
-            # Check if list contains dicts instead of strings
-            if value and isinstance(value[0], dict):
-                # Extract 'tag' field from each dict
-                tags_data[key] = [item.get('tag', str(item)) for item in value if isinstance(item, dict)]
-                cleaned = True
-            else:
-                # Ensure all items are strings
-                tags_data[key] = [str(item) for item in value if isinstance(item, (str, int, float))]
-        elif isinstance(value, dict):
-            # New format: {'tags': [...], 'locked': bool} - preserve it
-            if 'tags' in value:
-                # Ensure it's in the new normalized format
-                tags_data[key] = {
-                    'tags': value['tags'] if isinstance(value['tags'], list) else [],
-                    'locked': value.get('locked', False)
-                }
-            else:
-                # Old format: Dict with tag/confidence structure, convert to new format
-                tags_data[key] = {
-                    'tags': [value.get('tag', str(value))],
-                    'locked': False
-                }
-                cleaned = True
-    
-    if cleaned:
-        _save_tags(tags_data)
-    
-    return tags_data
-
-def _normalize_tags_entry(entry):
-    """Normalize tags entry to new format: {'tags': [...], 'locked': bool}."""
-    if isinstance(entry, list):
-        # Old format: list of tags
-        return {'tags': entry, 'locked': False}
-    elif isinstance(entry, dict):
-        # Could be new format or old dict format
-        if 'tags' in entry:
-            # Already has tags key, ensure locked key exists
-            return {
-                'tags': entry['tags'] if isinstance(entry['tags'], list) else [],
-                'locked': entry.get('locked', False)
-            }
-        elif 'tag' in entry:
-            # Old single tag dict
-            return {'tags': [entry['tag']], 'locked': False}
-        else:
-            # Try to extract all string values as tags
-            return {'tags': [str(v) for v in entry.values() if isinstance(v, str)], 'locked': False}
-    else:
-        return {'tags': [], 'locked': False}
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM images WHERE collection_name = %s AND filename = %s",
+            (safe_name, filename)
+        )
+        return cur.fetchone() is not None
+    finally:
+        _release_db(conn)
 
 def _get_image_tags(collection: str, filename: str):
-    """Get tags for an image. Returns list of tags."""
-    image_key = _get_image_key(collection, filename)
-    tags_data = _load_tags()
-    entry = tags_data.get(image_key, {})
-    normalized = _normalize_tags_entry(entry)
-    return normalized['tags']
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT tags FROM images WHERE collection_name = %s AND filename = %s",
+            (collection, filename)
+        )
+        row = cur.fetchone()
+        return list(row[0]) if row and row[0] else []
+    finally:
+        _release_db(conn)
 
 def _get_image_locked_status(collection: str, filename: str):
-    """Get locked status for an image."""
-    image_key = _get_image_key(collection, filename)
-    tags_data = _load_tags()
-    entry = tags_data.get(image_key, {})
-    normalized = _normalize_tags_entry(entry)
-    return normalized.get('locked', False)
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT locked FROM images WHERE collection_name = %s AND filename = %s",
+            (collection, filename)
+        )
+        row = cur.fetchone()
+        return bool(row[0]) if row else False
+    finally:
+        _release_db(conn)
 
 def _set_image_tags(collection: str, filename: str, tags: list, locked: bool = None):
-    """Set tags for an image, optionally updating locked status."""
-    image_key = _get_image_key(collection, filename)
-    tags_data = _load_tags()
-
-    existing = tags_data.get(image_key, {})
-    # Start from existing dict to preserve extra fields like 'url'
-    entry = dict(existing) if isinstance(existing, dict) else {}
-    normalized = _normalize_tags_entry(existing)
-    entry['tags'] = [str(t).strip() for t in tags if t]
-    entry['locked'] = normalized.get('locked', False)
-    if locked is not None:
-        entry['locked'] = locked
-
-    tags_data[image_key] = entry
-    _save_tags(tags_data)
+    cleaned = [str(t).strip() for t in tags if t]
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        if locked is not None:
+            cur.execute("""
+                UPDATE images SET tags = %s, locked = %s
+                WHERE collection_name = %s AND filename = %s
+            """, (cleaned, locked, collection, filename))
+        else:
+            cur.execute("""
+                UPDATE images SET tags = %s
+                WHERE collection_name = %s AND filename = %s
+            """, (cleaned, collection, filename))
+        conn.commit()
+    finally:
+        _release_db(conn)
 
 def _set_image_locked(collection: str, filename: str, locked: bool):
-    """Set locked status for an image."""
-    image_key = _get_image_key(collection, filename)
-    tags_data = _load_tags()
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE images SET locked = %s WHERE collection_name = %s AND filename = %s",
+            (locked, collection, filename)
+        )
+        conn.commit()
+    finally:
+        _release_db(conn)
 
-    existing = tags_data.get(image_key, {})
-    entry = dict(existing) if isinstance(existing, dict) else {}
-    entry['locked'] = locked
+def _normalize_tags_entry(entry):
+    """Normalize a tags entry dict — kept for callers that use _load_tags() output."""
+    if isinstance(entry, list):
+        return {'tags': entry, 'locked': False}
+    elif isinstance(entry, dict):
+        if 'tags' in entry:
+            return {
+                'tags':   entry['tags'] if isinstance(entry['tags'], list) else [],
+                'locked': entry.get('locked', False),
+            }
+        elif 'tag' in entry:
+            return {'tags': [entry['tag']], 'locked': False}
+        else:
+            return {'tags': [str(v) for v in entry.values() if isinstance(v, str)], 'locked': False}
+    return {'tags': [], 'locked': False}
 
-    tags_data[image_key] = entry
-    _save_tags(tags_data)
+# ── Scores ────────────────────────────────────────────────────────────────────
+
+def _load_scores():
+    """Return {collection: {game_type: [entries sorted desc by score]}}."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT collection_name, game_type, data
+            FROM scores
+            ORDER BY collection_name, game_type,
+                     (data->>'score')::int DESC,
+                     (data->>'time')::int  ASC  NULLS LAST
+        """)
+        result = {}
+        for coll, gtype, data in cur.fetchall():
+            result.setdefault(coll, {}).setdefault(gtype, []).append(data)
+        return result
+    finally:
+        _release_db(conn)
+
+def _save_scores(scores: dict):
+    pass  # no-op — scores are written directly in submit_score()
 
 def _get_image_key(collection: str, filename: str):
     """Generate a unique key for an image."""
@@ -378,18 +444,8 @@ def upload_file(collection=None):
 
         url = result['secure_url']
 
-        # Store URL + empty tags in tags.json
         if collection:
-            tags_data = _load_tags()
-            image_key = _get_image_key(collection, filename)
-            tags_data[image_key] = {'tags': [], 'locked': False, 'url': url}
-            _save_tags(tags_data)
-
-            # Ensure collection is registered
-            all_collections = _load_collections()
-            if collection not in all_collections:
-                all_collections.append(collection)
-                _save_collections(all_collections)
+            _db_insert_image(collection, filename, url)
 
         return jsonify({
             'success': True,
@@ -550,9 +606,7 @@ def create_collection():
             return jsonify({'error': 'Invalid collection name'}), 400
         if _collection_exists(safe):
             return jsonify({'error': 'Collection already exists'}), 409
-        all_collections = _load_collections()
-        all_collections.append(safe)
-        _save_collections(all_collections)
+        _ensure_collection(safe)
         return jsonify({'success': True, 'name': safe})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -656,61 +710,72 @@ def submit_score():
                 'time': time_val
             })
 
-        scores_data = _load_scores()
-        # Structure: { collection: { gameType: [entries], ... }, ... }
-        if collection not in scores_data:
-            scores_data[collection] = {}
-        
-        if not isinstance(scores_data[collection], dict):
-            scores_data[collection] = {}
-        
-        if game_type not in scores_data[collection]:
-            scores_data[collection][game_type] = []
-        
-        leaderboard = scores_data[collection][game_type]
-        if not isinstance(leaderboard, list):
-            leaderboard = []
-        
-        leaderboard.append(entry)
-        # Sort by score descending, then by time ascending (tie-breaker)
-        leaderboard.sort(key=lambda x: (-x.get('score', 0), x.get('time', 10**9)))
-        # Keep top 10
-        leaderboard = leaderboard[:10]
-        scores_data[collection][game_type] = leaderboard
-        _save_scores(scores_data)
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            # Insert new score row
+            cur.execute(
+                "INSERT INTO scores (collection_name, game_type, data) VALUES (%s, %s, %s)",
+                (collection, game_type, json.dumps(entry))
+            )
+            # Keep only top 10 for this (collection, game_type)
+            cur.execute("""
+                DELETE FROM scores
+                WHERE collection_name = %s AND game_type = %s
+                  AND id NOT IN (
+                      SELECT id FROM scores
+                      WHERE collection_name = %s AND game_type = %s
+                      ORDER BY (data->>'score')::int DESC,
+                               (data->>'time')::int  ASC NULLS LAST
+                      LIMIT 10
+                  )
+            """, (collection, game_type, collection, game_type))
+            # Fetch current top 5 for the response
+            cur.execute("""
+                SELECT data FROM scores
+                WHERE collection_name = %s AND game_type = %s
+                ORDER BY (data->>'score')::int DESC,
+                         (data->>'time')::int  ASC NULLS LAST
+                LIMIT 5
+            """, (collection, game_type))
+            leaderboard = [r[0] for r in cur.fetchall()]
+            conn.commit()
+        finally:
+            _release_db(conn)
 
-        # Check if this entry is in top 5 (considered "new best" for UI feedback)
-        is_top = any(e == entry for e in leaderboard[:5])
-
-        return jsonify({'success': True, 'updated': is_top, 'score': entry.get('score', 0), 'leaderboard': leaderboard[:5]})
+        is_top = any(e == entry for e in leaderboard)
+        return jsonify({'success': True, 'updated': is_top, 'score': entry.get('score', 0), 'leaderboard': leaderboard})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/high-scores/<collection>')
 def get_high_scores(collection):
-    """Get high scores for all games in a collection.
-    Returns: { gameType: [top 3 entries], ... }
-    """
+    """Get top-3 scores for every game type in a collection."""
     try:
         collection = _safe_collection_name(collection)
         if not collection:
             return jsonify({'error': 'Invalid collection'}), 400
-        
-        scores_data = _load_scores()
-        result = {}
-        
-        if collection in scores_data:
-            collection_scores = scores_data[collection]
-            if isinstance(collection_scores, dict):
-                # New format: { gameType: [entries], ... }
-                for game_type, leaderboard in collection_scores.items():
-                    if isinstance(leaderboard, list):
-                        result[game_type] = leaderboard[:3]  # Top 3 per game
-            else:
-                # Old format: list of entries - assume all memory game
-                result['memory'] = collection_scores[:3] if isinstance(collection_scores, list) else []
-        
+
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT game_type, data
+                FROM scores
+                WHERE collection_name = %s
+                ORDER BY game_type,
+                         (data->>'score')::int DESC,
+                         (data->>'time')::int  ASC NULLS LAST
+            """, (collection,))
+            result = {}
+            for gtype, data in cur.fetchall():
+                bucket = result.setdefault(gtype, [])
+                if len(bucket) < 3:
+                    bucket.append(data)
+        finally:
+            _release_db(conn)
+
         return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -732,14 +797,7 @@ def delete_image_in_collection(collection, filename):
         name_no_ext = os.path.splitext(filename)[0]
         public_id = f"{collection}/{name_no_ext}"
         cloudinary.uploader.destroy(public_id)
-
-        # Remove from tags.json
-        tags_data = _load_tags()
-        image_key = _get_image_key(collection, filename)
-        if image_key in tags_data:
-            del tags_data[image_key]
-            _save_tags(tags_data)
-
+        _db_delete_image(collection, filename)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -905,9 +963,7 @@ def api_create_collection():
         return jsonify({'success': False, 'error': 'Collection already exists'}), 400
 
     try:
-        all_collections = _load_collections()
-        all_collections.append(safe_name)
-        _save_collections(all_collections)
+        _ensure_collection(safe_name)
         return jsonify({'success': True, 'message': 'Collection created'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -936,35 +992,53 @@ def api_rename_collection():
         return jsonify({'success': False, 'error': 'Target name already exists'}), 400
 
     try:
-        tags_data = _load_tags()
-        prefix = f"{safe_old}/"
-        updated_tags = {}
+        # Create new collection record first
+        _ensure_collection(safe_new)
 
-        for key, value in tags_data.items():
-            if key.startswith(prefix):
-                filename = key[len(prefix):]
-                name_no_ext = os.path.splitext(filename)[0]
-                old_public_id = f"{safe_old}/{name_no_ext}"
-                new_public_id = f"{safe_new}/{name_no_ext}"
-                try:
-                    rename_result = cloudinary.uploader.rename(old_public_id, new_public_id)
-                    if isinstance(value, dict):
-                        value = dict(value)
-                        value['url'] = rename_result.get('secure_url', value.get('url', ''))
-                except Exception:
-                    pass
-                updated_tags[f"{safe_new}/{filename}"] = value
-            else:
-                updated_tags[key] = value
+        # Rename each Cloudinary asset and update its DB row
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT filename, url FROM images WHERE collection_name = %s",
+                (safe_old,)
+            )
+            rows = cur.fetchall()
+        finally:
+            _release_db(conn)
 
-        _save_tags(updated_tags)
+        for filename, old_url in rows:
+            name_no_ext = os.path.splitext(filename)[0]
+            new_url = old_url
+            try:
+                result = cloudinary.uploader.rename(
+                    f"{safe_old}/{name_no_ext}",
+                    f"{safe_new}/{name_no_ext}"
+                )
+                new_url = result.get('secure_url', old_url)
+            except Exception:
+                pass
 
-        # Update collections registry
-        all_collections = _load_collections()
-        all_collections = [safe_new if c == safe_old else c for c in all_collections]
-        if safe_new not in all_collections:
-            all_collections.append(safe_new)
-        _save_collections(all_collections)
+            conn = _get_db()
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE images
+                    SET collection_name = %s, url = %s
+                    WHERE collection_name = %s AND filename = %s
+                """, (safe_new, new_url, safe_old, filename))
+                conn.commit()
+            finally:
+                _release_db(conn)
+
+        # Remove old collection record (all images already moved above)
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM collections WHERE name = %s", (safe_old,))
+            conn.commit()
+        finally:
+            _release_db(conn)
 
         return jsonify({'success': True, 'message': 'Collection renamed'})
     except Exception as e:
@@ -996,14 +1070,14 @@ def api_delete_collection():
         except Exception:
             pass
 
-        # Remove from tags.json
-        tags_data = _load_tags()
-        updated_tags = {k: v for k, v in tags_data.items() if not k.startswith(f"{safe_name}/")}
-        _save_tags(updated_tags)
-
-        # Remove from collections registry
-        all_collections = [c for c in _load_collections() if c != safe_name]
-        _save_collections(all_collections)
+        # DELETE FROM collections CASCADE-deletes all images rows automatically
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM collections WHERE name = %s", (safe_name,))
+            conn.commit()
+        finally:
+            _release_db(conn)
 
         return jsonify({'success': True, 'message': 'Collection deleted'})
     except Exception as e:
@@ -1859,10 +1933,11 @@ def api_chat_send():
         return jsonify({'error': 'Unexpected error. Please try again.'}), 500
 
 
+# Initialise DB tables on every startup (safe — uses IF NOT EXISTS)
+try:
+    init_db()
+except Exception as _init_err:
+    print(f"WARNING: DB init skipped: {_init_err}")
+
 if __name__ == '__main__':
-    _ensure_scores_file()
-    # Clean up any malformed tags data from old format
-    print("Cleaning up tags data...")
-    _cleanup_tags()
-    print("Tags cleanup complete!")
     app.run()
