@@ -99,11 +99,63 @@
         } catch (e) { /* silent */ }
     }
 
+    // Mobile hamburger menu: collapse the navbar links into a toggleable panel
+    function setupMobileNav() {
+        const container = document.querySelector('.navbar-container');
+        const menu = document.querySelector('.navbar-menu');
+        if (!container || !menu) return;
+
+        let toggle = container.querySelector('.navbar-toggle');
+        if (!toggle) {
+            toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'navbar-toggle';
+            toggle.setAttribute('aria-label', 'Toggle navigation menu');
+            toggle.setAttribute('aria-expanded', 'false');
+            toggle.innerHTML = '<i class="fas fa-bars"></i>';
+            container.insertBefore(toggle, menu);
+        }
+
+        function closeMenu() {
+            menu.classList.remove('is-open');
+            toggle.setAttribute('aria-expanded', 'false');
+            toggle.innerHTML = '<i class="fas fa-bars"></i>';
+            menu.querySelectorAll('.navbar-dropdown.is-open').forEach(d => d.classList.remove('is-open'));
+        }
+
+        toggle.addEventListener('click', () => {
+            const isOpen = menu.classList.toggle('is-open');
+            toggle.setAttribute('aria-expanded', String(isOpen));
+            toggle.innerHTML = isOpen ? '<i class="fas fa-times"></i>' : '<i class="fas fa-bars"></i>';
+        });
+
+        // Use delegation so dynamically-added links (collections, user nav) work too
+        menu.addEventListener('click', (e) => {
+            const dropBtn = e.target.closest('.navbar-dropdown-toggle');
+            if (dropBtn && window.innerWidth <= 900) {
+                e.preventDefault();
+                e.stopPropagation();
+                dropBtn.closest('.navbar-dropdown').classList.toggle('is-open');
+                return;
+            }
+            if (e.target.closest('a')) {
+                closeMenu();
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (menu.classList.contains('is-open') && !container.contains(e.target)) {
+                closeMenu();
+            }
+        });
+    }
+
     // Load collections when DOM is ready
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => { loadCollections(); loadUserNav(); });
+        document.addEventListener('DOMContentLoaded', () => { loadCollections(); loadUserNav(); setupMobileNav(); });
     } else {
         loadCollections();
         loadUserNav();
+        setupMobileNav();
     }
 })();

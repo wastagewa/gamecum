@@ -1175,6 +1175,118 @@ body {
     transform: rotate(15deg) scale(1.1);
 }
 
+.navbar-dropdown-toggle {
+    cursor: pointer;
+    background: none;
+    border: none;
+    font: inherit;
+    color: inherit;
+}
+
+/* ========== MOBILE NAVBAR ========== */
+.navbar-toggle {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    border: none;
+    background: rgba(255, 107, 129, 0.1);
+    color: var(--text-color);
+    font-size: 1.2rem;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.2s ease;
+}
+
+.navbar-toggle:hover {
+    background: var(--gradient-accent);
+    color: white;
+}
+
+@media (max-width: 900px) {
+    .navbar-container {
+        position: relative;
+        flex-wrap: nowrap;
+        height: 64px;
+        padding: 10px 16px;
+    }
+
+    .navbar-brand {
+        font-size: 1.25rem;
+    }
+
+    .navbar-brand i {
+        font-size: 1.6rem;
+    }
+
+    .navbar-toggle {
+        display: flex;
+    }
+
+    .navbar-menu {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 6px;
+        padding: 12px 16px 16px;
+        background: var(--surface-color);
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 16px 32px var(--shadow-color);
+        max-height: calc(100vh - 64px);
+        overflow-y: auto;
+        z-index: 9998;
+    }
+
+    .navbar-menu.is-open {
+        display: flex;
+    }
+
+    .navbar-dropdown-toggle {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .navbar-dropdown::after {
+        display: none;
+    }
+
+    .navbar-dropdown-menu {
+        display: none;
+        position: static;
+        width: 100%;
+        min-width: 0;
+        margin-top: 4px;
+        box-shadow: none;
+        background: rgba(0,0,0,0.12);
+        border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .navbar-dropdown:hover .navbar-dropdown-menu {
+        display: none;
+    }
+
+    .navbar-dropdown.is-open .navbar-dropdown-menu {
+        display: block;
+        animation: none;
+    }
+
+    .navbar-theme-toggle {
+        align-self: flex-start;
+    }
+}
+
+@media (max-width: 400px) {
+    .navbar-brand span {
+        display: none;
+    }
+}
+
 /* ========== HERO SECTION ========== */
 .hero-section {
     position: relative;
@@ -1800,6 +1912,93 @@ body {
     background: var(--gradient-accent);
     color: white;
     transform: translateY(-4px);
+}
+
+/* ========== HOME PAGE RESPONSIVE ========== */
+@media (max-width: 768px) {
+    .hero-section {
+        padding: 40px 16px 36px;
+    }
+
+    .hero-subtitle {
+        font-size: 1.05rem;
+        padding: 0 4px;
+    }
+
+    .hero-actions {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+    }
+
+    .hero-btn {
+        justify-content: center;
+        padding: 14px 24px;
+        font-size: 1rem;
+    }
+
+    .floating-card {
+        width: 56px;
+        height: 56px;
+        font-size: 1.4rem;
+    }
+
+    .main-content {
+        padding: 28px 16px;
+    }
+
+    .section-title {
+        font-size: 1.8rem;
+        text-align: center;
+    }
+
+    .section-subtitle {
+        font-size: 1rem;
+    }
+
+    .collections-grid {
+        grid-template-columns: 1fr;
+        gap: 18px;
+    }
+
+    .modern-collection-card {
+        padding: 18px;
+    }
+
+    .collection-name {
+        font-size: 1.25rem;
+    }
+
+    .collection-actions {
+        flex-direction: column;
+    }
+
+    .create-card {
+        padding: 24px;
+    }
+
+    .create-header h2 {
+        font-size: 1.5rem;
+    }
+}
+
+@media (max-width: 400px) {
+    .hero-title {
+        font-size: 2rem;
+    }
+
+    .high-scores-tabs {
+        gap: 6px;
+    }
+
+    .score-tab-btn {
+        padding: 5px 10px;
+        font-size: 0.78rem;
+    }
+
+    .footer-links {
+        gap: 12px;
+    }
 }
 
 /* ========== FULLSCREEN SLIDESHOW ========== */
