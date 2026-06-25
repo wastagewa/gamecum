@@ -804,7 +804,7 @@ def submit_score():
             return jsonify({'error': 'Invalid or missing collection'}), 400
         
         game_type = str(data.get('gameType', 'memory')).lower()
-        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap', 'spotlight', 'flashmemory', 'whoisthat', 'bracket', 'scratch', 'behindblur', 'silhouette', 'towerdefense', 'heatmap', 'gallerywalk', 'breakout', 'bubbleburst', 'shootinggallery']
+        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap', 'spotlight', 'flashmemory', 'whoisthat', 'bracket', 'scratch', 'behindblur', 'silhouette', 'towerdefense', 'heatmap', 'gallerywalk', 'breakout', 'bubbleburst', 'shootinggallery', 'orbitingvault', 'cargobay', 'timeloop', 'heistdrone']
         if game_type not in allowed_games:
             game_type = 'memory'
         
@@ -1654,6 +1654,34 @@ def collection_shootinggallery(collection_name):
     return render_template('shootinggallery.html', collection=collection)
 
 
+@app.route('/collection/<collection_name>/orbitingvault')
+def collection_orbitingvault(collection_name):
+    """Orbiting Vault: framed images orbit on a rotating ring — click the one matching the target before it swings out of view."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('orbitingvault.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/cargobay')
+def collection_cargobay(collection_name):
+    """Zero-Gravity Cargo Bay: tractor-beam the drifting crate matching the target before it's lost to the airlock."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('cargobay.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/timeloop')
+def collection_timeloop(collection_name):
+    """Time-Loop Detective: scrub a looping noir room's timeline to catch the target photo in the right frame at the right moment."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('timeloop.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/heistdrone')
+def collection_heistdrone(collection_name):
+    """Gallery Heist Drone: free-fly a drone through a multi-room mansion, dodge sweeping spotlights, and scan the target painting in each room."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('heistdrone.html', collection=collection)
+
+
 @app.route('/collection/<collection_name>/bubbleburst')
 def collection_bubbleburst(collection_name):
     """Bubble Burst: pop rising bubbles that contain the target image before they escape."""
@@ -2212,8 +2240,12 @@ def api_heartbeat():
 
 @app.route('/auth/google')
 def auth_google():
-    redirect_uri = url_for('auth_google_callback', _external=True)
-    return google_oauth.authorize_redirect(redirect_uri)
+    try:
+        redirect_uri = url_for('auth_google_callback', _external=True)
+        return google_oauth.authorize_redirect(redirect_uri)
+    except Exception as e:
+        print(f"Google auth redirect error: {e}")
+        return redirect(url_for('login_page') + '?error=google_failed')
 
 @app.route('/auth/google/callback')
 def auth_google_callback():
@@ -2347,6 +2379,18 @@ try:
     _seed_admin()
 except Exception as _init_err:
     print(f"WARNING: DB init skipped: {_init_err}")
+
+# Pre-fetch Google's OIDC discovery document + JWKS now, at process startup,
+# instead of lazily on the first user's login click. Authlib only fetches
+# this once and caches it in-process — without pre-warming, whoever hits
+# /auth/google first after a cold start (e.g. Render's free-tier dyno waking
+# from sleep) pays that network round-trip inline and can hit a transient
+# failure; everyone after them just uses the cached metadata.
+try:
+    google_oauth.load_server_metadata()
+    print("Google OAuth metadata pre-warmed.")
+except Exception as _oauth_warm_err:
+    print(f"WARNING: Google OAuth metadata pre-warm failed (will retry lazily on first login): {_oauth_warm_err}")
 
 if __name__ == '__main__':
     app.run()

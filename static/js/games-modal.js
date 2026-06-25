@@ -162,6 +162,30 @@ document.addEventListener('DOMContentLoaded', () => {
             url: `/collection/${_coll}/shootinggallery`
         },
         {
+            name: 'Orbiting Vault',
+            icon: 'fa-dharmachakra',
+            description: 'Framed images orbit on a rotating 3D vault ring — click the one matching the target before it swings out of view!',
+            url: `/collection/${_coll}/orbitingvault`
+        },
+        {
+            name: 'Zero-Gravity Cargo Bay',
+            icon: 'fa-satellite',
+            description: 'Image-pods drift freely through a zero-G cargo bay — tractor-beam the right one before it floats into the airlock!',
+            url: `/collection/${_coll}/cargobay`
+        },
+        {
+            name: 'Time-Loop Detective',
+            icon: 'fa-clock-rotate-left',
+            description: 'A noir room loops on a 24s tape — scrub the timeline to catch the suspect photo in the right frame at the right moment!',
+            url: `/collection/${_coll}/timeloop`
+        },
+        {
+            name: 'Gallery Heist Drone',
+            icon: 'fa-helicopter',
+            description: 'Free-fly a drone through a mansion of paintings — dodge the sweeping spotlights and scan the right one in each room!',
+            url: `/collection/${_coll}/heistdrone`
+        },
+        {
             name: 'Bubble Burst',
             icon: 'fa-soap',
             description: 'Bubbles float up from the dark — pop every one containing the target image, dodge the decoys!',
