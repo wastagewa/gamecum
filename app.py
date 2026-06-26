@@ -37,7 +37,14 @@ app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
-socketio = SocketIO(app, async_mode='threading')
+
+# allow_upgrades=False: gthread workers can't safely hold a long-lived
+# WebSocket connection — the upgrade blocks a worker thread in ws.wait(),
+# which trips gunicorn's worker-timeout watchdog and gets the whole worker
+# (and every other in-memory Socket.IO session on it, since --workers 1)
+# SIGKILLed and restarted. Staying on plain HTTP long-polling avoids this
+# entirely and is plenty fast for these games' multi-second event cadence.
+socketio = SocketIO(app, async_mode='threading', allow_upgrades=False)
 
 cloudinary.config(
     cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME'),
