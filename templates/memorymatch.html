@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Memory Match Duel{% if collection %} - {{ collection }}{% endif %}</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/svg+xml"  href="{{ url_for('static', filename='favicon.svg') }}">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        (function(){var t=null;try{t=localStorage.getItem('imgur.theme')}catch(e){}
+        if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}
+        if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');document.documentElement.style.colorScheme='dark';}
+        else{document.documentElement.removeAttribute('data-theme');document.documentElement.style.colorScheme='light';}})();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <!-- Socket.IO client — must match the flask-socketio server's protocol version -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+<body>
+<nav class="navbar">
+  <div class="navbar-container">
+    <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+    <div class="navbar-menu">
+      <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+      <div class="navbar-dropdown">
+        <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+        <div class="navbar-dropdown-menu" id="collectionsDropdown"></div>
+      </div>
+      <a href="/tags" class="navbar-link"><i class="fas fa-tags"></i> Browse Tags</a>
+      {% if collection %}
+      <a href="/collection/{{ collection }}" class="navbar-link"><i class="fas fa-images"></i> Gallery</a>
+      <button class="navbar-link" id="gamesMenuBtn"><i class="fas fa-gamepad"></i> Single Player Games</button>
+      <button class="navbar-link" id="multiplayerGamesBtn"><i class="fas fa-user-group"></i> Multiplayer Games</button>
+      {% endif %}
+      <a href="/manage-collections" class="navbar-link"><i class="fas fa-cog"></i> Manage</a>
+      <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+    </div>
+  </div>
+</nav>
+
+<div id="mmContainer">
+  <div class="mm-content">
+
+    <div class="mm-title-bar">
+      <button id="mmFullscreenBtn" class="control-btn secondary mm-fullscreen-top"><i class="fas fa-expand"></i> Fullscreen</button>
+      <h1 class="mm-title"><i class="fas fa-brain"></i> Memory Match Duel</h1>
+      <p class="mm-subtitle">Classic 2-player Concentration. Take turns flipping two cards — find a pair and go again, miss and it's your opponent's turn. Most pairs wins.</p>
+    </div>
+
+    <!-- ════════════════ LOBBY ════════════════ -->
+    <div id="mmLobby" class="mm-lobby">
+      <div class="mm-lobby-options">
+        <div class="mm-lobby-card">
+          <i class="fas fa-circle-plus"></i>
+          <h3>Create a Match</h3>
+          <p>Set both players' names and the board, then send the code/link to your opponent.</p>
+          <div class="settings-group">
+            <label>Your name:</label>
+            <input type="text" id="mmUsername" class="setting-input" placeholder="Player 1" maxlength="20">
+          </div>
+          <div class="settings-group">
+            <label>Opponent's name:</label>
+            <input type="text" id="mmOpponentUsername" class="setting-input" placeholder="Player 2" maxlength="20">
+          </div>
+          <div class="settings-group">
+            <label>Number of images to use:</label>
+            <input type="number" id="mmNumImages" class="setting-input" value="8" min="4">
+          </div>
+          <p class="mm-hint" id="mmCardsHint">Checking collection size&hellip;</p>
+          <div class="settings-group">
+            <label>Card width (px):</label>
+            <input type="number" id="mmCardWidth" class="setting-input" value="100" min="40" max="800" step="10">
+          </div>
+          <div class="settings-group">
+            <label>Card height (px):</label>
+            <input type="number" id="mmCardHeight" class="setting-input" value="100" min="40" max="800" step="10">
+          </div>
+          <div class="settings-group">
+            <label>Image fit:</label>
+            <select id="mmFitMode" class="setting-input">
+              <option value="fit" selected>Fit (keep proportions)</option>
+              <option value="stretch">Stretch (fill the card)</option>
+            </select>
+          </div>
+          <button id="mmCreateBtn" class="control-btn primary"><i class="fas fa-play"></i> Create Match</button>
+          <p class="mm-hint" id="mmConfigSavedHint"></p>
+        </div>
+        <div class="mm-lobby-divider">OR</div>
+        <div class="mm-lobby-card">
+          <i class="fas fa-right-to-bracket"></i>
+          <h3>Join a Match</h3>
+          <p>Enter the code your opponent sent you. (If you clicked their link, this happens automatically.)</p>
+          <div class="vz-join-row">
+            <input type="text" id="mmJoinCode" class="setting-input" placeholder="ROOM CODE" maxlength="5" style="text-transform:uppercase">
+            <button id="mmJoinBtn" class="control-btn secondary"><i class="fas fa-right-to-bracket"></i> Join</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Waiting room shown after creating, before an opponent joins -->
+      <div id="mmWaitingRoom" class="vz-waiting-room" style="display:none">
+        <i class="fas fa-circle-notch fa-spin"></i>
+        <p>Room code:</p>
+        <div class="vz-room-code" id="mmRoomCodeDisplay"></div>
+        <p class="vz-waiting-sub">Share this code (or copy the link below) with your opponent.</p>
+        <div class="vz-share-row">
+          <input type="text" id="mmShareLink" class="setting-input" readonly>
+          <button id="mmCopyLinkBtn" class="control-btn secondary"><i class="fas fa-copy"></i> Copy</button>
+        </div>
+        <p class="vz-waiting-status">Waiting for opponent to join&hellip;</p>
+      </div>
+
+      <!-- Shown briefly while auto-joining from a shared link -->
+      <div id="mmAutoJoining" class="vz-waiting-room" style="display:none">
+        <i class="fas fa-circle-notch fa-spin"></i>
+        <p class="vz-waiting-status">Joining match&hellip;</p>
+      </div>
+
+      <div id="mmLobbyError" class="vz-lobby-error"></div>
+    </div>
+
+  </div>
+
+  <!-- The match view sits outside .mm-content's max-width cap so the card
+       grid can grow to use the full screen width instead of being capped
+       at the lobby's reading-width. -->
+  <!-- ════════════════ MATCH ════════════════ -->
+  <div id="mmMatch" class="mm-match" style="display:none">
+
+      <div class="mm-hud">
+        <div class="mm-player-card mm-player-you" id="mmYouCard">
+          <span class="mm-player-label">YOU</span>
+          <span class="mm-player-name" id="mmYouName">—</span>
+          <span class="mm-player-score" id="mmYouScore">0</span>
+        </div>
+        <div class="mm-hud-mid">
+          <span class="mm-turn-indicator" id="mmTurnIndicator">—</span>
+        </div>
+        <div class="mm-player-card mm-player-opp" id="mmOppCard">
+          <span class="mm-player-label">OPPONENT</span>
+          <span class="mm-player-name" id="mmOppName">—</span>
+          <span class="mm-player-score" id="mmOppScore">0</span>
+        </div>
+      </div>
+
+      <div id="mmMessage" class="vz-message"></div>
+
+      <div class="mm-board" id="mmBoard"></div>
+
+      <!-- Match-over banner -->
+      <div id="mmMatchOver" class="vz-match-over" style="display:none"></div>
+
+      <div class="vz-controls">
+        <button id="mmRematchBtn" class="control-btn primary" style="display:none"><i class="fas fa-rotate-right"></i> New Match</button>
+        <button id="mmLeaveBtn" class="control-btn secondary"><i class="fas fa-arrow-left"></i> Leave Match</button>
+      </div>
+  </div>
+</div>
+
+<div id="gamesModal" class="games-modal">
+  <div class="games-modal-content">
+    <div class="games-modal-header">
+      <h2><i class="fas fa-gamepad"></i> Choose a Game</h2>
+      <button class="games-modal-close" id="gamesModalClose"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="games-grid" id="gamesGrid"></div>
+  </div>
+</div>
+
+<script>const CURRENT_COLLECTION = "{{ collection }}";</script>
+<script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+<script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+<script src="{{ url_for('static', filename='js/memorymatch.js') }}"></script>
+<script src="{{ url_for('static', filename='js/games-modal.js') }}"></script>
+</body>
+</html>

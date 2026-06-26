@@ -1,16 +1,18 @@
 // Games Modal Functionality
 document.addEventListener('DOMContentLoaded', () => {
     const gamesMenuBtn = document.getElementById('gamesMenuBtn');
+    const multiplayerGamesBtn = document.getElementById('multiplayerGamesBtn');
     const gamesModal = document.getElementById('gamesModal');
     const gamesModalClose = document.getElementById('gamesModalClose');
     const gamesGrid = document.getElementById('gamesGrid');
+    const gamesModalTitle = gamesModal ? gamesModal.querySelector('.games-modal-header h2') : null;
     // Read the collection name injected by the template:
     //   <script>const CURRENT_COLLECTION = "{{ collection }}";</script>
     // `const` at script-tag level is NOT a window property, so
     // window.CURRENT_COLLECTION is always undefined — reference it directly.
     const _coll = (typeof CURRENT_COLLECTION !== 'undefined' ? CURRENT_COLLECTION : '') || 'Real';
 
-    const games = [
+    const singlePlayerGames = [
         {
             name: 'Memory Game',
             icon: 'fa-gamepad',
@@ -209,27 +211,53 @@ document.addEventListener('DOMContentLoaded', () => {
             description: 'Stroll through a private art gallery of your collection. Click any painting to examine it up close.',
             url: `/collection/${_coll}/gallerywalk`
         },
-
     ];
 
-    if (gamesMenuBtn && gamesModal) {
-        gamesMenuBtn.addEventListener('click', () => {
-            gamesGrid.innerHTML = '';
-            games.forEach(game => {
-                const gameCard = document.createElement('a');
-                gameCard.href = game.url;
-                gameCard.className = 'game-card';
-                gameCard.innerHTML = `
-                    <div class="game-card-icon">
-                        <i class="fas ${game.icon}"></i>
-                    </div>
-                    <h3>${game.name}</h3>
-                    <p>${game.description}</p>
-                `;
-                gamesGrid.appendChild(gameCard);
-            });
-            gamesModal.classList.add('active');
+    const multiplayerGames = [
+        {
+            name: 'Versus Zoom Reveal',
+            icon: 'fa-magnifying-glass',
+            description: 'Live 2-player face-off! You and a friend each see a different zoomed snippet — race to guess which of two blurred images it came from.',
+            url: `/collection/${_coll}/versuszoom`
+        },
+        {
+            name: 'Memory Match Duel',
+            icon: 'fa-brain',
+            description: 'Classic 2-player Concentration, live! Take turns flipping cards on a shared board — most pairs found wins.',
+            url: `/collection/${_coll}/memorymatch`
+        },
+    ];
+
+    function renderGamesGrid(list) {
+        gamesGrid.innerHTML = '';
+        list.forEach(game => {
+            const gameCard = document.createElement('a');
+            gameCard.href = game.url;
+            gameCard.className = 'game-card';
+            gameCard.innerHTML = `
+                <div class="game-card-icon">
+                    <i class="fas ${game.icon}"></i>
+                </div>
+                <h3>${game.name}</h3>
+                <p>${game.description}</p>
+            `;
+            gamesGrid.appendChild(gameCard);
         });
+    }
+
+    function openGamesModal(list, title) {
+        renderGamesGrid(list);
+        if (gamesModalTitle) gamesModalTitle.innerHTML = `<i class="fas fa-gamepad"></i> ${title}`;
+        gamesModal.classList.add('active');
+    }
+
+    if (gamesModal) {
+        if (gamesMenuBtn) {
+            gamesMenuBtn.addEventListener('click', () => openGamesModal(singlePlayerGames, 'Single Player Games'));
+        }
+        if (multiplayerGamesBtn) {
+            multiplayerGamesBtn.addEventListener('click', () => openGamesModal(multiplayerGames, 'Multiplayer Games'));
+        }
 
         gamesModalClose.addEventListener('click', () => {
             gamesModal.classList.remove('active');

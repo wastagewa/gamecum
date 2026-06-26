@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for, session
+from flask_socketio import SocketIO, emit, join_room as sio_join_room
 import os
 import json
 from werkzeug.utils import secure_filename
@@ -6,6 +7,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import uuid
 import random
 import re
+import string
+import time as _time
 from functools import wraps
 import cloudinary
 import cloudinary.uploader
@@ -33,6 +36,8 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+
+socketio = SocketIO(app, async_mode='threading')
 
 cloudinary.config(
     cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME'),
@@ -804,7 +809,7 @@ def submit_score():
             return jsonify({'error': 'Invalid or missing collection'}), 400
         
         game_type = str(data.get('gameType', 'memory')).lower()
-        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap', 'spotlight', 'flashmemory', 'whoisthat', 'bracket', 'scratch', 'behindblur', 'silhouette', 'towerdefense', 'heatmap', 'gallerywalk', 'breakout', 'bubbleburst', 'shootinggallery', 'orbitingvault', 'cargobay', 'timeloop', 'heistdrone']
+        allowed_games = ['memory', 'flashcards', 'hunt', 'puzzle', 'sequence', 'zoom', 'whack', 'recall', 'missing', 'trail', 'remix', 'tag-match', 'oddoneout', 'speedsort', 'snap', 'spotlight', 'flashmemory', 'whoisthat', 'bracket', 'scratch', 'behindblur', 'silhouette', 'towerdefense', 'heatmap', 'gallerywalk', 'breakout', 'bubbleburst', 'shootinggallery', 'orbitingvault', 'cargobay', 'timeloop', 'heistdrone', 'versuszoom', 'memorymatch']
         if game_type not in allowed_games:
             game_type = 'memory'
         
@@ -1682,6 +1687,20 @@ def collection_heistdrone(collection_name):
     return render_template('heistdrone.html', collection=collection)
 
 
+@app.route('/collection/<collection_name>/versuszoom')
+def collection_versuszoom(collection_name):
+    """Versus Zoom Reveal: a live 2-player game — each player sees a different zoomed-in snippet and races to guess which of two blurred full images it came from."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('versuszoom.html', collection=collection)
+
+
+@app.route('/collection/<collection_name>/memorymatch')
+def collection_memorymatch(collection_name):
+    """Memory Match Duel: live 2-player turn-based Concentration on a shared board — find more pairs than your opponent to win."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('memorymatch.html', collection=collection)
+
+
 @app.route('/collection/<collection_name>/bubbleburst')
 def collection_bubbleburst(collection_name):
     """Bubble Burst: pop rising bubbles that contain the target image before they escape."""
@@ -2371,6 +2390,465 @@ def api_set_admin(user_id):
         _release_db(conn)
     return jsonify({'success': True, 'is_admin': make_admin})
 
+# ── Versus Zoom Reveal: live 2-player room/match state machine ────────────────
+# Each player sees a different zoomed-in crop of one of two images and races to
+# guess which of the two (shown blurred, same order for both players) it came
+# from. Room state lives in a plain process-local dict — fine since gunicorn
+# runs a single worker process here and rooms only last the length of one
+# match (a few minutes), so there's no need to persist this in Postgres.
+
+_vz_rooms = {}      # room_code -> room state
+_vz_sid_room = {}   # socket id -> room_code, for disconnect cleanup
+
+VZ_ROUNDS_PER_MATCH = 5
+VZ_ANSWER_WINDOW = 14   # seconds players get to lock in a guess each round
+VZ_REVEAL_PAUSE = 5      # seconds the reveal stays up before the next round
+
+
+def _vz_gen_code():
+    alphabet = string.ascii_uppercase + string.digits
+    while True:
+        code = ''.join(random.choices(alphabet, k=5))
+        if code not in _vz_rooms:
+            return code
+
+
+def _vz_collection_images(collection):
+    tags_data = _load_tags()
+    prefix = f"{collection}/"
+    images = []
+    for key, value in tags_data.items():
+        if key.startswith(prefix) and isinstance(value, dict) and value.get('url'):
+            images.append({'filename': key[len(prefix):], 'url': value['url']})
+    return images
+
+
+def _vz_random_crop():
+    """A believable zoomed-in crop window, as top-left-origin fractions of the full image."""
+    w = random.uniform(0.22, 0.34)
+    h = random.uniform(0.22, 0.34)
+    x = random.uniform(0, 1 - w)
+    y = random.uniform(0, 1 - h)
+    return {'x': round(x, 4), 'y': round(y, 4), 'w': round(w, 4), 'h': round(h, 4)}
+
+
+def _vz_start_round(room, code):
+    pool = [img for img in room['pool'] if img['url'] not in room['used']]
+    if len(pool) < 2:
+        room['used'] = set()
+        pool = room['pool']
+    pair = random.sample(pool, 2)
+    for img in pair:
+        room['used'].add(img['url'])
+
+    sids = list(room['players'].keys())
+    random.shuffle(sids)
+    crops = [_vz_random_crop(), _vz_random_crop()]
+    assignment = {sids[0]: 0, sids[1]: 1}
+
+    room['round'] += 1
+    room['phase'] = 'guessing'
+    room['images'] = pair
+    room['crops'] = crops
+    room['assignment'] = assignment
+    room['answers'] = {}
+    deadline = _time.time() + VZ_ANSWER_WINDOW
+    room['round_deadline'] = deadline
+
+    for sid, idx in assignment.items():
+        socketio.emit('vz_round', {
+            'round': room['round'],
+            'totalRounds': VZ_ROUNDS_PER_MATCH,
+            'images': [pair[0]['url'], pair[1]['url']],
+            'yourCrop': {'imageUrl': pair[idx]['url'], 'box': crops[idx]},
+            'secondsLeft': VZ_ANSWER_WINDOW,
+            'players': room['players'],
+            'scores': room['scores'],
+        }, room=sid)
+
+    socketio.start_background_task(_vz_round_timeout, code, room['round'])
+
+
+def _vz_round_timeout(code, round_num):
+    socketio.sleep(VZ_ANSWER_WINDOW)
+    room = _vz_rooms.get(code)
+    if room and room['round'] == round_num and room['phase'] == 'guessing':
+        _vz_resolve_round(room, code)
+
+
+def _vz_resolve_round(room, code):
+    room['phase'] = 'reveal'
+    assignment = room['assignment']
+    images = room['images']
+    results = {}
+    for sid, idx in assignment.items():
+        guess = room['answers'].get(sid)
+        is_correct = (guess == idx)
+        if is_correct:
+            room['scores'][sid] += 100
+        results[sid] = {'guess': guess, 'correctImageIndex': idx, 'isCorrect': is_correct}
+
+    both_correct = len(results) == 2 and all(r['isCorrect'] for r in results.values())
+    if both_correct:
+        for sid in room['scores']:
+            room['scores'][sid] += 50  # perfect-round bonus for both players
+
+    socketio.emit('vz_reveal', {
+        'images': [images[0]['url'], images[1]['url']],
+        'crops': room['crops'],
+        'players': room['players'],
+        'results': results,
+        'scores': room['scores'],
+        'bothCorrect': both_correct,
+        'round': room['round'],
+        'totalRounds': VZ_ROUNDS_PER_MATCH,
+    }, room=code)
+
+    if room['round'] >= VZ_ROUNDS_PER_MATCH:
+        room['phase'] = 'finished'
+        socketio.start_background_task(_vz_finish_after_delay, code)
+    else:
+        socketio.start_background_task(_vz_next_round_after_delay, code)
+
+
+def _vz_next_round_after_delay(code):
+    socketio.sleep(VZ_REVEAL_PAUSE)
+    room = _vz_rooms.get(code)
+    if room and room['phase'] != 'finished' and len(room['players']) == 2:
+        _vz_start_round(room, code)
+
+
+def _vz_finish_after_delay(code):
+    socketio.sleep(VZ_REVEAL_PAUSE)
+    room = _vz_rooms.get(code)
+    if room:
+        socketio.emit('vz_match_over', {'players': room['players'], 'scores': room['scores']}, room=code)
+
+
+@socketio.on('vz_create')
+def vz_create(data):
+    data = data or {}
+    collection = _safe_collection_name(str(data.get('collection') or ''))
+    username = str(data.get('username') or 'Player 1').strip()[:20] or 'Player 1'
+    opponent_name = str(data.get('opponentUsername') or 'Player 2').strip()[:20] or 'Player 2'
+    images = _vz_collection_images(collection)
+    if len(images) < 4:
+        emit('vz_error', {'message': 'This collection needs at least 4 images to play.'})
+        return
+
+    code = _vz_gen_code()
+    _vz_rooms[code] = {
+        'collection': collection,
+        'pool': images,
+        'used': set(),
+        'players': {request.sid: username},
+        'scores': {request.sid: 0},
+        'pending_opponent_name': opponent_name,
+        'round': 0,
+        'phase': 'lobby',
+    }
+    _vz_sid_room[request.sid] = code
+    sio_join_room(code)
+    emit('vz_created', {'code': code, 'username': username})
+
+
+@socketio.on('vz_join')
+def vz_join(data):
+    data = data or {}
+    code = str(data.get('code') or '').strip().upper()
+    room = _vz_rooms.get(code)
+    if not room:
+        emit('vz_error', {'message': 'Room not found. Check the code and try again.'})
+        return
+    if len(room['players']) >= 2:
+        emit('vz_error', {'message': 'That room is already full.'})
+        return
+
+    username = room.get('pending_opponent_name') or 'Player 2'
+    room['players'][request.sid] = username
+    room['scores'][request.sid] = 0
+    _vz_sid_room[request.sid] = code
+    sio_join_room(code)
+
+    emit('vz_joined', {'code': code, 'username': username})
+    socketio.emit('vz_opponent_joined', {'players': room['players']}, room=code)
+    _vz_start_round(room, code)
+
+
+@socketio.on('vz_answer')
+def vz_answer(data):
+    data = data or {}
+    code = _vz_sid_room.get(request.sid)
+    room = _vz_rooms.get(code)
+    if not room or room['phase'] != 'guessing':
+        return
+    choice = data.get('choice')
+    if choice not in (0, 1):
+        return
+    if request.sid in room['answers']:
+        return
+    room['answers'][request.sid] = choice
+    emit('vz_answer_locked', {})
+    if len(room['answers']) >= len(room['players']) and len(room['players']) == 2:
+        _vz_resolve_round(room, code)
+
+
+def _vz_handle_disconnect(sid):
+    code = _vz_sid_room.pop(sid, None)
+    if not code:
+        return
+    room = _vz_rooms.get(code)
+    if not room:
+        return
+    room['players'].pop(sid, None)
+    socketio.emit('vz_opponent_left', {}, room=code)
+    if not room['players']:
+        _vz_rooms.pop(code, None)
+
+
+# ── Memory Match Duel: live 2-player turn-based Concentration ─────────────────
+# Classic memory-match rules over a shared, server-authoritative board: players
+# alternate turns flipping two cards each — a match keeps the same player's
+# turn and scores a point, a miss flips both back and passes the turn. The
+# winner is simply whoever found more pairs, which is exactly how the
+# real-world game is scored, so there's nothing to argue is "fair" — it's the
+# same count either player could verify by eye on the finished board.
+
+_mm_rooms = {}
+_mm_sid_room = {}
+
+MM_MIN_IMAGES = 4         # need at least 4 unique images (8 cards) for a sensible game
+MM_MIN_CELL_PX = 40
+MM_MAX_CELL_PX = 800
+MM_MISMATCH_PAUSE = 1.4   # seconds a wrong pair stays face-up before flipping back
+MM_MATCH_PAUSE = 0.8      # seconds a found pair stays highlighted before the next flip is allowed
+
+
+def _mm_gen_code():
+    alphabet = string.ascii_uppercase + string.digits
+    while True:
+        code = ''.join(random.choices(alphabet, k=5))
+        if code not in _mm_rooms:
+            return code
+
+
+def _mm_build_board(collection, num_images):
+    """num_images is the count of *unique* images the host picked — the
+    board itself has twice that many cards (each image appears as a pair)."""
+    images = _vz_collection_images(collection)
+    if len(images) < num_images:
+        return None, len(images)
+    chosen = random.sample(images, num_images)
+    board = [img['url'] for img in chosen] * 2
+    random.shuffle(board)
+    return board, len(images)
+
+
+@socketio.on('mm_create')
+def mm_create(data):
+    data = data or {}
+    collection = _safe_collection_name(str(data.get('collection') or ''))
+    username = str(data.get('username') or 'Player 1').strip()[:20] or 'Player 1'
+    opponent_name = str(data.get('opponentUsername') or 'Player 2').strip()[:20] or 'Player 2'
+
+    try:
+        num_images = int(data.get('numImages'))
+    except (TypeError, ValueError):
+        num_images = 8
+    num_images = max(MM_MIN_IMAGES, num_images)
+
+    def _clamp_px(value, fallback):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return fallback
+        return max(MM_MIN_CELL_PX, min(MM_MAX_CELL_PX, value))
+
+    card_width = _clamp_px(data.get('cardWidth'), 100)
+    card_height = _clamp_px(data.get('cardHeight'), 100)
+    fit_mode = str(data.get('fitMode') or 'fit')
+    if fit_mode not in ('fit', 'stretch'):
+        fit_mode = 'fit'
+
+    board, available = _mm_build_board(collection, num_images)
+    if board is None:
+        emit('mm_error', {'message': f'This collection only has {available} images available — pick {available} or fewer.'})
+        return
+
+    code = _mm_gen_code()
+    _mm_rooms[code] = {
+        'collection': collection,
+        'board': board,
+        'card_width': card_width,
+        'card_height': card_height,
+        'fit_mode': fit_mode,
+        'matched_by': {},   # index -> sid
+        'flipped': [],      # indices currently face-up and unresolved (max 2)
+        'players': {request.sid: username},
+        'scores': {request.sid: 0},
+        'pending_opponent_name': opponent_name,
+        'current_turn': None,
+        'phase': 'lobby',
+    }
+    _mm_sid_room[request.sid] = code
+    sio_join_room(code)
+    emit('mm_created', {'code': code, 'username': username})
+
+
+@socketio.on('mm_join')
+def mm_join(data):
+    data = data or {}
+    code = str(data.get('code') or '').strip().upper()
+    room = _mm_rooms.get(code)
+    if not room:
+        emit('mm_error', {'message': 'Room not found. Check the code and try again.'})
+        return
+    if len(room['players']) >= 2:
+        emit('mm_error', {'message': 'That room is already full.'})
+        return
+
+    username = room.get('pending_opponent_name') or 'Player 2'
+    room['players'][request.sid] = username
+    room['scores'][request.sid] = 0
+    _mm_sid_room[request.sid] = code
+    sio_join_room(code)
+
+    sids = list(room['players'].keys())
+    room['current_turn'] = random.choice(sids)
+    room['phase'] = 'playing'
+
+    emit('mm_joined', {'code': code, 'username': username})
+    socketio.emit('mm_game_start', {
+        'numCards': len(room['board']),
+        'cardWidth': room['card_width'],
+        'cardHeight': room['card_height'],
+        'fitMode': room['fit_mode'],
+        'players': room['players'],
+        'scores': room['scores'],
+        'currentTurn': room['current_turn'],
+    }, room=code)
+
+
+@socketio.on('mm_flip')
+def mm_flip(data):
+    data = data or {}
+    code = _mm_sid_room.get(request.sid)
+    room = _mm_rooms.get(code)
+    if not room or room['phase'] != 'playing':
+        return
+    if room['current_turn'] != request.sid:
+        emit('mm_error', {'message': "It's not your turn."})
+        return
+    try:
+        index = int(data.get('index'))
+    except (TypeError, ValueError):
+        return
+    if index < 0 or index >= len(room['board']):
+        return
+    if index in room['matched_by'] or index in room['flipped']:
+        return
+    if len(room['flipped']) >= 2:
+        return
+
+    room['flipped'].append(index)
+    socketio.emit('mm_card_flipped', {'index': index, 'imageUrl': room['board'][index]}, room=code)
+
+    if len(room['flipped']) == 2:
+        _mm_resolve_flip(room, code)
+
+
+def _mm_resolve_flip(room, code):
+    i1, i2 = room['flipped']
+    is_match = room['board'][i1] == room['board'][i2]
+    room['phase'] = 'resolving'
+
+    if is_match:
+        sid = room['current_turn']
+        room['matched_by'][i1] = sid
+        room['matched_by'][i2] = sid
+        room['scores'][sid] += 1
+        room['flipped'] = []
+
+        socketio.emit('mm_resolve', {
+            'indices': [i1, i2],
+            'matched': True,
+            'matchedBy': sid,
+            'scores': room['scores'],
+        }, room=code)
+
+        if len(room['matched_by']) == len(room['board']):
+            _mm_finish_match(room, code)
+        else:
+            socketio.start_background_task(_mm_resume_after_match, code)
+    else:
+        socketio.emit('mm_resolve', {
+            'indices': [i1, i2],
+            'matched': False,
+            'scores': room['scores'],
+        }, room=code)
+        socketio.start_background_task(_mm_pass_turn_after_delay, code)
+
+
+def _mm_resume_after_match(code):
+    socketio.sleep(MM_MATCH_PAUSE)
+    room = _mm_rooms.get(code)
+    if room and room['phase'] == 'resolving':
+        room['phase'] = 'playing'
+        # current_turn is unchanged — the same player goes again on a match,
+        # so there's nothing new to broadcast; clients infer this from the
+        # absence of an mm_turn_change event.
+
+
+def _mm_pass_turn_after_delay(code):
+    socketio.sleep(MM_MISMATCH_PAUSE)
+    room = _mm_rooms.get(code)
+    if not room or room['phase'] != 'resolving':
+        return
+    room['flipped'] = []
+    other = [s for s in room['players'] if s != room['current_turn']]
+    if other:
+        room['current_turn'] = other[0]
+    room['phase'] = 'playing'
+    socketio.emit('mm_turn_change', {'currentTurn': room['current_turn']}, room=code)
+
+
+def _mm_finish_match(room, code):
+    room['phase'] = 'finished'
+    scores = room['scores']
+    sids = list(scores.keys())
+    winner_sid = None
+    if len(sids) == 2 and scores[sids[0]] != scores[sids[1]]:
+        winner_sid = max(sids, key=lambda s: scores[s])
+    socketio.emit('mm_match_over', {
+        'players': room['players'],
+        'scores': scores,
+        'winnerSid': winner_sid,
+    }, room=code)
+
+
+def _mm_handle_disconnect(sid):
+    code = _mm_sid_room.pop(sid, None)
+    if not code:
+        return
+    room = _mm_rooms.get(code)
+    if not room:
+        return
+    room['players'].pop(sid, None)
+    socketio.emit('mm_opponent_left', {}, room=code)
+    if not room['players']:
+        _mm_rooms.pop(code, None)
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    # Flask-SocketIO only keeps the LAST handler registered for a given event
+    # name (registration overwrites, it doesn't append) — so every multiplayer
+    # game's disconnect cleanup must be dispatched from this single handler
+    # rather than each game registering its own @socketio.on('disconnect').
+    _vz_handle_disconnect(request.sid)
+    _mm_handle_disconnect(request.sid)
+
+
 # ── Startup ───────────────────────────────────────────────────────────────────
 
 # Initialise DB tables on every startup (safe — uses IF NOT EXISTS)
@@ -2393,4 +2871,4 @@ except Exception as _oauth_warm_err:
     print(f"WARNING: Google OAuth metadata pre-warm failed (will retry lazily on first login): {_oauth_warm_err}")
 
 if __name__ == '__main__':
-    app.run()
+    socketio.run(app)
