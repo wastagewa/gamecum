@@ -1,6 +1,20 @@
+import os
+
+# Render sets RENDER=true in every service's environment. Only there do we
+# monkey-patch for gevent (must happen before anything else is imported) so
+# WebSocket connections run on cooperative greenlets instead of blocking an
+# OS thread — that's what let gunicorn's worker-timeout watchdog mistake a
+# held-open WebSocket for a hung worker and SIGKILL it. Local Windows dev
+# skips this and keeps the already-verified 'threading' async_mode.
+ON_RENDER = os.environ.get('RENDER') == 'true'
+if ON_RENDER:
+    from gevent import monkey
+    monkey.patch_all()
+    from psycogreen.gevent import patch_psycopg
+    patch_psycopg()
+
 from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for, session
 from flask_socketio import SocketIO, emit, join_room as sio_join_room
-import os
 import json
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -37,14 +51,7 @@ app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
-
-# allow_upgrades=False: gthread workers can't safely hold a long-lived
-# WebSocket connection — the upgrade blocks a worker thread in ws.wait(),
-# which trips gunicorn's worker-timeout watchdog and gets the whole worker
-# (and every other in-memory Socket.IO session on it, since --workers 1)
-# SIGKILLed and restarted. Staying on plain HTTP long-polling avoids this
-# entirely and is plenty fast for these games' multi-second event cadence.
-socketio = SocketIO(app, async_mode='threading', allow_upgrades=False)
+socketio = SocketIO(app, async_mode='gevent' if ON_RENDER else 'threading')
 
 cloudinary.config(
     cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME'),
