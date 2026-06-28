@@ -226,6 +226,12 @@ document.addEventListener('DOMContentLoaded', () => {
             description: 'Classic 2-player Concentration, live! Take turns flipping cards on a shared board — most pairs found wins.',
             url: `/collection/${_coll}/memorymatch`
         },
+        {
+            name: 'Compatibility Check',
+            icon: 'fa-heart-circle-check',
+            description: 'Same image, same tags, two private picks. See if you and your partner are drawn to the same parts — get a compatibility score at the end.',
+            url: `/collection/${_coll}/compatcheck`
+        },
     ];
 
     function renderGamesGrid(list) {

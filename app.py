@@ -1715,6 +1715,13 @@ def collection_memorymatch(collection_name):
     return render_template('memorymatch.html', collection=collection)
 
 
+@app.route('/collection/<collection_name>/compatcheck')
+def collection_compatcheck(collection_name):
+    """Compatibility Check: a live 2-player game where each round both players privately pick which tagged body part attracted them most, then see if they matched."""
+    collection = _safe_collection_name(collection_name)
+    return render_template('compatcheck.html', collection=collection)
+
+
 @app.route('/collection/<collection_name>/bubbleburst')
 def collection_bubbleburst(collection_name):
     """Bubble Burst: pop rising bubbles that contain the target image before they escape."""
@@ -2853,6 +2860,268 @@ def _mm_handle_disconnect(sid):
         _mm_rooms.pop(code, None)
 
 
+# ── Compatibility Check: live 2-player "which part attracted you most?" ───────
+# Each round shows both players the same image plus a small set of its tags,
+# filtered down to exactly the body-part categories relevant to the
+# collection (chest/butt/penis for "gay"-named collections, boobs/pussy/butt
+# otherwise). Both players privately pick one tag; once both have picked (or
+# the round timer runs out) their picks are revealed together along with
+# whether they matched. The final result is a compatibility percentage —
+# shown once at the end of that match only, never persisted anywhere.
+
+_cc_rooms = {}
+_cc_sid_room = {}
+
+CC_CATEGORY_KEYWORDS_DEFAULT = {
+    'boobs': ['boobs', 'tits', 'breast', 'breasts'],
+    'pussy': ['pussy', 'vagina'],
+    'butt':  ['butt', 'ass', 'booty'],
+}
+CC_CATEGORY_KEYWORDS_GAY = {
+    'chest': ['chest', 'pecs', 'pec'],
+    'butt':  ['butt', 'ass', 'booty'],
+    'penis': ['penis', 'cock', 'dick'],
+}
+
+CC_MIN_ROUNDS = 1
+CC_MAX_ROUNDS = 50
+CC_MIN_SELECT_SECONDS = 5
+CC_MAX_SELECT_SECONDS = 60
+CC_REVEAL_PAUSE = 4   # seconds both picks + match/no-match stay on screen before the next round
+
+
+def _cc_keyword_map_for_collection(collection):
+    return CC_CATEGORY_KEYWORDS_GAY if 'gay' in collection.lower() else CC_CATEGORY_KEYWORDS_DEFAULT
+
+
+def _cc_categorize_tags(tags, keyword_map):
+    """For each category, the first tag (in order) that matches one of its
+    keywords — collapses multiple same-category tags (e.g. "big boobs" and
+    "natural tits") down to a single representative option per category so
+    each round shows at most one button per body part, never duplicates."""
+    found = {}
+    for category, keywords in keyword_map.items():
+        for tag in tags:
+            if any(_tags_match(tag, kw) for kw in keywords):
+                found[category] = tag
+                break
+    return found
+
+
+def _cc_gen_code():
+    alphabet = string.ascii_uppercase + string.digits
+    while True:
+        code = ''.join(random.choices(alphabet, k=5))
+        if code not in _cc_rooms:
+            return code
+
+
+def _cc_collection_images(collection, keyword_map):
+    """Images with at least 2 of the keyword_map's categories present —
+    fewer than 2 would make the round a forced, uninformative "match"."""
+    tags_data = _load_tags()
+    prefix = f"{collection}/"
+    eligible = []
+    for key, value in tags_data.items():
+        if not key.startswith(prefix) or not isinstance(value, dict) or not value.get('url'):
+            continue
+        raw_tags = value.get('tags')
+        if not isinstance(raw_tags, list) or not raw_tags:
+            continue
+        tags = [str(t) for t in raw_tags if isinstance(t, (str, int, float))]
+        options = _cc_categorize_tags(tags, keyword_map)
+        if len(options) >= 2:
+            eligible.append({'filename': key[len(prefix):], 'url': value['url'], 'options': options})
+    return eligible
+
+
+def _cc_start_round(room, code):
+    room['round'] += 1
+    room['phase'] = 'selecting'
+    room['selections'] = {}
+    image = room['pool'][room['round'] - 1]
+    room['current_image'] = image
+
+    socketio.emit('cc_round', {
+        'round': room['round'],
+        'totalRounds': room['total_rounds'],
+        'imageUrl': image['url'],
+        'options': image['options'],
+        'secondsLeft': room['round_seconds'],
+        'players': room['players'],
+    }, room=code)
+
+    socketio.start_background_task(_cc_round_timeout, code, room['round'], room['round_seconds'])
+
+
+def _cc_round_timeout(code, round_num, seconds):
+    socketio.sleep(seconds)
+    room = _cc_rooms.get(code)
+    if room and room['round'] == round_num and room['phase'] == 'selecting':
+        _cc_resolve_round(room, code)
+
+
+def _cc_resolve_round(room, code):
+    room['phase'] = 'reveal'
+    image = room['current_image']
+    sids = list(room['players'].keys())
+    selections = room['selections']
+    is_match = (
+        len(sids) == 2
+        and selections.get(sids[0]) is not None
+        and selections.get(sids[0]) == selections.get(sids[1])
+    )
+    if is_match:
+        room['match_count'] += 1
+
+    room['history'].append({
+        'imageUrl': image['url'],
+        'options': image['options'],
+        'selections': dict(selections),
+        'match': is_match,
+    })
+
+    socketio.emit('cc_reveal', {
+        'round': room['round'],
+        'totalRounds': room['total_rounds'],
+        'players': room['players'],
+        'selections': selections,
+        'match': is_match,
+        'matchCount': room['match_count'],
+    }, room=code)
+
+    if room['round'] >= room['total_rounds']:
+        room['phase'] = 'finished'
+        socketio.start_background_task(_cc_finish_after_delay, code)
+    else:
+        socketio.start_background_task(_cc_next_round_after_delay, code)
+
+
+def _cc_next_round_after_delay(code):
+    socketio.sleep(CC_REVEAL_PAUSE)
+    room = _cc_rooms.get(code)
+    if room and room['phase'] != 'finished' and len(room['players']) == 2:
+        _cc_start_round(room, code)
+
+
+def _cc_finish_after_delay(code):
+    socketio.sleep(CC_REVEAL_PAUSE)
+    room = _cc_rooms.get(code)
+    if room:
+        total = room['total_rounds']
+        compatibility = round(100 * room['match_count'] / total) if total else 0
+        socketio.emit('cc_match_over', {
+            'players': room['players'],
+            'matchCount': room['match_count'],
+            'totalRounds': total,
+            'compatibility': compatibility,
+            'history': room['history'],
+        }, room=code)
+
+
+@socketio.on('cc_create')
+def cc_create(data):
+    data = data or {}
+    collection = _safe_collection_name(str(data.get('collection') or ''))
+    username = str(data.get('username') or 'Player 1').strip()[:20] or 'Player 1'
+    opponent_name = str(data.get('opponentUsername') or 'Player 2').strip()[:20] or 'Player 2'
+
+    keyword_map = _cc_keyword_map_for_collection(collection)
+    images = _cc_collection_images(collection, keyword_map)
+
+    try:
+        num_rounds = int(data.get('numRounds'))
+    except (TypeError, ValueError):
+        num_rounds = 5
+    num_rounds = max(CC_MIN_ROUNDS, min(CC_MAX_ROUNDS, num_rounds))
+
+    try:
+        round_seconds = int(data.get('roundSeconds'))
+    except (TypeError, ValueError):
+        round_seconds = 20
+    round_seconds = max(CC_MIN_SELECT_SECONDS, min(CC_MAX_SELECT_SECONDS, round_seconds))
+
+    if not images:
+        emit('cc_error', {'message': 'This collection has no images tagged with the required categories.'})
+        return
+    if len(images) < num_rounds:
+        emit('cc_error', {'message': f'This collection only has {len(images)} eligible images — pick {len(images)} or fewer rounds.'})
+        return
+
+    code = _cc_gen_code()
+    _cc_rooms[code] = {
+        'collection': collection,
+        'categories': list(keyword_map.keys()),
+        'pool': random.sample(images, num_rounds),
+        'round_seconds': round_seconds,
+        'players': {request.sid: username},
+        'pending_opponent_name': opponent_name,
+        'round': 0,
+        'total_rounds': num_rounds,
+        'phase': 'lobby',
+        'selections': {},
+        'current_image': None,
+        'match_count': 0,
+        'history': [],
+    }
+    _cc_sid_room[request.sid] = code
+    sio_join_room(code)
+    emit('cc_created', {'code': code, 'username': username})
+
+
+@socketio.on('cc_join')
+def cc_join(data):
+    data = data or {}
+    code = str(data.get('code') or '').strip().upper()
+    room = _cc_rooms.get(code)
+    if not room:
+        emit('cc_error', {'message': 'Room not found. Check the code and try again.'})
+        return
+    if len(room['players']) >= 2:
+        emit('cc_error', {'message': 'That room is already full.'})
+        return
+
+    username = room.get('pending_opponent_name') or 'Player 2'
+    room['players'][request.sid] = username
+    _cc_sid_room[request.sid] = code
+    sio_join_room(code)
+
+    emit('cc_joined', {'code': code, 'username': username})
+    socketio.emit('cc_opponent_joined', {'players': room['players']}, room=code)
+    _cc_start_round(room, code)
+
+
+@socketio.on('cc_select')
+def cc_select(data):
+    data = data or {}
+    code = _cc_sid_room.get(request.sid)
+    room = _cc_rooms.get(code)
+    if not room or room['phase'] != 'selecting':
+        return
+    category = str(data.get('category') or '')
+    if category not in (room['current_image'] or {}).get('options', {}):
+        return
+    if request.sid in room['selections']:
+        return
+    room['selections'][request.sid] = category
+    emit('cc_locked', {})
+    if len(room['selections']) >= len(room['players']) and len(room['players']) == 2:
+        _cc_resolve_round(room, code)
+
+
+def _cc_handle_disconnect(sid):
+    code = _cc_sid_room.pop(sid, None)
+    if not code:
+        return
+    room = _cc_rooms.get(code)
+    if not room:
+        return
+    room['players'].pop(sid, None)
+    socketio.emit('cc_opponent_left', {}, room=code)
+    if not room['players']:
+        _cc_rooms.pop(code, None)
+
+
 @socketio.on('disconnect')
 def handle_disconnect():
     # Flask-SocketIO only keeps the LAST handler registered for a given event
@@ -2861,6 +3130,7 @@ def handle_disconnect():
     # rather than each game registering its own @socketio.on('disconnect').
     _vz_handle_disconnect(request.sid)
     _mm_handle_disconnect(request.sid)
+    _cc_handle_disconnect(request.sid)
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────
