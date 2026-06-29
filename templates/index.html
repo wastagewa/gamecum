@@ -191,7 +191,7 @@
             <label for="video-upload" class="custom-upload-btn">
                 <i class="fas fa-cloud-upload-alt"></i> Upload Video
             </label>
-            <input id="video-upload" type="file" accept="video/*" style="display:none;">
+            <input id="video-upload" type="file" accept="video/*" multiple style="display:none;">
             <span id="videoUploadStatus" style="align-self:center;color:var(--muted-text);font-size:.9rem;"></span>
         </div>
         {% endif %}
@@ -309,18 +309,25 @@
         const videoUploadInput = document.getElementById('video-upload');
         const videoUploadStatus = document.getElementById('videoUploadStatus');
         videoUploadInput.addEventListener('change', async () => {
-            const file = videoUploadInput.files[0];
-            if (!file) return;
-            videoUploadStatus.textContent = `Uploading ${file.name}…`;
-            const formData = new FormData();
-            formData.append('file', file);
-            try {
-                const r = await fetch(`/upload-video/${window.CURRENT_COLLECTION}`, {method: 'POST', body: formData});
-                const d = await r.json();
-                if (d.success) { videoUploadStatus.textContent = 'Upload complete.'; location.reload(); }
-                else { videoUploadStatus.textContent = d.error || 'Upload failed.'; }
-            } catch { videoUploadStatus.textContent = 'Network error during upload.'; }
+            const files = Array.from(videoUploadInput.files || []);
+            if (!files.length) return;
+            let uploaded = 0;
+            let failed = 0;
+            for (const file of files) {
+                videoUploadStatus.textContent = `Uploading ${file.name} (${uploaded + failed + 1}/${files.length})…`;
+                const formData = new FormData();
+                formData.append('file', file);
+                try {
+                    const r = await fetch(`/upload-video/${window.CURRENT_COLLECTION}`, {method: 'POST', body: formData});
+                    const d = await r.json();
+                    if (d.success) { uploaded++; } else { failed++; console.error(d.error); }
+                } catch { failed++; }
+            }
+            videoUploadStatus.textContent = failed
+                ? `Uploaded ${uploaded}, ${failed} failed.`
+                : `Uploaded ${uploaded} video${uploaded === 1 ? '' : 's'}.`;
             videoUploadInput.value = '';
+            location.reload();
         });
         {% endif %}
     </script>

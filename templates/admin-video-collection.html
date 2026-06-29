@@ -96,7 +96,7 @@
       <h1><i class="fas fa-folder-open"></i> {{ collection }}</h1>
       <div>
         <label for="videoFileInput" class="upload-btn"><i class="fas fa-cloud-upload-alt"></i> Upload Video</label>
-        <input type="file" id="videoFileInput" accept="video/*" style="display:none;">
+        <input type="file" id="videoFileInput" accept="video/*" multiple style="display:none;">
       </div>
     </div>
     <div id="uploadStatus"></div>
@@ -252,17 +252,24 @@
     const fileInput = document.getElementById('videoFileInput');
     const statusEl = document.getElementById('uploadStatus');
     fileInput.addEventListener('change', async () => {
-      const file = fileInput.files[0];
-      if (!file) return;
-      statusEl.textContent = `Uploading ${file.name}…`;
-      const formData = new FormData();
-      formData.append('file', file);
-      try {
-        const r = await fetch(`/upload-video/${COLLECTION}`, {method: 'POST', body: formData});
-        const d = await r.json();
-        if (d.success) { statusEl.textContent = 'Upload complete.'; location.reload(); }
-        else { statusEl.textContent = d.error || 'Upload failed.'; }
-      } catch { statusEl.textContent = 'Network error during upload.'; }
+      const files = Array.from(fileInput.files || []);
+      if (!files.length) return;
+      let uploaded = 0;
+      let failed = 0;
+      for (const file of files) {
+        statusEl.textContent = `Uploading ${file.name} (${uploaded + failed + 1}/${files.length})…`;
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+          const r = await fetch(`/upload-video/${COLLECTION}`, {method: 'POST', body: formData});
+          const d = await r.json();
+          if (d.success) { uploaded++; } else { failed++; console.error(d.error); }
+        } catch { failed++; }
+      }
+      statusEl.textContent = failed
+        ? `Uploaded ${uploaded}, ${failed} failed.`
+        : `Uploaded ${uploaded} video${uploaded === 1 ? '' : 's'}.`;
+      location.reload();
       fileInput.value = '';
     });
   </script>
