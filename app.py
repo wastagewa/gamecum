@@ -22,6 +22,7 @@ import uuid
 import random
 import re
 import string
+import tempfile
 import time as _time
 from functools import wraps
 import cloudinary
@@ -855,11 +856,16 @@ def upload_video(collection):
     ext = os.path.splitext(secure_filename(file.filename))[1].lower()
     filename = str(uuid.uuid4()) + ext
     name_no_ext = os.path.splitext(filename)[0]
-    public_id = f"{safe_name}/{name_no_ext}"
 
+    # cloudinary.uploader.upload_large() wraps the given file in a `with` block,
+    # which Werkzeug's FileStorage doesn't support — save to a temp path first
+    # and hand it a plain file path instead.
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=ext)
+    os.close(tmp_fd)
     try:
+        file.save(tmp_path)
         result = cloudinary.uploader.upload_large(
-            file,
+            tmp_path,
             public_id=name_no_ext,
             resource_type='video',
             folder=safe_name,
@@ -868,6 +874,11 @@ def upload_video(collection):
         )
     except Exception as e:
         return jsonify({'error': f'Cloudinary upload failed: {str(e)}'}), 500
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
     url = result['secure_url']
     thumbnail_url, _ = cloudinary.utils.cloudinary_url(
