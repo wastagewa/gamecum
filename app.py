@@ -22,13 +22,9 @@ import uuid
 import random
 import re
 import string
-import tempfile
 import time as _time
 from functools import wraps
-import cloudinary
-import cloudinary.uploader
-import cloudinary.api
-import cloudinary.utils
+import boto3
 import psycopg2
 import psycopg2.pool
 import psycopg2.extras
@@ -56,12 +52,52 @@ ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'mov', 'webm', 'mkv'}
 
 socketio = SocketIO(app, async_mode='gevent' if ON_RENDER else 'threading')
 
-cloudinary.config(
-    cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME'),
-    api_key=os.environ.get('CLOUDINARY_API_KEY'),
-    api_secret=os.environ.get('CLOUDINARY_API_SECRET'),
-    secure=True
+# ── Wasabi (S3-compatible) storage ──────────────────────────────────────────────
+
+WASABI_BUCKET = os.environ.get('WASABI_BUCKET', 'gamecum')
+WASABI_REGION = os.environ.get('WASABI_REGION', 'us-east-1')
+WASABI_ENDPOINT = os.environ.get('WASABI_ENDPOINT_URL', f'https://s3.{WASABI_REGION}.wasabisys.com')
+
+_s3 = boto3.client(
+    's3',
+    endpoint_url=WASABI_ENDPOINT,
+    aws_access_key_id=os.environ.get('WASABI_ACCESS_KEY'),
+    aws_secret_access_key=os.environ.get('WASABI_SECRET_KEY'),
+    region_name=WASABI_REGION,
 )
+
+def _wasabi_public_url(key: str):
+    return f"{WASABI_ENDPOINT}/{WASABI_BUCKET}/{key}"
+
+def _wasabi_upload_fileobj(fileobj, key: str, content_type: str = None):
+    """Upload a file-like object to Wasabi as a public-read object, return its public URL."""
+    extra_args = {'ACL': 'public-read'}
+    if content_type:
+        extra_args['ContentType'] = content_type
+    _s3.upload_fileobj(fileobj, WASABI_BUCKET, key, ExtraArgs=extra_args)
+    return _wasabi_public_url(key)
+
+def _wasabi_delete_object(key: str):
+    _s3.delete_object(Bucket=WASABI_BUCKET, Key=key)
+
+def _wasabi_delete_prefix(prefix: str):
+    """Delete every object under a folder prefix (a whole collection's images and videos)."""
+    paginator = _s3.get_paginator('list_objects_v2')
+    for page in paginator.paginate(Bucket=WASABI_BUCKET, Prefix=prefix):
+        objects = [{'Key': obj['Key']} for obj in page.get('Contents', [])]
+        if objects:
+            _s3.delete_objects(Bucket=WASABI_BUCKET, Delete={'Objects': objects})
+
+def _wasabi_move_object(old_key: str, new_key: str):
+    """Copy an object to a new key and delete the old one (used for collection rename); returns the new public URL."""
+    _s3.copy_object(
+        Bucket=WASABI_BUCKET,
+        CopySource={'Bucket': WASABI_BUCKET, 'Key': old_key},
+        Key=new_key,
+        ACL='public-read',
+    )
+    _s3.delete_object(Bucket=WASABI_BUCKET, Key=old_key)
+    return _wasabi_public_url(new_key)
 
 # ── Auth setup ────────────────────────────────────────────────────────────────
 
@@ -715,7 +751,7 @@ def allowed_video_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_VIDEO_EXTENSIONS
 
 def _get_collection_image_urls(collection: str):
-    """Return Cloudinary image URLs for a collection, read from tags.json."""
+    """Return image URLs for a collection, read from the images table."""
     tags_data = _load_tags()
     prefix = f"{collection}/"
     urls = []
@@ -766,7 +802,7 @@ def collection_view(collection_name):
     collection = _safe_collection_name(collection_name)
     tags_data = _load_tags()
     images = []      # list of filenames (used as keys for tags/delete operations)
-    image_urls = {}  # filename -> Cloudinary URL
+    image_urls = {}  # filename -> Wasabi URL
     image_tags = {}
 
     prefix = f"{collection}/"
@@ -803,23 +839,12 @@ def upload_file(collection=None):
         collection = _safe_collection_name(collection or '')
         ext = os.path.splitext(secure_filename(file.filename))[1].lower()
         filename = str(uuid.uuid4()) + ext
-
-        name_no_ext = os.path.splitext(filename)[0]
-
-        upload_opts = {
-            'public_id': name_no_ext,
-            'resource_type': 'image',
-            'overwrite': False,
-        }
-        if collection:
-            upload_opts['folder'] = collection
+        key = _get_image_key(collection, filename)
 
         try:
-            result = cloudinary.uploader.upload(file, **upload_opts)
+            url = _wasabi_upload_fileobj(file.stream, key, file.mimetype)
         except Exception as e:
-            return jsonify({'error': f'Cloudinary upload failed: {str(e)}'}), 500
-
-        url = result['secure_url']
+            return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
         if collection:
             user_id = current_user.id if current_user.is_authenticated else None
@@ -837,7 +862,7 @@ def upload_file(collection=None):
 @app.route('/upload-video/<collection>', methods=['POST'])
 @admin_required
 def upload_video(collection):
-    """Admin-only: upload a video into a collection's Cloudinary folder. Hidden from
+    """Admin-only: upload a video into a collection's Wasabi folder. Hidden from
     all users by default — access must be granted separately via the video access APIs."""
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
@@ -855,45 +880,23 @@ def upload_video(collection):
 
     ext = os.path.splitext(secure_filename(file.filename))[1].lower()
     filename = str(uuid.uuid4()) + ext
-    name_no_ext = os.path.splitext(filename)[0]
+    key = _get_image_key(safe_name, filename)
 
-    # cloudinary.uploader.upload_large() wraps the given file in a `with` block,
-    # which Werkzeug's FileStorage doesn't support — save to a temp path first
-    # and hand it a plain file path instead.
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=ext)
-    os.close(tmp_fd)
     try:
-        file.save(tmp_path)
-        result = cloudinary.uploader.upload_large(
-            tmp_path,
-            public_id=name_no_ext,
-            resource_type='video',
-            folder=safe_name,
-            chunk_size=20_000_000,
-            overwrite=False,
-        )
+        url = _wasabi_upload_fileobj(file.stream, key, file.mimetype)
     except Exception as e:
-        return jsonify({'error': f'Cloudinary upload failed: {str(e)}'}), 500
-    finally:
-        try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
+        return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
-    url = result['secure_url']
-    thumbnail_url, _ = cloudinary.utils.cloudinary_url(
-        result['public_id'], resource_type='video', format='jpg'
-    )
-    duration = result.get('duration')
-
-    _db_insert_video(safe_name, filename, url, thumbnail_url=thumbnail_url,
-                      duration=duration, user_id=current_user.id)
+    # Wasabi has no Cloudinary-style auto thumbnail/duration probe (would need ffmpeg) —
+    # videos uploaded from here on simply have no poster image / duration metadata.
+    _db_insert_video(safe_name, filename, url, thumbnail_url=None,
+                      duration=None, user_id=current_user.id)
 
     return jsonify({
         'success': True,
         'filename': filename,
         'url': url,
-        'thumbnail_url': thumbnail_url,
+        'thumbnail_url': None,
     })
 
 @app.route('/get-quote')
@@ -1225,8 +1228,7 @@ def get_high_scores(collection):
 @app.route('/delete-image/<filename>', methods=['DELETE'])
 def delete_image(filename):
     try:
-        name_no_ext = os.path.splitext(filename)[0]
-        cloudinary.uploader.destroy(name_no_ext)
+        _wasabi_delete_object(_get_image_key('', filename))
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1236,9 +1238,7 @@ def delete_image(filename):
 def delete_image_in_collection(collection, filename):
     collection = _safe_collection_name(collection)
     try:
-        name_no_ext = os.path.splitext(filename)[0]
-        public_id = f"{collection}/{name_no_ext}"
-        cloudinary.uploader.destroy(public_id)
+        _wasabi_delete_object(_get_image_key(collection, filename))
         _db_delete_image(collection, filename)
         return jsonify({'success': True})
     except Exception as e:
@@ -1365,7 +1365,7 @@ def collection_tag_match(collection_name):
 
 @app.route('/api/images')
 def api_images_all():
-    """Return a JSON list of all Cloudinary image URLs."""
+    """Return a JSON list of all image URLs."""
     tags_data = _load_tags()
     result = [
         v['url'] for v in tags_data.values()
@@ -1391,7 +1391,7 @@ def manage_collections():
 @app.route('/api/collections/create', methods=['POST'])
 @admin_required
 def api_create_collection():
-    """Register a new collection (Cloudinary folder is created on first upload)."""
+    """Register a new collection (Wasabi folder is created on first upload)."""
     data = request.get_json()
     name = data.get('name', '').strip()
 
@@ -1415,7 +1415,7 @@ def api_create_collection():
 @app.route('/api/collections/rename', methods=['POST'])
 @admin_required
 def api_rename_collection():
-    """Rename a collection: moves all Cloudinary assets and updates tags.json."""
+    """Rename a collection: moves all Wasabi assets and updates the images/videos tables."""
     data = request.get_json()
     old_name = data.get('old_name', '').strip()
     new_name = data.get('new_name', '').strip()
@@ -1439,7 +1439,7 @@ def api_rename_collection():
         # Create new collection record first
         _ensure_collection(safe_new)
 
-        # Rename each Cloudinary asset and update its DB row
+        # Move each Wasabi object to the new prefix and update its DB row
         conn = _get_db()
         try:
             cur = conn.cursor()
@@ -1452,14 +1452,12 @@ def api_rename_collection():
             _release_db(conn)
 
         for filename, old_url in rows:
-            name_no_ext = os.path.splitext(filename)[0]
             new_url = old_url
             try:
-                result = cloudinary.uploader.rename(
-                    f"{safe_old}/{name_no_ext}",
-                    f"{safe_new}/{name_no_ext}"
+                new_url = _wasabi_move_object(
+                    _get_image_key(safe_old, filename),
+                    _get_image_key(safe_new, filename)
                 )
-                new_url = result.get('secure_url', old_url)
             except Exception:
                 pass
 
@@ -1475,7 +1473,7 @@ def api_rename_collection():
             finally:
                 _release_db(conn)
 
-        # Rename each video asset and update its DB row
+        # Move each video object to the new prefix and update its DB row
         conn = _get_db()
         try:
             cur = conn.cursor()
@@ -1488,15 +1486,12 @@ def api_rename_collection():
             _release_db(conn)
 
         for filename, old_url in video_rows:
-            name_no_ext = os.path.splitext(filename)[0]
             new_url = old_url
             try:
-                result = cloudinary.uploader.rename(
-                    f"{safe_old}/{name_no_ext}",
-                    f"{safe_new}/{name_no_ext}",
-                    resource_type='video'
+                new_url = _wasabi_move_object(
+                    _get_image_key(safe_old, filename),
+                    _get_image_key(safe_new, filename)
                 )
-                new_url = result.get('secure_url', old_url)
             except Exception:
                 pass
 
@@ -1542,7 +1537,7 @@ def api_rename_collection():
 @app.route('/api/collections/delete', methods=['POST'])
 @admin_required
 def api_delete_collection():
-    """Delete a collection and all its Cloudinary images."""
+    """Delete a collection and all its images/videos."""
     data = request.get_json()
     name = data.get('name', '').strip()
 
@@ -1555,21 +1550,9 @@ def api_delete_collection():
         return jsonify({'success': False, 'error': 'Collection not found'}), 404
 
     try:
-        # Delete all Cloudinary resources in this folder (images and videos)
+        # Delete all Wasabi objects under this collection's folder (images and videos together)
         try:
-            cloudinary.api.delete_resources_by_prefix(f"{safe_name}/")
-        except Exception:
-            pass
-        try:
-            cloudinary.api.delete_resources_by_prefix(f"{safe_name}/", resource_type='video')
-        except Exception:
-            pass
-        try:
-            cloudinary.api.delete_folder(safe_name)
-        except Exception:
-            pass
-        try:
-            cloudinary.api.delete_folder(safe_name, resource_type='video')
+            _wasabi_delete_prefix(f"{safe_name}/")
         except Exception:
             pass
 
@@ -1700,7 +1683,7 @@ def api_copy_image_tags(collection_name, source_filename, target_filename):
 
 @app.route('/api/collections')
 def api_collections():
-    """Return a JSON mapping of collection name -> list of Cloudinary image URLs."""
+    """Return a JSON mapping of collection name -> list of image URLs."""
     tags_data = _load_tags()
     result = {}
     for key, value in tags_data.items():
@@ -2815,9 +2798,8 @@ def api_delete_video(collection_name):
         return jsonify({'success': False, 'error': 'Video not found'}), 404
 
     filename = row[0]
-    name_no_ext = os.path.splitext(filename)[0]
     try:
-        cloudinary.uploader.destroy(f"{safe_name}/{name_no_ext}", resource_type='video')
+        _wasabi_delete_object(_get_image_key(safe_name, filename))
     except Exception:
         pass
 
