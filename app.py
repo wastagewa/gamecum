@@ -27,6 +27,7 @@ from functools import wraps
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
+import cloudinary.utils
 import psycopg2
 import psycopg2.pool
 import psycopg2.extras
@@ -48,8 +49,9 @@ except ImportError:
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = os.path.join('static', 'uploads')
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 300 * 1024 * 1024  # 300MB max file size (raised for video uploads)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'mov', 'webm', 'mkv'}
 
 socketio = SocketIO(app, async_mode='gevent' if ON_RENDER else 'threading')
 
@@ -169,6 +171,42 @@ def init_db():
         cur.execute("""
             ALTER TABLE scores
             ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE SET NULL
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS videos (
+                id              SERIAL PRIMARY KEY,
+                collection_name VARCHAR(255) NOT NULL
+                    REFERENCES collections(name) ON DELETE CASCADE,
+                filename        VARCHAR(500) NOT NULL,
+                url             TEXT NOT NULL,
+                thumbnail_url   TEXT,
+                duration        REAL,
+                locked          BOOLEAN DEFAULT FALSE,
+                uploaded_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                created_at      TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(collection_name, filename)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS video_collection_access (
+                id              SERIAL PRIMARY KEY,
+                collection_name VARCHAR(255) NOT NULL
+                    REFERENCES collections(name) ON DELETE CASCADE,
+                user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                granted_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                granted_at      TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(collection_name, user_id)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS video_item_access (
+                id          SERIAL PRIMARY KEY,
+                video_id    INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+                user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                granted_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                granted_at  TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(video_id, user_id)
+            )
         """)
         cur.close()
         print("DB tables ready.")
@@ -358,6 +396,159 @@ def _set_image_locked(collection: str, filename: str, locked: bool):
     finally:
         _release_db(conn)
 
+# ── Videos / Access control ────────────────────────────────────────────────────
+
+def _db_insert_video(collection: str, filename: str, url: str, thumbnail_url: str = None,
+                      duration: float = None, user_id: int = None):
+    """Insert a new video row, ensuring its collection exists first."""
+    _ensure_collection(collection)
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO videos (collection_name, filename, url, thumbnail_url, duration, uploaded_by)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (collection_name, filename) DO UPDATE
+                SET url = EXCLUDED.url, thumbnail_url = EXCLUDED.thumbnail_url,
+                    duration = EXCLUDED.duration,
+                    uploaded_by = COALESCE(EXCLUDED.uploaded_by, videos.uploaded_by)
+        """, (collection, filename, url, thumbnail_url, duration, user_id))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _db_delete_video(video_id: int):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM videos WHERE id = %s", (video_id,))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _load_collection_videos(collection: str):
+    """Return all video rows for a collection as a list of dicts."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT id, collection_name, filename, url, thumbnail_url, duration,
+                   locked, uploaded_by, created_at
+            FROM videos WHERE collection_name = %s ORDER BY created_at DESC
+        """, (collection,))
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+
+def _video_capable_collections():
+    """Return {collection_name: video_count} for collections that contain at least one video."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT collection_name, COUNT(*) FROM videos
+            GROUP BY collection_name ORDER BY collection_name
+        """)
+        return {row[0]: row[1] for row in cur.fetchall()}
+    finally:
+        _release_db(conn)
+
+def _user_has_collection_video_access(user_id: int, collection: str):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM video_collection_access WHERE collection_name = %s AND user_id = %s",
+            (collection, user_id)
+        )
+        return cur.fetchone() is not None
+    finally:
+        _release_db(conn)
+
+def _user_accessible_video_ids(user_id: int, collection: str):
+    """Return the set of video ids in this collection individually granted to the user."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT v.id FROM video_item_access a
+            JOIN videos v ON v.id = a.video_id
+            WHERE a.user_id = %s AND v.collection_name = %s
+        """, (user_id, collection))
+        return {row[0] for row in cur.fetchall()}
+    finally:
+        _release_db(conn)
+
+def _user_can_view_any_video_in_collection(user, collection: str):
+    """True if this user (object with is_authenticated/is_admin/id) can see at least one video here."""
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_admin:
+        return True
+    if _user_has_collection_video_access(user.id, collection):
+        return True
+    return len(_user_accessible_video_ids(user.id, collection)) > 0
+
+def _visible_videos_for_user(user, collection: str):
+    """Return the list of video dicts this user is allowed to see in this collection."""
+    videos = _load_collection_videos(collection)
+    if not user or not user.is_authenticated:
+        return []
+    if user.is_admin or _user_has_collection_video_access(user.id, collection):
+        return videos
+    allowed_ids = _user_accessible_video_ids(user.id, collection)
+    return [v for v in videos if v['id'] in allowed_ids]
+
+def _grant_collection_video_access(collection: str, user_id: int, granted_by: int):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO video_collection_access (collection_name, user_id, granted_by)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (collection_name, user_id) DO NOTHING
+        """, (collection, user_id, granted_by))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _revoke_collection_video_access(collection: str, user_id: int):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM video_collection_access WHERE collection_name = %s AND user_id = %s",
+            (collection, user_id)
+        )
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _grant_video_item_access(video_id: int, user_id: int, granted_by: int):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO video_item_access (video_id, user_id, granted_by)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (video_id, user_id) DO NOTHING
+        """, (video_id, user_id, granted_by))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _revoke_video_item_access(video_id: int, user_id: int):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM video_item_access WHERE video_id = %s AND user_id = %s",
+            (video_id, user_id)
+        )
+        conn.commit()
+    finally:
+        _release_db(conn)
+
 def _normalize_tags_entry(entry):
     """Normalize a tags entry dict — kept for callers that use _load_tags() output."""
     if isinstance(entry, list):
@@ -519,6 +710,9 @@ def _is_better_score(candidate: dict, current: dict):
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def allowed_video_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_VIDEO_EXTENSIONS
+
 def _get_collection_image_urls(collection: str):
     """Return Cloudinary image URLs for a collection, read from tags.json."""
     tags_data = _load_tags()
@@ -589,8 +783,10 @@ def collection_view(collection_name):
         else:
             image_tags[filename] = []
 
+    videos = _visible_videos_for_user(current_user, collection) if _user_can_view_any_video_in_collection(current_user, collection) else None
+
     return render_template('index.html', images=images, collection=collection,
-                           image_tags=image_tags, image_urls=image_urls)
+                           image_tags=image_tags, image_urls=image_urls, videos=videos)
 
 @app.route('/upload', methods=['POST'])
 @app.route('/upload/<collection>', methods=['POST'])
@@ -636,6 +832,58 @@ def upload_file(collection=None):
         })
 
     return jsonify({'error': 'Invalid file type'}), 400
+
+@app.route('/upload-video/<collection>', methods=['POST'])
+@admin_required
+def upload_video(collection):
+    """Admin-only: upload a video into a collection's Cloudinary folder. Hidden from
+    all users by default — access must be granted separately via the video access APIs."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    if not allowed_video_file(file.filename):
+        return jsonify({'error': 'Invalid file type'}), 400
+
+    safe_name = _safe_collection_name(collection)
+    if not safe_name:
+        return jsonify({'error': 'Invalid collection name'}), 400
+
+    ext = os.path.splitext(secure_filename(file.filename))[1].lower()
+    filename = str(uuid.uuid4()) + ext
+    name_no_ext = os.path.splitext(filename)[0]
+    public_id = f"{safe_name}/{name_no_ext}"
+
+    try:
+        result = cloudinary.uploader.upload_large(
+            file,
+            public_id=name_no_ext,
+            resource_type='video',
+            folder=safe_name,
+            chunk_size=20_000_000,
+            overwrite=False,
+        )
+    except Exception as e:
+        return jsonify({'error': f'Cloudinary upload failed: {str(e)}'}), 500
+
+    url = result['secure_url']
+    thumbnail_url, _ = cloudinary.utils.cloudinary_url(
+        result['public_id'], resource_type='video', format='jpg'
+    )
+    duration = result.get('duration')
+
+    _db_insert_video(safe_name, filename, url, thumbnail_url=thumbnail_url,
+                      duration=duration, user_id=current_user.id)
+
+    return jsonify({
+        'success': True,
+        'filename': filename,
+        'url': url,
+        'thumbnail_url': thumbnail_url,
+    })
 
 @app.route('/get-quote')
 def get_quote():
@@ -1216,7 +1464,57 @@ def api_rename_collection():
             finally:
                 _release_db(conn)
 
-        # Remove old collection record (all images already moved above)
+        # Rename each video asset and update its DB row
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT filename, url FROM videos WHERE collection_name = %s",
+                (safe_old,)
+            )
+            video_rows = cur.fetchall()
+        finally:
+            _release_db(conn)
+
+        for filename, old_url in video_rows:
+            name_no_ext = os.path.splitext(filename)[0]
+            new_url = old_url
+            try:
+                result = cloudinary.uploader.rename(
+                    f"{safe_old}/{name_no_ext}",
+                    f"{safe_new}/{name_no_ext}",
+                    resource_type='video'
+                )
+                new_url = result.get('secure_url', old_url)
+            except Exception:
+                pass
+
+            conn = _get_db()
+            try:
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE videos
+                    SET collection_name = %s, url = %s
+                    WHERE collection_name = %s AND filename = %s
+                """, (safe_new, new_url, safe_old, filename))
+                conn.commit()
+            finally:
+                _release_db(conn)
+
+        # Carry over collection-level video access grants to the new name
+        # (they'd otherwise be lost when the old collection row cascade-deletes below)
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE video_collection_access SET collection_name = %s WHERE collection_name = %s",
+                (safe_new, safe_old)
+            )
+            conn.commit()
+        finally:
+            _release_db(conn)
+
+        # Remove old collection record (all images/videos already moved above)
         conn = _get_db()
         try:
             cur = conn.cursor()
@@ -1246,17 +1544,25 @@ def api_delete_collection():
         return jsonify({'success': False, 'error': 'Collection not found'}), 404
 
     try:
-        # Delete all Cloudinary resources in this folder
+        # Delete all Cloudinary resources in this folder (images and videos)
         try:
             cloudinary.api.delete_resources_by_prefix(f"{safe_name}/")
+        except Exception:
+            pass
+        try:
+            cloudinary.api.delete_resources_by_prefix(f"{safe_name}/", resource_type='video')
         except Exception:
             pass
         try:
             cloudinary.api.delete_folder(safe_name)
         except Exception:
             pass
+        try:
+            cloudinary.api.delete_folder(safe_name, resource_type='video')
+        except Exception:
+            pass
 
-        # DELETE FROM collections CASCADE-deletes all images rows automatically
+        # DELETE FROM collections CASCADE-deletes all images/videos rows automatically
         conn = _get_db()
         try:
             cur = conn.cursor()
@@ -2386,10 +2692,18 @@ def admin_user_detail(user_id):
         cur.execute("""SELECT collection_name, game_type, data, created_at
                        FROM scores WHERE user_id=%s ORDER BY created_at DESC LIMIT 50""", (user_id,))
         scores = [dict(r) for r in cur.fetchall()]
+        cur.execute(
+            "SELECT collection_name FROM video_collection_access WHERE user_id = %s",
+            (user_id,)
+        )
+        granted_collections = {row[0] for row in cur.fetchall()}
     finally:
         _release_db(conn)
+
+    video_collections = sorted(_video_capable_collections().keys())
     return render_template('admin_user_detail.html',
-        target_user=target, sessions=sessions, uploads=uploads, scores=scores)
+        target_user=target, sessions=sessions, uploads=uploads, scores=scores,
+        video_collections=video_collections, granted_collections=granted_collections)
 
 @app.route('/api/admin/user/<int:user_id>/set-admin', methods=['POST'])
 @admin_required
@@ -2410,6 +2724,143 @@ def api_set_admin(user_id):
     finally:
         _release_db(conn)
     return jsonify({'success': True, 'is_admin': make_admin})
+
+# ── Admin: video collections & access control ─────────────────────────────────
+
+def _all_users_basic():
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT id, email, username, avatar_url, is_admin
+            FROM users ORDER BY username
+        """)
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+
+@app.route('/admin/videos')
+def admin_videos_dashboard():
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
+    video_counts = _video_capable_collections()
+    collections = _load_collections()
+    return render_template('admin-videos.html', collections=collections, video_counts=video_counts)
+
+@app.route('/admin/videos/<collection_name>')
+def admin_video_collection_detail(collection_name):
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
+    safe_name = _safe_collection_name(collection_name)
+    if not _collection_exists(safe_name):
+        return "Collection not found", 404
+
+    videos = _load_collection_videos(safe_name)
+    users = _all_users_basic()
+
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT user_id FROM video_collection_access WHERE collection_name = %s",
+            (safe_name,)
+        )
+        collection_access_ids = sorted({row[0] for row in cur.fetchall()})
+
+        cur.execute("""
+            SELECT a.video_id, a.user_id FROM video_item_access a
+            JOIN videos v ON v.id = a.video_id
+            WHERE v.collection_name = %s
+        """, (safe_name,))
+        item_access = {}
+        for video_id, user_id in cur.fetchall():
+            item_access.setdefault(video_id, []).append(user_id)
+    finally:
+        _release_db(conn)
+
+    return render_template('admin-video-collection.html',
+        collection=safe_name, videos=videos, users=users,
+        collection_access_ids=collection_access_ids, item_access=item_access)
+
+@app.route('/api/admin/videos/<collection_name>/delete', methods=['POST'])
+@admin_required
+def api_delete_video(collection_name):
+    data = request.get_json() or {}
+    video_id = data.get('video_id')
+    safe_name = _safe_collection_name(collection_name)
+
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT filename FROM videos WHERE id = %s AND collection_name = %s",
+            (video_id, safe_name)
+        )
+        row = cur.fetchone()
+    finally:
+        _release_db(conn)
+
+    if not row:
+        return jsonify({'success': False, 'error': 'Video not found'}), 404
+
+    filename = row[0]
+    name_no_ext = os.path.splitext(filename)[0]
+    try:
+        cloudinary.uploader.destroy(f"{safe_name}/{name_no_ext}", resource_type='video')
+    except Exception:
+        pass
+
+    _db_delete_video(video_id)
+    return jsonify({'success': True})
+
+@app.route('/api/admin/videos/<collection_name>/access', methods=['POST'])
+@admin_required
+def api_set_collection_video_access(collection_name):
+    """Grant or revoke a user's access to every video in a collection."""
+    data = request.get_json() or {}
+    user_id = data.get('user_id')
+    grant = bool(data.get('grant'))
+    safe_name = _safe_collection_name(collection_name)
+
+    if not user_id or not _collection_exists(safe_name):
+        return jsonify({'success': False, 'error': 'Invalid collection or user'}), 400
+
+    if grant:
+        _grant_collection_video_access(safe_name, user_id, current_user.id)
+    else:
+        _revoke_collection_video_access(safe_name, user_id)
+
+    return jsonify({'success': True, 'granted': grant})
+
+@app.route('/api/admin/videos/<collection_name>/<int:video_id>/access', methods=['POST'])
+@admin_required
+def api_set_video_item_access(collection_name, video_id):
+    """Grant or revoke a user's access to one specific video."""
+    data = request.get_json() or {}
+    user_id = data.get('user_id')
+    grant = bool(data.get('grant'))
+    safe_name = _safe_collection_name(collection_name)
+
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM videos WHERE id = %s AND collection_name = %s",
+            (video_id, safe_name)
+        )
+        exists = cur.fetchone() is not None
+    finally:
+        _release_db(conn)
+
+    if not user_id or not exists:
+        return jsonify({'success': False, 'error': 'Invalid video or user'}), 400
+
+    if grant:
+        _grant_video_item_access(video_id, user_id, current_user.id)
+    else:
+        _revoke_video_item_access(video_id, user_id)
+
+    return jsonify({'success': True, 'granted': grant})
 
 # ── Versus Zoom Reveal: live 2-player room/match state machine ────────────────
 # Each player sees a different zoomed-in crop of one of two images and races to

@@ -34,6 +34,23 @@
         })();
     </script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% if videos is not none %}
+    <style>
+        .media-tabs{display:flex;gap:.3rem;justify-content:center;margin-top:1.2rem;}
+        .media-tab{padding:.5rem 1.1rem;border:none;background:transparent;color:var(--muted-text);
+          cursor:pointer;font-size:.92rem;font-weight:700;border-bottom:2px solid transparent;}
+        .media-tab.on{color:var(--primary-color);border-bottom-color:var(--primary-color);}
+        .media-pane{display:none;} .media-pane.on{display:block;}
+        .videos-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
+          gap:1rem;padding:0 24px;max-width:1400px;margin:20px auto;}
+        .video-card{background:var(--surface-color);border-radius:1rem;overflow:hidden;
+          border:1px solid rgba(255,107,129,.15);}
+        .video-card video{width:100%;aspect-ratio:16/9;background:#000;display:block;}
+        .video-card .vname{padding:.5rem .8rem;font-size:.8rem;color:var(--muted-text);
+          overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+        .videos-empty{text-align:center;padding:40px;color:var(--muted-text);}
+    </style>
+    {% endif %}
 </head>
 <body>
     <!-- Modern Navigation Bar -->
@@ -75,7 +92,18 @@
                 <i class="fas fa-play-circle"></i> Start Slideshow
             </button>
         </div>
-        
+
+        {% if videos is not none %}
+        <div class="media-tabs">
+            <button class="media-tab on" id="photosTabBtn" onclick="switchMediaTab('photos')">
+                <i class="fas fa-images"></i> Photos
+            </button>
+            <button class="media-tab" id="videosTabBtn" onclick="switchMediaTab('videos')">
+                <i class="fas fa-film"></i> Videos ({{ videos|length }})
+            </button>
+        </div>
+        {% endif %}
+
         <!-- Tag Filter with Search -->
         {% if image_tags %}
         <div class="tag-filter-container" style="margin-top:20px;max-width:900px;margin-left:auto;margin-right:auto;">
@@ -126,6 +154,7 @@
         {% endif %}
     </div>
 
+    <div class="media-pane on" id="photosPane">
     <div class="gallery" id="gallery">
         {% for image in images %}
         <div class="gallery-item" data-aos="fade-up" data-filename="{{ image }}">
@@ -153,6 +182,35 @@
         </div>
         {% endfor %}
     </div>
+    </div>
+
+    {% if videos is not none %}
+    <div class="media-pane" id="videosPane">
+        {% if current_user.is_admin %}
+        <div class="upload-container" style="margin:16px auto;display:flex;gap:12px;flex-wrap:wrap;justify-content:center;">
+            <label for="video-upload" class="custom-upload-btn">
+                <i class="fas fa-cloud-upload-alt"></i> Upload Video
+            </label>
+            <input id="video-upload" type="file" accept="video/*" style="display:none;">
+            <span id="videoUploadStatus" style="align-self:center;color:var(--muted-text);font-size:.9rem;"></span>
+        </div>
+        {% endif %}
+        {% if videos %}
+        <div class="videos-grid">
+            {% for v in videos %}
+            <div class="video-card">
+                <video controls preload="metadata" poster="{{ v.thumbnail_url or '' }}">
+                    <source src="{{ v.url }}">
+                </video>
+                <div class="vname">{{ v.filename }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="videos-empty"><i class="fas fa-film"></i><br>No videos yet.</p>
+        {% endif %}
+    </div>
+    {% endif %}
 
     <!-- Modal -->
     <div class="modal" id="imageModal">
@@ -238,6 +296,35 @@
         // expose collection name on window for scripts (games-modal.js, etc)
         window.CURRENT_COLLECTION = "{{ collection }}";
     </script>
+
+    {% if videos is not none %}
+    <script>
+        function switchMediaTab(tab){
+            document.getElementById('photosTabBtn').classList.toggle('on', tab === 'photos');
+            document.getElementById('videosTabBtn').classList.toggle('on', tab === 'videos');
+            document.getElementById('photosPane').classList.toggle('on', tab === 'photos');
+            document.getElementById('videosPane').classList.toggle('on', tab === 'videos');
+        }
+        {% if current_user.is_admin %}
+        const videoUploadInput = document.getElementById('video-upload');
+        const videoUploadStatus = document.getElementById('videoUploadStatus');
+        videoUploadInput.addEventListener('change', async () => {
+            const file = videoUploadInput.files[0];
+            if (!file) return;
+            videoUploadStatus.textContent = `Uploading ${file.name}…`;
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const r = await fetch(`/upload-video/${window.CURRENT_COLLECTION}`, {method: 'POST', body: formData});
+                const d = await r.json();
+                if (d.success) { videoUploadStatus.textContent = 'Upload complete.'; location.reload(); }
+                else { videoUploadStatus.textContent = d.error || 'Upload failed.'; }
+            } catch { videoUploadStatus.textContent = 'Network error during upload.'; }
+            videoUploadInput.value = '';
+        });
+        {% endif %}
+    </script>
+    {% endif %}
 
     <!-- Games Modal -->
     <div id="gamesModal" class="games-modal">

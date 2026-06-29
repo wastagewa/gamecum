@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Manage Videos — ImgurMemory</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script>
+    (function(){var t=null;try{t=localStorage.getItem('imgur.theme');}catch(e){}
+    if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}})();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    .adm-wrap{max-width:1200px;margin:0 auto;padding:2rem 1.5rem;}
+    .adm-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:2rem;flex-wrap:wrap;gap:1rem;}
+    .adm-header h1{font-size:1.7rem;font-weight:700;}
+    .adm-header h1 i{color:var(--primary-color);margin-right:.5rem;}
+
+    .collections-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1rem;}
+    .collection-card{
+      background:var(--surface-color);border-radius:1rem;padding:1.2rem 1.4rem;
+      border:1px solid rgba(164,6,110,.1);box-shadow:0 2px 12px var(--shadow-color);
+    }
+    .collection-card h3{font-size:1.05rem;font-weight:700;margin-bottom:.3rem;}
+    .collection-card h3 i{color:var(--primary-color);margin-right:.4rem;}
+    .collection-card .count{font-size:.82rem;color:var(--muted-text);margin-bottom:.9rem;}
+    .collection-btn{
+      display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .85rem;
+      border-radius:.55rem;border:1.5px solid var(--primary-color);color:var(--primary-color);
+      background:transparent;font-size:.82rem;font-weight:700;cursor:pointer;text-decoration:none;
+    }
+    .collection-btn:hover{background:var(--primary-color);color:#fff;}
+
+    .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;
+      align-items:center;justify-content:center;}
+    .modal.open{display:flex;}
+    .modal-content{background:var(--surface-color);border-radius:1rem;padding:1.5rem;
+      width:90%;max-width:420px;box-shadow:0 8px 30px var(--shadow-color);}
+    .modal-content h2{font-size:1.2rem;margin-bottom:1rem;}
+    .modal-content input{width:100%;padding:.6rem .8rem;border-radius:.6rem;
+      border:1.5px solid rgba(164,6,110,.15);background:var(--bg-color);color:var(--text-color);
+      font-size:.9rem;margin-bottom:.4rem;}
+    .modal-content small{color:var(--muted-text);display:block;margin-bottom:1rem;}
+    .modal-actions{display:flex;gap:.6rem;justify-content:flex-end;}
+    .btn-primary{background:var(--primary-color);color:#fff;border:none;padding:.55rem 1.1rem;
+      border-radius:.6rem;font-weight:700;cursor:pointer;}
+    .btn-secondary{background:transparent;color:var(--muted-text);border:1.5px solid rgba(164,6,110,.15);
+      padding:.55rem 1.1rem;border-radius:.6rem;font-weight:700;cursor:pointer;}
+    .message{font-size:.85rem;margin-top:.4rem;min-height:1.1rem;}
+    .message.error{color:#ef4444;}
+    .message.ok{color:#22c55e;}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-container">
+      <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+      <div class="navbar-menu">
+        <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+        <a href="/admin" class="navbar-link"><i class="fas fa-shield-alt"></i> Admin</a>
+        <a href="/admin/videos" class="navbar-link active"><i class="fas fa-video"></i> Videos</a>
+        <a href="/logout" class="navbar-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="adm-wrap">
+    <div class="adm-header">
+      <h1><i class="fas fa-video"></i> Manage Video Collections</h1>
+      <button class="collection-btn" id="createCollectionBtn"><i class="fas fa-plus"></i> Create Collection</button>
+    </div>
+
+    <div class="collections-grid">
+      {% for name in collections %}
+      <div class="collection-card">
+        <h3><i class="fas fa-folder"></i> {{ name }}</h3>
+        <div class="count">{{ video_counts.get(name, 0) }} video{{ '' if video_counts.get(name, 0) == 1 else 's' }}</div>
+        <a href="/admin/videos/{{ name }}" class="collection-btn"><i class="fas fa-cog"></i> Manage</a>
+      </div>
+      {% else %}
+      <p style="color:var(--muted-text);">No collections yet. Create one to start uploading videos.</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="modal" id="createModal">
+    <div class="modal-content">
+      <h2>Create New Collection</h2>
+      <input type="text" id="newCollectionName" placeholder="Collection name" autocomplete="off">
+      <small>Letters, numbers, hyphens, and underscores only</small>
+      <div id="createMessage" class="message"></div>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="cancelCreate">Cancel</button>
+        <button class="btn-primary" id="confirmCreate">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script>
+    const createModal = document.getElementById('createModal');
+    document.getElementById('createCollectionBtn').onclick = () => createModal.classList.add('open');
+    document.getElementById('cancelCreate').onclick = () => createModal.classList.remove('open');
+
+    document.getElementById('confirmCreate').onclick = async () => {
+      const name = document.getElementById('newCollectionName').value.trim();
+      const msg = document.getElementById('createMessage');
+      if (!name) { msg.textContent = 'Name required'; msg.className = 'message error'; return; }
+      try {
+        const r = await fetch('/api/collections/create', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({name})
+        });
+        const d = await r.json();
+        if (d.success) { location.reload(); }
+        else { msg.textContent = d.error || 'Failed'; msg.className = 'message error'; }
+      } catch { msg.textContent = 'Network error'; msg.className = 'message error'; }
+    };
+  </script>
+</body>
+</html>

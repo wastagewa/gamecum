@@ -68,6 +68,16 @@
     /* Active dot */
     .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:.3rem;}
     .dot-on{background:#22c55e;} .dot-off{background:#6b7280;}
+
+    /* Video access toggles */
+    .switch{position:relative;display:inline-block;width:42px;height:24px;}
+    .switch input{opacity:0;width:0;height:0;}
+    .slider{position:absolute;cursor:pointer;inset:0;background:rgba(100,100,100,.25);
+      transition:.2s;border-radius:24px;}
+    .slider:before{position:absolute;content:"";height:18px;width:18px;left:3px;bottom:3px;
+      background:white;transition:.2s;border-radius:50%;}
+    input:checked + .slider{background:var(--primary-color);}
+    input:checked + .slider:before{transform:translateX(18px);}
   </style>
 </head>
 <body>
@@ -76,6 +86,7 @@
       <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
       <div class="navbar-menu">
         <a href="/admin" class="navbar-link"><i class="fas fa-shield-alt"></i> Admin</a>
+        <a href="/admin/videos" class="navbar-link"><i class="fas fa-video"></i> Videos</a>
         <a href="/logout" class="navbar-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
         <button id="themeToggle" class="navbar-theme-toggle"><i class="fas fa-moon"></i></button>
       </div>
@@ -121,6 +132,7 @@
       <button class="tab on" onclick="switchTab('sess')"><i class="fas fa-history"></i> Sessions ({{ sessions|length }})</button>
       <button class="tab" onclick="switchTab('imgs')"><i class="fas fa-images"></i> Uploads ({{ uploads|length }})</button>
       <button class="tab" onclick="switchTab('scrs')"><i class="fas fa-trophy"></i> Scores ({{ scores|length }})</button>
+      <button class="tab" onclick="switchTab('vids')"><i class="fas fa-video"></i> Video Access ({{ video_collections|length }})</button>
     </div>
 
     <!-- Sessions pane -->
@@ -207,6 +219,33 @@
         <p class="empty"><i class="fas fa-trophy"></i><br>No scores recorded yet.</p>
       {% endif %}
     </div>
+
+    <!-- Video Access pane -->
+    <div class="pane" id="pane-vids">
+      {% if video_collections %}
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Collection</th><th>Access</th></tr></thead>
+          <tbody>
+            {% for c in video_collections %}
+            <tr>
+              <td><i class="fas fa-folder" style="color:var(--primary-color);"></i> {{ c }}</td>
+              <td>
+                <label class="switch">
+                  <input type="checkbox" class="vid-access-toggle" data-collection="{{ c }}"
+                    {% if c in granted_collections %}checked{% endif %}>
+                  <span class="slider"></span>
+                </label>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        <p class="empty"><i class="fas fa-video"></i><br>No video collections exist yet.</p>
+      {% endif %}
+    </div>
   </div>
 
   <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
@@ -219,6 +258,21 @@
         p.classList.toggle('on',p.id==='pane-'+id);
       });
     }
+
+    const TARGET_USER_ID = {{ target_user.id }};
+    document.querySelectorAll('.vid-access-toggle').forEach(cb=>{
+      cb.addEventListener('change', async ()=>{
+        const collection = cb.dataset.collection;
+        try{
+          const r = await fetch(`/api/admin/videos/${collection}/access`, {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({user_id: TARGET_USER_ID, grant: cb.checked})
+          });
+          const d = await r.json();
+          if(!d.success){ alert(d.error||'Failed'); cb.checked=!cb.checked; }
+        }catch{ alert('Network error'); cb.checked=!cb.checked; }
+      });
+    });
   </script>
 </body>
 </html>
