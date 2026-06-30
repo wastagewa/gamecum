@@ -1,20 +1,20 @@
 """
-One-off script: copy every existing image/video from Cloudinary to Wasabi and
-repoint the DB rows at their new Wasabi URLs.
+One-off script: copy every existing image/video into the Cloudflare R2 bucket
+and repoint the DB rows at their new R2 public URLs.
 
 Run this once, manually, after the app itself has already been switched over
-to Wasabi (app.py no longer talks to Cloudinary at all). Existing rows still
-have their old Cloudinary `url` value until this script updates them, so
-re-running it is safe/idempotent — it just re-fetches from whatever URL is
-currently stored (Cloudinary the first time, Wasabi on any later re-run, which
-becomes a harmless re-upload of the same bytes).
+to R2 (app.py no longer talks to Cloudinary or Wasabi at all). Existing rows
+still have whatever URL they last pointed at (Cloudinary, or Wasabi if that
+migration ran first) until this script updates them, so re-running it is
+safe/idempotent — it just re-fetches from whatever URL is currently stored
+and re-uploads it, harmlessly overwriting the same R2 object on a second run.
 
 Required env vars (same names the app itself uses):
     DATABASE_URL (or INTERNAL_POSTGRES_DATABASE_URL)
-    WASABI_ACCESS_KEY, WASABI_SECRET_KEY, WASABI_BUCKET, WASABI_REGION
+    R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_BASE_URL
 
 Usage:
-    python migrate_to_wasabi.py
+    python migrate_to_r2.py
 """
 import os
 import sys
@@ -31,24 +31,27 @@ except ImportError:
     pass
 
 DB_URL = os.environ.get('INTERNAL_POSTGRES_DATABASE_URL') or os.environ.get('DATABASE_URL', '')
-WASABI_BUCKET = os.environ.get('WASABI_BUCKET', 'gamecum')
-WASABI_REGION = os.environ.get('WASABI_REGION', 'us-east-1')
-WASABI_ENDPOINT = os.environ.get('WASABI_ENDPOINT_URL', f'https://s3.{WASABI_REGION}.wasabisys.com')
+R2_ACCOUNT_ID = os.environ.get('R2_ACCOUNT_ID', '')
+R2_BUCKET = os.environ.get('R2_BUCKET', 'gamecum')
+R2_ENDPOINT = os.environ.get('R2_ENDPOINT_URL', f'https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com')
+R2_PUBLIC_BASE_URL = os.environ.get('R2_PUBLIC_BASE_URL', '').rstrip('/')
 
 if not DB_URL:
     sys.exit("DATABASE_URL (or INTERNAL_POSTGRES_DATABASE_URL) is not set.")
+if not R2_PUBLIC_BASE_URL:
+    sys.exit("R2_PUBLIC_BASE_URL is not set (the bucket's public custom-domain or r2.dev URL).")
 
 s3 = boto3.client(
     's3',
-    endpoint_url=WASABI_ENDPOINT,
-    aws_access_key_id=os.environ.get('WASABI_ACCESS_KEY'),
-    aws_secret_access_key=os.environ.get('WASABI_SECRET_KEY'),
-    region_name=WASABI_REGION,
+    endpoint_url=R2_ENDPOINT,
+    aws_access_key_id=os.environ.get('R2_ACCESS_KEY_ID'),
+    aws_secret_access_key=os.environ.get('R2_SECRET_ACCESS_KEY'),
+    region_name='auto',
 )
 
 
-def wasabi_public_url(key):
-    return f"{WASABI_ENDPOINT}/{WASABI_BUCKET}/{key}"
+def r2_public_url(key):
+    return f"{R2_PUBLIC_BASE_URL}/{key}"
 
 
 def storage_key(collection, filename):
@@ -69,10 +72,10 @@ def migrate_table(conn, table):
             resp = requests.get(row['url'], timeout=120, stream=True)
             resp.raise_for_status()
             s3.upload_fileobj(
-                resp.raw, WASABI_BUCKET, key,
-                ExtraArgs={'ACL': 'public-read', 'ContentType': resp.headers.get('Content-Type', 'application/octet-stream')}
+                resp.raw, R2_BUCKET, key,
+                ExtraArgs={'ContentType': resp.headers.get('Content-Type', 'application/octet-stream')}
             )
-            new_url = wasabi_public_url(key)
+            new_url = r2_public_url(key)
 
             update_cur = conn.cursor()
             if table == 'videos':
@@ -106,8 +109,8 @@ def main():
 
     print(f"\nImages: {img_ok} migrated, {img_fail} failed")
     print(f"Videos: {vid_ok} migrated, {vid_fail} failed")
-    print("\nCloudinary assets were not deleted — verify everything renders "
-          "correctly from Wasabi before purging them from the Cloudinary dashboard.")
+    print("\nOld Cloudinary/Wasabi assets were not deleted — verify everything renders "
+          "correctly from R2 before purging them from those dashboards.")
 
 
 if __name__ == '__main__':

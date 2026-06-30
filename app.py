@@ -52,52 +52,55 @@ ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'mov', 'webm', 'mkv'}
 
 socketio = SocketIO(app, async_mode='gevent' if ON_RENDER else 'threading')
 
-# ── Wasabi (S3-compatible) storage ──────────────────────────────────────────────
+# ── Cloudflare R2 (S3-compatible) storage ───────────────────────────────────────
+# Public access on R2 is a bucket-level setting (custom domain or the r2.dev dev
+# subdomain), not a per-object ACL — set R2_PUBLIC_BASE_URL to whichever public
+# base URL the bucket shows in the Cloudflare dashboard once that's enabled.
 
-WASABI_BUCKET = os.environ.get('WASABI_BUCKET', 'gamecum')
-WASABI_REGION = os.environ.get('WASABI_REGION', 'us-east-1')
-WASABI_ENDPOINT = os.environ.get('WASABI_ENDPOINT_URL', f'https://s3.{WASABI_REGION}.wasabisys.com')
+R2_ACCOUNT_ID = os.environ.get('R2_ACCOUNT_ID', '')
+R2_BUCKET = os.environ.get('R2_BUCKET', 'gamecum')
+R2_ENDPOINT = os.environ.get('R2_ENDPOINT_URL', f'https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com')
+R2_PUBLIC_BASE_URL = os.environ.get('R2_PUBLIC_BASE_URL', '').rstrip('/')
 
 _s3 = boto3.client(
     's3',
-    endpoint_url=WASABI_ENDPOINT,
-    aws_access_key_id=os.environ.get('WASABI_ACCESS_KEY'),
-    aws_secret_access_key=os.environ.get('WASABI_SECRET_KEY'),
-    region_name=WASABI_REGION,
+    endpoint_url=R2_ENDPOINT,
+    aws_access_key_id=os.environ.get('R2_ACCESS_KEY_ID'),
+    aws_secret_access_key=os.environ.get('R2_SECRET_ACCESS_KEY'),
+    region_name='auto',
 )
 
-def _wasabi_public_url(key: str):
-    return f"{WASABI_ENDPOINT}/{WASABI_BUCKET}/{key}"
+def _r2_public_url(key: str):
+    return f"{R2_PUBLIC_BASE_URL}/{key}"
 
-def _wasabi_upload_fileobj(fileobj, key: str, content_type: str = None):
-    """Upload a file-like object to Wasabi as a public-read object, return its public URL."""
-    extra_args = {'ACL': 'public-read'}
+def _r2_upload_fileobj(fileobj, key: str, content_type: str = None):
+    """Upload a file-like object to the R2 bucket, return its public URL."""
+    extra_args = {}
     if content_type:
         extra_args['ContentType'] = content_type
-    _s3.upload_fileobj(fileobj, WASABI_BUCKET, key, ExtraArgs=extra_args)
-    return _wasabi_public_url(key)
+    _s3.upload_fileobj(fileobj, R2_BUCKET, key, ExtraArgs=extra_args)
+    return _r2_public_url(key)
 
-def _wasabi_delete_object(key: str):
-    _s3.delete_object(Bucket=WASABI_BUCKET, Key=key)
+def _r2_delete_object(key: str):
+    _s3.delete_object(Bucket=R2_BUCKET, Key=key)
 
-def _wasabi_delete_prefix(prefix: str):
+def _r2_delete_prefix(prefix: str):
     """Delete every object under a folder prefix (a whole collection's images and videos)."""
     paginator = _s3.get_paginator('list_objects_v2')
-    for page in paginator.paginate(Bucket=WASABI_BUCKET, Prefix=prefix):
+    for page in paginator.paginate(Bucket=R2_BUCKET, Prefix=prefix):
         objects = [{'Key': obj['Key']} for obj in page.get('Contents', [])]
         if objects:
-            _s3.delete_objects(Bucket=WASABI_BUCKET, Delete={'Objects': objects})
+            _s3.delete_objects(Bucket=R2_BUCKET, Delete={'Objects': objects})
 
-def _wasabi_move_object(old_key: str, new_key: str):
+def _r2_move_object(old_key: str, new_key: str):
     """Copy an object to a new key and delete the old one (used for collection rename); returns the new public URL."""
     _s3.copy_object(
-        Bucket=WASABI_BUCKET,
-        CopySource={'Bucket': WASABI_BUCKET, 'Key': old_key},
+        Bucket=R2_BUCKET,
+        CopySource={'Bucket': R2_BUCKET, 'Key': old_key},
         Key=new_key,
-        ACL='public-read',
     )
-    _s3.delete_object(Bucket=WASABI_BUCKET, Key=old_key)
-    return _wasabi_public_url(new_key)
+    _s3.delete_object(Bucket=R2_BUCKET, Key=old_key)
+    return _r2_public_url(new_key)
 
 # ── Auth setup ────────────────────────────────────────────────────────────────
 
@@ -802,7 +805,7 @@ def collection_view(collection_name):
     collection = _safe_collection_name(collection_name)
     tags_data = _load_tags()
     images = []      # list of filenames (used as keys for tags/delete operations)
-    image_urls = {}  # filename -> Wasabi URL
+    image_urls = {}  # filename -> R2 URL
     image_tags = {}
 
     prefix = f"{collection}/"
@@ -842,7 +845,7 @@ def upload_file(collection=None):
         key = _get_image_key(collection, filename)
 
         try:
-            url = _wasabi_upload_fileobj(file.stream, key, file.mimetype)
+            url = _r2_upload_fileobj(file.stream, key, file.mimetype)
         except Exception as e:
             return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
@@ -862,7 +865,7 @@ def upload_file(collection=None):
 @app.route('/upload-video/<collection>', methods=['POST'])
 @admin_required
 def upload_video(collection):
-    """Admin-only: upload a video into a collection's Wasabi folder. Hidden from
+    """Admin-only: upload a video into a collection's R2 folder. Hidden from
     all users by default — access must be granted separately via the video access APIs."""
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
@@ -883,11 +886,11 @@ def upload_video(collection):
     key = _get_image_key(safe_name, filename)
 
     try:
-        url = _wasabi_upload_fileobj(file.stream, key, file.mimetype)
+        url = _r2_upload_fileobj(file.stream, key, file.mimetype)
     except Exception as e:
         return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
-    # Wasabi has no Cloudinary-style auto thumbnail/duration probe (would need ffmpeg) —
+    # R2 has no Cloudinary-style auto thumbnail/duration probe (would need ffmpeg) —
     # videos uploaded from here on simply have no poster image / duration metadata.
     _db_insert_video(safe_name, filename, url, thumbnail_url=None,
                       duration=None, user_id=current_user.id)
@@ -1228,7 +1231,7 @@ def get_high_scores(collection):
 @app.route('/delete-image/<filename>', methods=['DELETE'])
 def delete_image(filename):
     try:
-        _wasabi_delete_object(_get_image_key('', filename))
+        _r2_delete_object(_get_image_key('', filename))
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1238,7 +1241,7 @@ def delete_image(filename):
 def delete_image_in_collection(collection, filename):
     collection = _safe_collection_name(collection)
     try:
-        _wasabi_delete_object(_get_image_key(collection, filename))
+        _r2_delete_object(_get_image_key(collection, filename))
         _db_delete_image(collection, filename)
         return jsonify({'success': True})
     except Exception as e:
@@ -1391,7 +1394,7 @@ def manage_collections():
 @app.route('/api/collections/create', methods=['POST'])
 @admin_required
 def api_create_collection():
-    """Register a new collection (Wasabi folder is created on first upload)."""
+    """Register a new collection (R2 folder is created on first upload)."""
     data = request.get_json()
     name = data.get('name', '').strip()
 
@@ -1415,7 +1418,7 @@ def api_create_collection():
 @app.route('/api/collections/rename', methods=['POST'])
 @admin_required
 def api_rename_collection():
-    """Rename a collection: moves all Wasabi assets and updates the images/videos tables."""
+    """Rename a collection: moves all R2 assets and updates the images/videos tables."""
     data = request.get_json()
     old_name = data.get('old_name', '').strip()
     new_name = data.get('new_name', '').strip()
@@ -1439,7 +1442,7 @@ def api_rename_collection():
         # Create new collection record first
         _ensure_collection(safe_new)
 
-        # Move each Wasabi object to the new prefix and update its DB row
+        # Move each R2 object to the new prefix and update its DB row
         conn = _get_db()
         try:
             cur = conn.cursor()
@@ -1454,7 +1457,7 @@ def api_rename_collection():
         for filename, old_url in rows:
             new_url = old_url
             try:
-                new_url = _wasabi_move_object(
+                new_url = _r2_move_object(
                     _get_image_key(safe_old, filename),
                     _get_image_key(safe_new, filename)
                 )
@@ -1488,7 +1491,7 @@ def api_rename_collection():
         for filename, old_url in video_rows:
             new_url = old_url
             try:
-                new_url = _wasabi_move_object(
+                new_url = _r2_move_object(
                     _get_image_key(safe_old, filename),
                     _get_image_key(safe_new, filename)
                 )
@@ -1550,9 +1553,9 @@ def api_delete_collection():
         return jsonify({'success': False, 'error': 'Collection not found'}), 404
 
     try:
-        # Delete all Wasabi objects under this collection's folder (images and videos together)
+        # Delete all R2 objects under this collection's folder (images and videos together)
         try:
-            _wasabi_delete_prefix(f"{safe_name}/")
+            _r2_delete_prefix(f"{safe_name}/")
         except Exception:
             pass
 
@@ -2799,7 +2802,7 @@ def api_delete_video(collection_name):
 
     filename = row[0]
     try:
-        _wasabi_delete_object(_get_image_key(safe_name, filename))
+        _r2_delete_object(_get_image_key(safe_name, filename))
     except Exception:
         pass
 
