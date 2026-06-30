@@ -61,6 +61,8 @@ B2_KEY_ID = os.environ.get('B2_KEY_ID', '')
 B2_APPLICATION_KEY = os.environ.get('B2_APPLICATION_KEY', '')
 B2_BUCKET = os.environ.get('B2_BUCKET', '')
 B2_ENDPOINT = os.environ.get('B2_ENDPOINT_URL', '')
+if B2_ENDPOINT and not B2_ENDPOINT.startswith(('http://', 'https://')):
+    B2_ENDPOINT = f'https://{B2_ENDPOINT}'
 B2_URL_EXPIRY_SECONDS = int(os.environ.get('B2_URL_EXPIRY_SECONDS', 21600))  # 6 hours
 
 _s3 = boto3.client(
