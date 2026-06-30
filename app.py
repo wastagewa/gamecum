@@ -65,11 +65,22 @@ if B2_ENDPOINT and not B2_ENDPOINT.startswith(('http://', 'https://')):
     B2_ENDPOINT = f'https://{B2_ENDPOINT}'
 B2_URL_EXPIRY_SECONDS = int(os.environ.get('B2_URL_EXPIRY_SECONDS', 21600))  # 6 hours
 
+# B2 endpoints encode their region (e.g. s3.eu-central-003.backblazeb2.com) — the
+# presigned-URL signature must be scoped to that same region or B2 rejects it with
+# a signature mismatch, even though the URL looks well-formed. Derive it from the
+# endpoint unless explicitly overridden.
+B2_REGION = os.environ.get('B2_REGION', '')
+if not B2_REGION and B2_ENDPOINT:
+    _host_parts = B2_ENDPOINT.split('://', 1)[-1].split('.')
+    if len(_host_parts) >= 2 and _host_parts[0] == 's3':
+        B2_REGION = _host_parts[1]
+
 _s3 = boto3.client(
     's3',
     endpoint_url=B2_ENDPOINT,
     aws_access_key_id=B2_KEY_ID,
     aws_secret_access_key=B2_APPLICATION_KEY,
+    region_name=B2_REGION or 'us-east-1',
 )
 
 def _b2_sign_url(key: str, expires_in: int = B2_URL_EXPIRY_SECONDS):
