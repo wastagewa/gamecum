@@ -67,13 +67,16 @@
     input:checked + .slider:before{transform:translateX(18px);}
     .empty{text-align:center;padding:2rem;color:var(--muted-text);}
 
-    .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;
+    /* Prefixed adm-modal-* to avoid colliding with the .modal/.modal-content classes
+       already defined (twice) in style.css, which default to opacity:0;pointer-events:none
+       and would make this modal invisible/unclickable even after display:flex applies. */
+    .adm-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;
       align-items:center;justify-content:center;}
-    .modal.open{display:flex;}
-    .modal-content{background:var(--surface-color);border-radius:1rem;padding:1.5rem;
+    .adm-modal.open{display:flex;}
+    .adm-modal-content{background:var(--surface-color);border-radius:1rem;padding:1.5rem;
       width:92%;max-width:420px;max-height:80vh;overflow-y:auto;box-shadow:0 8px 30px var(--shadow-color);}
-    .modal-content h2{font-size:1.1rem;margin-bottom:1rem;}
-    .modal-close-row{display:flex;justify-content:flex-end;margin-top:1rem;}
+    .adm-modal-content h2{font-size:1.1rem;margin-bottom:1rem;}
+    .adm-modal-close-row{display:flex;justify-content:flex-end;margin-top:1rem;}
   </style>
 </head>
 <body>
@@ -162,8 +165,8 @@
   </div>
 
   <!-- Per-video access modal -->
-  <div class="modal" id="accessModal">
-    <div class="modal-content">
+  <div class="adm-modal" id="accessModal">
+    <div class="adm-modal-content">
       <h2><i class="fas fa-user-lock"></i> Video Access</h2>
       <div class="tbl-wrap">
         <table>
@@ -171,7 +174,7 @@
           <tbody id="accessModalBody"></tbody>
         </table>
       </div>
-      <div class="modal-close-row">
+      <div class="adm-modal-close-row">
         <button class="btn-secondary" id="closeAccessModal" style="padding:.5rem 1rem;border-radius:.6rem;
           border:1.5px solid rgba(164,6,110,.15);background:transparent;color:var(--muted-text);cursor:pointer;">Close</button>
       </div>

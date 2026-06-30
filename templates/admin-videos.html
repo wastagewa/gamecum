@@ -32,17 +32,20 @@
     }
     .collection-btn:hover{background:var(--primary-color);color:#fff;}
 
-    .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;
+    /* Prefixed adm-modal-* to avoid colliding with the .modal/.modal-content classes
+       already defined (twice) in style.css, which default to opacity:0;pointer-events:none
+       and would make this modal invisible/unclickable even after display:flex applies. */
+    .adm-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;
       align-items:center;justify-content:center;}
-    .modal.open{display:flex;}
-    .modal-content{background:var(--surface-color);border-radius:1rem;padding:1.5rem;
+    .adm-modal.open{display:flex;}
+    .adm-modal-content{background:var(--surface-color);border-radius:1rem;padding:1.5rem;
       width:90%;max-width:420px;box-shadow:0 8px 30px var(--shadow-color);}
-    .modal-content h2{font-size:1.2rem;margin-bottom:1rem;}
-    .modal-content input{width:100%;padding:.6rem .8rem;border-radius:.6rem;
+    .adm-modal-content h2{font-size:1.2rem;margin-bottom:1rem;}
+    .adm-modal-content input{width:100%;padding:.6rem .8rem;border-radius:.6rem;
       border:1.5px solid rgba(164,6,110,.15);background:var(--bg-color);color:var(--text-color);
       font-size:.9rem;margin-bottom:.4rem;}
-    .modal-content small{color:var(--muted-text);display:block;margin-bottom:1rem;}
-    .modal-actions{display:flex;gap:.6rem;justify-content:flex-end;}
+    .adm-modal-content small{color:var(--muted-text);display:block;margin-bottom:1rem;}
+    .adm-modal-actions{display:flex;gap:.6rem;justify-content:flex-end;}
     .btn-primary{background:var(--primary-color);color:#fff;border:none;padding:.55rem 1.1rem;
       border-radius:.6rem;font-weight:700;cursor:pointer;}
     .btn-secondary{background:transparent;color:var(--muted-text);border:1.5px solid rgba(164,6,110,.15);
@@ -85,13 +88,13 @@
     </div>
   </div>
 
-  <div class="modal" id="createModal">
-    <div class="modal-content">
+  <div class="adm-modal" id="createModal">
+    <div class="adm-modal-content">
       <h2>Create New Collection</h2>
       <input type="text" id="newCollectionName" placeholder="Collection name" autocomplete="off">
       <small>Letters, numbers, hyphens, and underscores only</small>
       <div id="createMessage" class="message"></div>
-      <div class="modal-actions">
+      <div class="adm-modal-actions">
         <button class="btn-secondary" id="cancelCreate">Cancel</button>
         <button class="btn-primary" id="confirmCreate">Create</button>
       </div>
