@@ -52,55 +52,60 @@ ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'mov', 'webm', 'mkv'}
 
 socketio = SocketIO(app, async_mode='gevent' if ON_RENDER else 'threading')
 
-# ── Cloudflare R2 (S3-compatible) storage ───────────────────────────────────────
-# Public access on R2 is a bucket-level setting (custom domain or the r2.dev dev
-# subdomain), not a per-object ACL — set R2_PUBLIC_BASE_URL to whichever public
-# base URL the bucket shows in the Cloudflare dashboard once that's enabled.
+# ── Backblaze B2 (S3-compatible) storage ────────────────────────────────────────
+# The bucket is PRIVATE (no card required for B2 unless you want a public bucket),
+# so there is no permanent public URL — DB rows store the raw object key, and a
+# fresh presigned URL is generated via _b2_sign_url() every time one is needed.
 
-R2_ACCOUNT_ID = os.environ.get('R2_ACCOUNT_ID', '')
-R2_BUCKET = os.environ.get('R2_BUCKET', 'gamecum')
-R2_ENDPOINT = os.environ.get('R2_ENDPOINT_URL', f'https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com')
-R2_PUBLIC_BASE_URL = os.environ.get('R2_PUBLIC_BASE_URL', '').rstrip('/')
+B2_KEY_ID = os.environ.get('B2_KEY_ID', '')
+B2_APPLICATION_KEY = os.environ.get('B2_APPLICATION_KEY', '')
+B2_BUCKET = os.environ.get('B2_BUCKET', '')
+B2_ENDPOINT = os.environ.get('B2_ENDPOINT_URL', '')
+B2_URL_EXPIRY_SECONDS = int(os.environ.get('B2_URL_EXPIRY_SECONDS', 21600))  # 6 hours
 
 _s3 = boto3.client(
     's3',
-    endpoint_url=R2_ENDPOINT,
-    aws_access_key_id=os.environ.get('R2_ACCESS_KEY_ID'),
-    aws_secret_access_key=os.environ.get('R2_SECRET_ACCESS_KEY'),
-    region_name='auto',
+    endpoint_url=B2_ENDPOINT,
+    aws_access_key_id=B2_KEY_ID,
+    aws_secret_access_key=B2_APPLICATION_KEY,
 )
 
-def _r2_public_url(key: str):
-    return f"{R2_PUBLIC_BASE_URL}/{key}"
+def _b2_sign_url(key: str, expires_in: int = B2_URL_EXPIRY_SECONDS):
+    """Generate a time-limited URL for a private B2 object. Pass-through falsy keys unchanged."""
+    if not key:
+        return key
+    return _s3.generate_presigned_url(
+        'get_object', Params={'Bucket': B2_BUCKET, 'Key': key}, ExpiresIn=expires_in
+    )
 
-def _r2_upload_fileobj(fileobj, key: str, content_type: str = None):
-    """Upload a file-like object to the R2 bucket, return its public URL."""
+def _b2_upload_fileobj(fileobj, key: str, content_type: str = None):
+    """Upload a file-like object to the B2 bucket, return its storage key (not a URL)."""
     extra_args = {}
     if content_type:
         extra_args['ContentType'] = content_type
-    _s3.upload_fileobj(fileobj, R2_BUCKET, key, ExtraArgs=extra_args)
-    return _r2_public_url(key)
+    _s3.upload_fileobj(fileobj, B2_BUCKET, key, ExtraArgs=extra_args)
+    return key
 
-def _r2_delete_object(key: str):
-    _s3.delete_object(Bucket=R2_BUCKET, Key=key)
+def _b2_delete_object(key: str):
+    _s3.delete_object(Bucket=B2_BUCKET, Key=key)
 
-def _r2_delete_prefix(prefix: str):
+def _b2_delete_prefix(prefix: str):
     """Delete every object under a folder prefix (a whole collection's images and videos)."""
     paginator = _s3.get_paginator('list_objects_v2')
-    for page in paginator.paginate(Bucket=R2_BUCKET, Prefix=prefix):
+    for page in paginator.paginate(Bucket=B2_BUCKET, Prefix=prefix):
         objects = [{'Key': obj['Key']} for obj in page.get('Contents', [])]
         if objects:
-            _s3.delete_objects(Bucket=R2_BUCKET, Delete={'Objects': objects})
+            _s3.delete_objects(Bucket=B2_BUCKET, Delete={'Objects': objects})
 
-def _r2_move_object(old_key: str, new_key: str):
-    """Copy an object to a new key and delete the old one (used for collection rename); returns the new public URL."""
+def _b2_move_object(old_key: str, new_key: str):
+    """Copy an object to a new key and delete the old one (used for collection rename); returns the new key."""
     _s3.copy_object(
-        Bucket=R2_BUCKET,
-        CopySource={'Bucket': R2_BUCKET, 'Key': old_key},
+        Bucket=B2_BUCKET,
+        CopySource={'Bucket': B2_BUCKET, 'Key': old_key},
         Key=new_key,
     )
-    _s3.delete_object(Bucket=R2_BUCKET, Key=old_key)
-    return _r2_public_url(new_key)
+    _s3.delete_object(Bucket=B2_BUCKET, Key=old_key)
+    return new_key
 
 # ── Auth setup ────────────────────────────────────────────────────────────────
 
@@ -467,7 +472,7 @@ def _db_delete_video(video_id: int):
         _release_db(conn)
 
 def _load_collection_videos(collection: str):
-    """Return all video rows for a collection as a list of dicts."""
+    """Return all video rows for a collection as a list of dicts, with signed, directly-usable URLs."""
     conn = _get_db()
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -476,9 +481,13 @@ def _load_collection_videos(collection: str):
                    locked, uploaded_by, created_at
             FROM videos WHERE collection_name = %s ORDER BY created_at DESC
         """, (collection,))
-        return [dict(r) for r in cur.fetchall()]
+        rows = [dict(r) for r in cur.fetchall()]
     finally:
         _release_db(conn)
+    for row in rows:
+        row['url'] = _b2_sign_url(row['url'])
+        row['thumbnail_url'] = _b2_sign_url(row['thumbnail_url'])
+    return rows
 
 def _video_capable_collections():
     """Return {collection_name: video_count} for collections that contain at least one video."""
@@ -754,13 +763,13 @@ def allowed_video_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_VIDEO_EXTENSIONS
 
 def _get_collection_image_urls(collection: str):
-    """Return image URLs for a collection, read from the images table."""
+    """Return signed, directly-usable image URLs for a collection."""
     tags_data = _load_tags()
     prefix = f"{collection}/"
     urls = []
     for key, value in tags_data.items():
         if key.startswith(prefix) and isinstance(value, dict) and value.get('url'):
-            urls.append(value['url'])
+            urls.append(_b2_sign_url(value['url']))
     return urls
 
 @app.route('/')
@@ -805,7 +814,7 @@ def collection_view(collection_name):
     collection = _safe_collection_name(collection_name)
     tags_data = _load_tags()
     images = []      # list of filenames (used as keys for tags/delete operations)
-    image_urls = {}  # filename -> R2 URL
+    image_urls = {}  # filename -> signed B2 URL
     image_tags = {}
 
     prefix = f"{collection}/"
@@ -816,7 +825,7 @@ def collection_view(collection_name):
         if not isinstance(value, dict) or not value.get('url'):
             continue
         images.append(filename)
-        image_urls[filename] = value['url']
+        image_urls[filename] = _b2_sign_url(value['url'])
         raw_tags = value.get('tags', [])
         if isinstance(raw_tags, list):
             image_tags[filename] = [str(t) for t in raw_tags if isinstance(t, (str, int, float))]
@@ -845,18 +854,18 @@ def upload_file(collection=None):
         key = _get_image_key(collection, filename)
 
         try:
-            url = _r2_upload_fileobj(file.stream, key, file.mimetype)
+            _b2_upload_fileobj(file.stream, key, file.mimetype)
         except Exception as e:
             return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
         if collection:
             user_id = current_user.id if current_user.is_authenticated else None
-            _db_insert_image(collection, filename, url, user_id=user_id)
+            _db_insert_image(collection, filename, key, user_id=user_id)
 
         return jsonify({
             'success': True,
             'filename': filename,
-            'url': url,
+            'url': _b2_sign_url(key),
             'tags': []
         })
 
@@ -865,7 +874,7 @@ def upload_file(collection=None):
 @app.route('/upload-video/<collection>', methods=['POST'])
 @admin_required
 def upload_video(collection):
-    """Admin-only: upload a video into a collection's R2 folder. Hidden from
+    """Admin-only: upload a video into a collection's B2 folder. Hidden from
     all users by default — access must be granted separately via the video access APIs."""
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
@@ -886,19 +895,19 @@ def upload_video(collection):
     key = _get_image_key(safe_name, filename)
 
     try:
-        url = _r2_upload_fileobj(file.stream, key, file.mimetype)
+        _b2_upload_fileobj(file.stream, key, file.mimetype)
     except Exception as e:
         return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
-    # R2 has no Cloudinary-style auto thumbnail/duration probe (would need ffmpeg) —
+    # B2 has no Cloudinary-style auto thumbnail/duration probe (would need ffmpeg) —
     # videos uploaded from here on simply have no poster image / duration metadata.
-    _db_insert_video(safe_name, filename, url, thumbnail_url=None,
+    _db_insert_video(safe_name, filename, key, thumbnail_url=None,
                       duration=None, user_id=current_user.id)
 
     return jsonify({
         'success': True,
         'filename': filename,
-        'url': url,
+        'url': _b2_sign_url(key),
         'thumbnail_url': None,
     })
 
@@ -1231,7 +1240,7 @@ def get_high_scores(collection):
 @app.route('/delete-image/<filename>', methods=['DELETE'])
 def delete_image(filename):
     try:
-        _r2_delete_object(_get_image_key('', filename))
+        _b2_delete_object(_get_image_key('', filename))
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1241,7 +1250,7 @@ def delete_image(filename):
 def delete_image_in_collection(collection, filename):
     collection = _safe_collection_name(collection)
     try:
-        _r2_delete_object(_get_image_key(collection, filename))
+        _b2_delete_object(_get_image_key(collection, filename))
         _db_delete_image(collection, filename)
         return jsonify({'success': True})
     except Exception as e:
@@ -1371,7 +1380,7 @@ def api_images_all():
     """Return a JSON list of all image URLs."""
     tags_data = _load_tags()
     result = [
-        v['url'] for v in tags_data.values()
+        _b2_sign_url(v['url']) for v in tags_data.values()
         if isinstance(v, dict) and v.get('url')
     ]
     return jsonify({'images': result})
@@ -1394,7 +1403,7 @@ def manage_collections():
 @app.route('/api/collections/create', methods=['POST'])
 @admin_required
 def api_create_collection():
-    """Register a new collection (R2 folder is created on first upload)."""
+    """Register a new collection (B2 folder is created on first upload)."""
     data = request.get_json()
     name = data.get('name', '').strip()
 
@@ -1418,7 +1427,7 @@ def api_create_collection():
 @app.route('/api/collections/rename', methods=['POST'])
 @admin_required
 def api_rename_collection():
-    """Rename a collection: moves all R2 assets and updates the images/videos tables."""
+    """Rename a collection: moves all B2 assets and updates the images/videos tables."""
     data = request.get_json()
     old_name = data.get('old_name', '').strip()
     new_name = data.get('new_name', '').strip()
@@ -1442,7 +1451,7 @@ def api_rename_collection():
         # Create new collection record first
         _ensure_collection(safe_new)
 
-        # Move each R2 object to the new prefix and update its DB row
+        # Move each B2 object to the new prefix and update its DB row
         conn = _get_db()
         try:
             cur = conn.cursor()
@@ -1457,7 +1466,7 @@ def api_rename_collection():
         for filename, old_url in rows:
             new_url = old_url
             try:
-                new_url = _r2_move_object(
+                new_url = _b2_move_object(
                     _get_image_key(safe_old, filename),
                     _get_image_key(safe_new, filename)
                 )
@@ -1491,7 +1500,7 @@ def api_rename_collection():
         for filename, old_url in video_rows:
             new_url = old_url
             try:
-                new_url = _r2_move_object(
+                new_url = _b2_move_object(
                     _get_image_key(safe_old, filename),
                     _get_image_key(safe_new, filename)
                 )
@@ -1553,9 +1562,9 @@ def api_delete_collection():
         return jsonify({'success': False, 'error': 'Collection not found'}), 404
 
     try:
-        # Delete all R2 objects under this collection's folder (images and videos together)
+        # Delete all B2 objects under this collection's folder (images and videos together)
         try:
-            _r2_delete_prefix(f"{safe_name}/")
+            _b2_delete_prefix(f"{safe_name}/")
         except Exception:
             pass
 
@@ -1594,7 +1603,7 @@ def api_collection_images(collection_name):
         normalized = _normalize_tags_entry(value)
         images.append({
             'filename': filename,
-            'url': value['url'],
+            'url': _b2_sign_url(value['url']),
             'tags': normalized['tags'],
             'locked': normalized.get('locked', False)
         })
@@ -1693,7 +1702,7 @@ def api_collections():
         if '/' not in key or not isinstance(value, dict) or not value.get('url'):
             continue
         coll_name = key.split('/')[0]
-        result.setdefault(coll_name, []).append(value['url'])
+        result.setdefault(coll_name, []).append(_b2_sign_url(value['url']))
 
     # Include empty collections with no images yet
     for coll_name in _load_collections():
@@ -1706,7 +1715,13 @@ def api_collections():
 def api_all_tags():
     """Return all image tags."""
     tags_data = _load_tags()
-    return jsonify({'tags': tags_data})
+    # Sign URLs in a copy for the response — _load_tags()'s own return value must
+    # keep raw keys, since update_image_tags() round-trips it through _save_tags().
+    signed = {
+        k: {**v, 'url': _b2_sign_url(v['url'])} if isinstance(v, dict) and v.get('url') else v
+        for k, v in tags_data.items()
+    }
+    return jsonify({'tags': signed})
 
 
 @app.route('/api/tags/<collection>/<filename>')
@@ -1781,7 +1796,7 @@ def search_by_tag():
         image_tags = [t.lower() for t in tag_info.get('tags', [])]
         if search_tag in image_tags and tag_info.get('url'):
             matching_images.append({
-                'url': tag_info['url'],
+                'url': _b2_sign_url(tag_info['url']),
                 'tags': tag_info.get('tags', []),
                 'key': image_key
             })
@@ -1877,7 +1892,7 @@ def api_images_by_tags():
                 matching_images.append({
                     'filename': filename,
                     'collection': collection,
-                    'url': tags_info['url'],
+                    'url': _b2_sign_url(tags_info['url']),
                     'tags': tags
                 })
         else:
@@ -1885,7 +1900,7 @@ def api_images_by_tags():
                 matching_images.append({
                     'filename': filename,
                     'collection': collection,
-                    'url': tags_info['url'],
+                    'url': _b2_sign_url(tags_info['url']),
                     'tags': tags
                 })
     
@@ -2686,6 +2701,8 @@ def admin_user_detail(user_id):
         cur.execute("""SELECT collection_name, filename, url, created_at
                        FROM images WHERE uploaded_by=%s ORDER BY created_at DESC LIMIT 50""", (user_id,))
         uploads = [dict(r) for r in cur.fetchall()]
+        for upload in uploads:
+            upload['url'] = _b2_sign_url(upload['url'])
         cur.execute("""SELECT collection_name, game_type, data, created_at
                        FROM scores WHERE user_id=%s ORDER BY created_at DESC LIMIT 50""", (user_id,))
         scores = [dict(r) for r in cur.fetchall()]
@@ -2802,7 +2819,7 @@ def api_delete_video(collection_name):
 
     filename = row[0]
     try:
-        _r2_delete_object(_get_image_key(safe_name, filename))
+        _b2_delete_object(_get_image_key(safe_name, filename))
     except Exception:
         pass
 
@@ -2887,7 +2904,7 @@ def _vz_collection_images(collection):
     images = []
     for key, value in tags_data.items():
         if key.startswith(prefix) and isinstance(value, dict) and value.get('url'):
-            images.append({'filename': key[len(prefix):], 'url': value['url']})
+            images.append({'filename': key[len(prefix):], 'url': _b2_sign_url(value['url'])})
     return images
 
 
@@ -3378,7 +3395,7 @@ def _cc_collection_images(collection, keyword_map):
         tags = [str(t) for t in raw_tags if isinstance(t, (str, int, float))]
         options = _cc_categorize_tags(tags, keyword_map)
         if len(options) >= 2:
-            eligible.append({'filename': key[len(prefix):], 'url': value['url'], 'options': options})
+            eligible.append({'filename': key[len(prefix):], 'url': _b2_sign_url(value['url']), 'options': options})
     return eligible
 
 

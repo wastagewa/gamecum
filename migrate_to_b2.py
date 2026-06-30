@@ -1,20 +1,22 @@
 """
-One-off script: copy every existing image/video into the Cloudflare R2 bucket
-and repoint the DB rows at their new R2 public URLs.
+One-off script: copy every existing image/video into the Backblaze B2 bucket
+and repoint the DB rows at their new storage key.
 
 Run this once, manually, after the app itself has already been switched over
-to R2 (app.py no longer talks to Cloudinary or Wasabi at all). Existing rows
-still have whatever URL they last pointed at (Cloudinary, or Wasabi if that
-migration ran first) until this script updates them, so re-running it is
-safe/idempotent — it just re-fetches from whatever URL is currently stored
-and re-uploads it, harmlessly overwriting the same R2 object on a second run.
+to B2 (app.py no longer talks to Cloudinary, Wasabi, or R2). Existing rows
+still have whatever URL they last pointed at (Cloudinary, Wasabi, or R2,
+depending how far a prior migration got) until this script updates them, so
+re-running it is safe/idempotent — it just re-fetches from whatever URL is
+currently stored and re-uploads it. Note: B2's bucket is PRIVATE, so unlike
+the R2/Wasabi scripts this one stores a raw object key in the DB, not a URL —
+the app generates a fresh presigned URL at render time via _b2_sign_url().
 
 Required env vars (same names the app itself uses):
     DATABASE_URL (or INTERNAL_POSTGRES_DATABASE_URL)
-    R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_BASE_URL
+    B2_KEY_ID, B2_APPLICATION_KEY, B2_BUCKET, B2_ENDPOINT_URL
 
 Usage:
-    python migrate_to_r2.py
+    python migrate_to_b2.py
 """
 import os
 import sys
@@ -31,27 +33,22 @@ except ImportError:
     pass
 
 DB_URL = os.environ.get('INTERNAL_POSTGRES_DATABASE_URL') or os.environ.get('DATABASE_URL', '')
-R2_ACCOUNT_ID = os.environ.get('R2_ACCOUNT_ID', '')
-R2_BUCKET = os.environ.get('R2_BUCKET', 'gamecum')
-R2_ENDPOINT = os.environ.get('R2_ENDPOINT_URL', f'https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com')
-R2_PUBLIC_BASE_URL = os.environ.get('R2_PUBLIC_BASE_URL', '').rstrip('/')
+B2_KEY_ID = os.environ.get('B2_KEY_ID', '')
+B2_APPLICATION_KEY = os.environ.get('B2_APPLICATION_KEY', '')
+B2_BUCKET = os.environ.get('B2_BUCKET', '')
+B2_ENDPOINT = os.environ.get('B2_ENDPOINT_URL', '')
 
 if not DB_URL:
     sys.exit("DATABASE_URL (or INTERNAL_POSTGRES_DATABASE_URL) is not set.")
-if not R2_PUBLIC_BASE_URL:
-    sys.exit("R2_PUBLIC_BASE_URL is not set (the bucket's public custom-domain or r2.dev URL).")
+if not (B2_KEY_ID and B2_APPLICATION_KEY and B2_BUCKET and B2_ENDPOINT):
+    sys.exit("B2_KEY_ID, B2_APPLICATION_KEY, B2_BUCKET, and B2_ENDPOINT_URL must all be set.")
 
 s3 = boto3.client(
     's3',
-    endpoint_url=R2_ENDPOINT,
-    aws_access_key_id=os.environ.get('R2_ACCESS_KEY_ID'),
-    aws_secret_access_key=os.environ.get('R2_SECRET_ACCESS_KEY'),
-    region_name='auto',
+    endpoint_url=B2_ENDPOINT,
+    aws_access_key_id=B2_KEY_ID,
+    aws_secret_access_key=B2_APPLICATION_KEY,
 )
-
-
-def r2_public_url(key):
-    return f"{R2_PUBLIC_BASE_URL}/{key}"
 
 
 def storage_key(collection, filename):
@@ -72,21 +69,20 @@ def migrate_table(conn, table):
             resp = requests.get(row['url'], timeout=120, stream=True)
             resp.raise_for_status()
             s3.upload_fileobj(
-                resp.raw, R2_BUCKET, key,
+                resp.raw, B2_BUCKET, key,
                 ExtraArgs={'ContentType': resp.headers.get('Content-Type', 'application/octet-stream')}
             )
-            new_url = r2_public_url(key)
 
             update_cur = conn.cursor()
             if table == 'videos':
                 update_cur.execute(
                     "UPDATE videos SET url = %s, thumbnail_url = NULL WHERE id = %s",
-                    (new_url, row['id'])
+                    (key, row['id'])
                 )
             else:
                 update_cur.execute(
                     "UPDATE images SET url = %s WHERE id = %s",
-                    (new_url, row['id'])
+                    (key, row['id'])
                 )
             conn.commit()
             update_cur.close()
@@ -109,8 +105,8 @@ def main():
 
     print(f"\nImages: {img_ok} migrated, {img_fail} failed")
     print(f"Videos: {vid_ok} migrated, {vid_fail} failed")
-    print("\nOld Cloudinary/Wasabi assets were not deleted — verify everything renders "
-          "correctly from R2 before purging them from those dashboards.")
+    print("\nOld Cloudinary/Wasabi/R2 assets were not deleted — verify everything renders "
+          "correctly from B2 before purging them from those dashboards.")
 
 
 if __name__ == '__main__':
