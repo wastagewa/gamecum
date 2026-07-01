@@ -1070,6 +1070,7 @@ body {
     font-weight: 600;
     transition: all 0.2s ease;
     position: relative;
+    white-space: nowrap;
 }
 
 .navbar-link:hover {
