@@ -81,7 +81,7 @@ class TestConstants(unittest.TestCase):
             self.assertEqual(part, part.lower(), f'{part!r} is not lowercase')
 
     def test_valid_ratings_set(self):
-        self.assertEqual(_app.VALID_RATINGS, {'c', 'sn', 'n', 'x'})
+        self.assertEqual(_app.VALID_RATINGS, {'h', 'c', 'sn', 'n', 'x'})
 
     def test_cc_keyword_map_default_keys_are_body_parts_or_subset(self):
         """All CC keyword-map categories should be known body parts."""
@@ -239,7 +239,7 @@ class TestBodyPartsValidation(unittest.TestCase):
         self.assertEqual(self._clean(raw), raw)
 
     def test_all_valid_ratings_accepted(self):
-        for rating in _app.VALID_RATINGS:
+        for rating in _app.VALID_RATINGS:  # h, c, sn, n, x
             self.assertEqual(self._clean({'boobs': rating}), {'boobs': rating})
 
     def test_empty_rating_string_rejected(self):

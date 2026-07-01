@@ -51,7 +51,7 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'mov', 'webm', 'mkv'}
 
 BODY_PARTS = ['boobs', 'pussy', 'butt', 'face', 'legs', 'belly', 'abs', 'chest', 'penis', 'feet']
-VALID_RATINGS = {'c', 'sn', 'n', 'x'}
+VALID_RATINGS = {'h', 'c', 'sn', 'n', 'x'}
 
 socketio = SocketIO(app, async_mode='gevent' if ON_RENDER else 'threading')
 

@@ -376,7 +376,8 @@
           <span class="part-label">{{ part|title }}</span>
           <div class="rating-btns">
             <button class="rating-btn" data-rating="" title="Not tagged">—</button>
-            <button class="rating-btn" data-rating="c" title="Covered">Cvrd</button>
+            <button class="rating-btn" data-rating="h" title="Hidden">H</button>
+            <button class="rating-btn" data-rating="c" title="Covered">C</button>
             <button class="rating-btn" data-rating="sn" title="Semi-nude">SN</button>
             <button class="rating-btn" data-rating="n" title="Nude">N</button>
             <button class="rating-btn" data-rating="x" title="Not applicable">N/A</button>
@@ -401,7 +402,7 @@
   <script>
     const COLLECTION = {{ collection|tojson }};
     const BODY_PARTS = {{ body_parts|tojson }};
-    const RATING_COLORS = { c: '#3b82f6', sn: '#f59e0b', n: '#f97316', x: '#8b5cf6' };
+    const RATING_COLORS = { h: '#6b7280', c: '#3b82f6', sn: '#f59e0b', n: '#f97316', x: '#8b5cf6' };
     const RATING_LABELS = { c: 'C', sn: 'SN', n: 'N', x: 'X' };
 
     let images = {{ images|tojson }};
