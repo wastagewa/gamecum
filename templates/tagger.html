@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Tagger — {{ collection }}</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script>
+    (function(){var t=null;try{t=localStorage.getItem('imgur.theme');}catch(e){}
+    if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}})();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Top bar ── */
+    .tgr-top {
+      flex-shrink: 0;
+      height: 50px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 14px;
+      background: var(--surface-color);
+      border-bottom: 1px solid rgba(164,6,110,.15);
+      z-index: 10;
+    }
+    .tgr-back {
+      display: inline-flex;
+      align-items: center;
+      gap: .35rem;
+      color: var(--muted-text);
+      text-decoration: none;
+      font-size: .82rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .tgr-back:hover { color: var(--primary-color); }
+    .tgr-title {
+      font-size: .95rem;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tgr-title i { color: var(--primary-color); margin-right: .3rem; }
+    .tgr-progress-wrap {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .tgr-progress-bar {
+      flex: 1;
+      height: 5px;
+      background: rgba(164,6,110,.15);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .tgr-progress-fill {
+      height: 100%;
+      background: var(--primary-color);
+      border-radius: 3px;
+      transition: width .3s;
+      width: 0%;
+    }
+    .tgr-progress-text {
+      font-size: .76rem;
+      color: var(--muted-text);
+      white-space: nowrap;
+    }
+
+    /* ── Three-column body ── */
+    .tgr-body {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    /* Left: thumbnails */
+    .tgr-thumbs {
+      width: 112px;
+      flex-shrink: 0;
+      overflow-y: auto;
+      border-right: 1px solid rgba(164,6,110,.12);
+      background: var(--surface-color);
+    }
+    .tgr-thumbs::-webkit-scrollbar { width: 4px; }
+    .tgr-thumbs::-webkit-scrollbar-thumb { background: rgba(164,6,110,.25); border-radius: 2px; }
+    .thumb-item {
+      position: relative;
+      cursor: pointer;
+      padding: 4px;
+      border-bottom: 1px solid rgba(164,6,110,.07);
+      transition: background .1s;
+    }
+    .thumb-item:hover { background: rgba(164,6,110,.07); }
+    .thumb-item.active { background: rgba(164,6,110,.15); }
+    .thumb-item img {
+      width: 100%;
+      aspect-ratio: 4/3;
+      object-fit: cover;
+      display: block;
+      border-radius: 3px;
+      background: var(--bg-color);
+    }
+    .thumb-dot {
+      position: absolute;
+      top: 7px;
+      right: 7px;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      border: 1.5px solid var(--surface-color);
+    }
+    .dot-green  { background: #22c55e; }
+    .dot-yellow { background: #f59e0b; }
+    .dot-none   { background: rgba(150,150,150,.35); }
+
+    /* Center: main image */
+    .tgr-center {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 16px 8px;
+      min-width: 0;
+      gap: 10px;
+    }
+    .tgr-main-img {
+      max-width: 100%;
+      max-height: calc(100vh - 50px - 120px);
+      object-fit: contain;
+      border-radius: .5rem;
+      background: var(--surface-color);
+      display: block;
+    }
+    .tgr-nav {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .tgr-nav-btn {
+      padding: .3rem .75rem;
+      border: 1.5px solid rgba(164,6,110,.2);
+      border-radius: .45rem;
+      background: transparent;
+      color: var(--text-color);
+      font-size: .8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .tgr-nav-btn:hover:not(:disabled) {
+      background: var(--primary-color);
+      color: #fff;
+      border-color: var(--primary-color);
+    }
+    .tgr-nav-btn:disabled { opacity: .3; cursor: not-allowed; }
+    .tgr-counter {
+      font-size: .82rem;
+      color: var(--muted-text);
+      min-width: 60px;
+      text-align: center;
+    }
+    .tgr-filename {
+      font-size: .72rem;
+      color: var(--muted-text);
+      text-align: center;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    .tgr-copy-btn {
+      padding: .28rem .65rem;
+      border: 1.5px solid rgba(164,6,110,.18);
+      border-radius: .4rem;
+      background: transparent;
+      color: var(--muted-text);
+      font-size: .75rem;
+      cursor: pointer;
+      transition: all .15s;
+      display: inline-flex;
+      align-items: center;
+      gap: .3rem;
+    }
+    .tgr-copy-btn:hover:not(:disabled) { color: var(--primary-color); border-color: var(--primary-color); }
+    .tgr-copy-btn:disabled { opacity: .3; cursor: not-allowed; }
+
+    /* Right: controls */
+    .tgr-right {
+      width: 268px;
+      flex-shrink: 0;
+      border-left: 1px solid rgba(164,6,110,.12);
+      overflow-y: auto;
+      padding: 10px 11px 16px;
+      background: var(--surface-color);
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .tgr-right::-webkit-scrollbar { width: 4px; }
+    .tgr-right::-webkit-scrollbar-thumb { background: rgba(164,6,110,.25); border-radius: 2px; }
+
+    .sect-label {
+      font-size: .67rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: var(--muted-text);
+      margin: 10px 0 7px;
+    }
+    .sect-label:first-child { margin-top: 2px; }
+
+    /* Body part rows */
+    .part-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      margin-bottom: 4px;
+    }
+    .part-label {
+      flex-shrink: 0;
+      width: 44px;
+      font-size: .76rem;
+      font-weight: 700;
+      color: var(--text-color);
+      transition: color .12s;
+    }
+    .rating-btns {
+      display: flex;
+      gap: 2px;
+      flex: 1;
+    }
+    .rating-btn {
+      flex: 1;
+      padding: 3px 0;
+      border: 1.5px solid rgba(120,120,120,.25);
+      border-radius: 3px;
+      font-size: .65rem;
+      font-weight: 800;
+      cursor: pointer;
+      background: transparent;
+      color: var(--muted-text);
+      transition: all .1s;
+      line-height: 1.1;
+      text-align: center;
+    }
+    .rating-btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
+    .rating-btn.sel {
+      color: #fff !important;
+    }
+    /* Colors applied inline via JS for .sel state */
+
+    .tgr-divider {
+      border: none;
+      border-top: 1px solid rgba(164,6,110,.1);
+      margin: 10px 0 2px;
+    }
+
+    /* Tag chip input */
+    .tag-input-wrap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 5px 6px;
+      border: 1.5px solid rgba(164,6,110,.18);
+      border-radius: .5rem;
+      background: var(--bg-color);
+      cursor: text;
+      min-height: 34px;
+    }
+    .tag-input-wrap:focus-within {
+      border-color: var(--primary-color);
+    }
+    .tag-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: var(--primary-color);
+      color: #fff;
+      border-radius: 3px;
+      padding: 2px 5px;
+      font-size: .7rem;
+      font-weight: 600;
+    }
+    .tag-chip button {
+      background: none;
+      border: none;
+      color: rgba(255,255,255,.75);
+      cursor: pointer;
+      padding: 0 0 0 1px;
+      font-size: .78rem;
+      line-height: 1;
+    }
+    .tag-chip button:hover { color: #fff; }
+    #tagInput {
+      border: none;
+      background: transparent;
+      color: var(--text-color);
+      font-size: .78rem;
+      outline: none;
+      min-width: 55px;
+      flex: 1;
+    }
+    .tgr-tags-hint {
+      font-size: .67rem;
+      color: var(--muted-text);
+      margin-top: 4px;
+    }
+
+    /* Save status */
+    .save-status {
+      font-size: .72rem;
+      color: var(--muted-text);
+      margin-top: 10px;
+      text-align: right;
+      min-height: 1rem;
+      transition: color .2s;
+    }
+    .save-status.saving { color: #f59e0b; }
+    .save-status.saved  { color: #22c55e; }
+    .save-status.error  { color: #ef4444; }
+  </style>
+</head>
+<body>
+
+  <!-- Top bar -->
+  <div class="tgr-top">
+    <a href="/manage-collections" class="tgr-back"><i class="fas fa-arrow-left"></i> Back</a>
+    <span class="tgr-title"><i class="fas fa-folder"></i>{{ collection }}</span>
+    <div class="tgr-progress-wrap">
+      <div class="tgr-progress-bar"><div class="tgr-progress-fill" id="progressFill"></div></div>
+      <span class="tgr-progress-text" id="progressText"></span>
+    </div>
+  </div>
+
+  <!-- Three columns -->
+  <div class="tgr-body">
+
+    <!-- Thumbnail strip -->
+    <div class="tgr-thumbs" id="thumbStrip"></div>
+
+    <!-- Main image + nav -->
+    <div class="tgr-center">
+      <img id="mainImg" src="" alt="" class="tgr-main-img">
+      <div class="tgr-nav">
+        <button class="tgr-nav-btn" id="prevBtn"><i class="fas fa-chevron-left"></i> Prev</button>
+        <span class="tgr-counter" id="counter"></span>
+        <button class="tgr-nav-btn" id="nextBtn">Next <i class="fas fa-chevron-right"></i></button>
+      </div>
+      <div class="tgr-filename" id="filename"></div>
+      <button class="tgr-copy-btn" id="copyBtn" disabled>
+        <i class="fas fa-clone"></i> Copy from previous
+      </button>
+    </div>
+
+    <!-- Controls: body parts + tags -->
+    <div class="tgr-right">
+      <div class="sect-label">Body Parts</div>
+      <div id="partsGrid">
+        {% for part in body_parts %}
+        <div class="part-row" data-part="{{ part }}">
+          <span class="part-label">{{ part|title }}</span>
+          <div class="rating-btns">
+            <button class="rating-btn" data-rating="">—</button>
+            <button class="rating-btn" data-rating="c">C</button>
+            <button class="rating-btn" data-rating="sn">SN</button>
+            <button class="rating-btn" data-rating="n">N</button>
+            <button class="rating-btn" data-rating="x">X</button>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <hr class="tgr-divider">
+      <div class="sect-label">Tags</div>
+      <div class="tag-input-wrap" id="tagWrap" onclick="document.getElementById('tagInput').focus()">
+        <div id="tagChips" style="display:contents;"></div>
+        <input type="text" id="tagInput" placeholder="Add tag…" autocomplete="off" autocapitalize="off">
+      </div>
+      <div class="tgr-tags-hint">Enter or , to add &nbsp;·&nbsp; Backspace to remove last</div>
+
+      <div class="save-status" id="saveStatus">Ready</div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script>
+    const COLLECTION = {{ collection|tojson }};
+    const BODY_PARTS = {{ body_parts|tojson }};
+    const RATING_COLORS = { c: '#3b82f6', sn: '#f59e0b', n: '#f97316', x: '#ef4444' };
+    const RATING_LABELS = { c: 'C', sn: 'SN', n: 'N', x: 'X' };
+
+    let images = {{ images|tojson }};
+    let idx = 0;
+    let saveTimer = null;
+
+    // ── Thumbnails ──────────────────────────────────────────────────────────────
+
+    function buildThumbs() {
+      const strip = document.getElementById('thumbStrip');
+      strip.innerHTML = '';
+      images.forEach((img, i) => {
+        const el = document.createElement('div');
+        el.className = 'thumb-item' + (i === idx ? ' active' : '');
+        el.dataset.i = i;
+        const dotCls = thumbDotClass(img);
+        el.innerHTML = `<img src="${img.url}" alt="" loading="lazy"><span class="thumb-dot ${dotCls}"></span>`;
+        el.addEventListener('click', () => goTo(i));
+        strip.appendChild(el);
+      });
+    }
+
+    function thumbDotClass(img) {
+      const hasParts = Object.keys(img.body_parts || {}).length > 0;
+      const hasTags  = (img.tags || []).length > 0;
+      return hasParts ? 'dot-green' : (hasTags ? 'dot-yellow' : 'dot-none');
+    }
+
+    function updateThumbDot(i) {
+      const el = document.querySelector(`.thumb-item[data-i="${i}"] .thumb-dot`);
+      if (el) el.className = 'thumb-dot ' + thumbDotClass(images[i]);
+    }
+
+    function scrollThumbIntoView() {
+      const el = document.querySelector('.thumb-item.active');
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // ── Navigation ──────────────────────────────────────────────────────────────
+
+    function goTo(i) {
+      document.querySelector(`.thumb-item[data-i="${idx}"]`)?.classList.remove('active');
+      idx = Math.max(0, Math.min(i, images.length - 1));
+      document.querySelector(`.thumb-item[data-i="${idx}"]`)?.classList.add('active');
+      scrollThumbIntoView();
+      renderCenter();
+      renderControls();
+    }
+
+    document.getElementById('prevBtn').addEventListener('click', () => goTo(idx - 1));
+    document.getElementById('nextBtn').addEventListener('click', () => goTo(idx + 1));
+
+    document.addEventListener('keydown', e => {
+      if (document.activeElement === document.getElementById('tagInput')) return;
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); goTo(idx - 1); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); goTo(idx + 1); }
+    });
+
+    // ── Center panel ───────────────────────────────────────────────────────────
+
+    function renderCenter() {
+      const img = images[idx];
+      document.getElementById('mainImg').src     = img.url;
+      document.getElementById('filename').textContent = img.filename;
+      document.getElementById('counter').textContent  = `${idx + 1} / ${images.length}`;
+      document.getElementById('prevBtn').disabled = idx === 0;
+      document.getElementById('nextBtn').disabled = idx === images.length - 1;
+      document.getElementById('copyBtn').disabled = idx === 0;
+    }
+
+    document.getElementById('copyBtn').addEventListener('click', () => {
+      if (idx === 0) return;
+      const prev = images[idx - 1];
+      const curr = images[idx];
+      curr.body_parts = { ...(prev.body_parts || {}) };
+      curr.tags = [...(prev.tags || [])];
+      renderControls();
+      scheduleSave();
+    });
+
+    // ── Right panel: body parts ─────────────────────────────────────────────────
+
+    // Wire up click handlers once — they read from images[idx] dynamically
+    document.querySelectorAll('.part-row').forEach(row => {
+      const part = row.dataset.part;
+      row.querySelectorAll('.rating-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const rating = btn.dataset.rating || null;
+          const img = images[idx];
+          if (!img.body_parts) img.body_parts = {};
+          if (rating) {
+            img.body_parts[part] = rating;
+          } else {
+            delete img.body_parts[part];
+          }
+          updatePartRow(row, part, rating);
+          updateProgress();
+          updateThumbDot(idx);
+          scheduleSave();
+        });
+      });
+    });
+
+    function renderControls() {
+      const img = images[idx];
+      const bp = img.body_parts || {};
+      document.querySelectorAll('.part-row').forEach(row => {
+        const part = row.dataset.part;
+        updatePartRow(row, part, bp[part] || null);
+      });
+      renderTagChips(img.tags || []);
+    }
+
+    function updatePartRow(row, part, rating) {
+      const color = rating ? RATING_COLORS[rating] : null;
+      const label = row.querySelector('.part-label');
+      label.style.color = color || '';
+      row.querySelectorAll('.rating-btn').forEach(btn => {
+        const btnRating = btn.dataset.rating || null;
+        const active = btnRating === rating;
+        btn.classList.toggle('sel', active);
+        if (active && color) {
+          btn.style.background   = color;
+          btn.style.borderColor  = color;
+          btn.style.color        = '#fff';
+        } else {
+          btn.style.background   = '';
+          btn.style.borderColor  = '';
+          btn.style.color        = '';
+        }
+      });
+    }
+
+    // ── Tags ───────────────────────────────────────────────────────────────────
+
+    function renderTagChips(tags) {
+      const container = document.getElementById('tagChips');
+      container.innerHTML = '';
+      (tags || []).forEach(tag => {
+        const chip = document.createElement('span');
+        chip.className = 'tag-chip';
+        const label = document.createTextNode(tag + ' ');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = '×';
+        btn.addEventListener('click', e => { e.stopPropagation(); removeTag(tag); });
+        chip.appendChild(label);
+        chip.appendChild(btn);
+        container.appendChild(chip);
+      });
+    }
+
+    function addTag(raw) {
+      const tag = raw.trim().toLowerCase().replace(/,/g, '');
+      if (!tag) return;
+      const img = images[idx];
+      if (!img.tags) img.tags = [];
+      if (!img.tags.includes(tag)) {
+        img.tags.push(tag);
+        renderTagChips(img.tags);
+        updateThumbDot(idx);
+        scheduleSave();
+      }
+    }
+
+    function removeTag(tag) {
+      const img = images[idx];
+      img.tags = (img.tags || []).filter(t => t !== tag);
+      renderTagChips(img.tags);
+      updateThumbDot(idx);
+      scheduleSave();
+    }
+
+    const tagInput = document.getElementById('tagInput');
+    tagInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ',') {
+        e.preventDefault();
+        addTag(tagInput.value);
+        tagInput.value = '';
+      } else if (e.key === 'Backspace' && !tagInput.value) {
+        const img = images[idx];
+        if (img.tags && img.tags.length) {
+          img.tags.pop();
+          renderTagChips(img.tags);
+          updateThumbDot(idx);
+          scheduleSave();
+        }
+      }
+    });
+    tagInput.addEventListener('blur', () => {
+      if (tagInput.value.trim()) {
+        addTag(tagInput.value);
+        tagInput.value = '';
+      }
+    });
+
+    // ── Save ────────────────────────────────────────────────────────────────────
+
+    const statusEl = document.getElementById('saveStatus');
+
+    function scheduleSave() {
+      clearTimeout(saveTimer);
+      statusEl.textContent = 'Saving…';
+      statusEl.className   = 'save-status saving';
+      saveTimer = setTimeout(() => saveImage(idx), 400);
+    }
+
+    async function saveImage(i) {
+      const img = images[i];
+      try {
+        const r = await fetch(
+          `/api/images/${encodeURIComponent(COLLECTION)}/${encodeURIComponent(img.filename)}/body-parts`,
+          {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ body_parts: img.body_parts || {}, tags: img.tags || [] })
+          }
+        );
+        const d = await r.json();
+        if (d.success) {
+          statusEl.textContent = '✓ Saved';
+          statusEl.className   = 'save-status saved';
+        } else {
+          statusEl.textContent = '✗ ' + (d.error || 'Error');
+          statusEl.className   = 'save-status error';
+        }
+      } catch {
+        statusEl.textContent = '✗ Network error';
+        statusEl.className   = 'save-status error';
+      }
+    }
+
+    // ── Progress ────────────────────────────────────────────────────────────────
+
+    function updateProgress() {
+      const tagged = images.filter(img => Object.keys(img.body_parts || {}).length > 0).length;
+      const total  = images.length;
+      document.getElementById('progressText').textContent = `${tagged} / ${total} tagged`;
+      document.getElementById('progressFill').style.width = total ? `${tagged / total * 100}%` : '0%';
+    }
+
+    // ── Init ────────────────────────────────────────────────────────────────────
+
+    if (images.length === 0) {
+      document.getElementById('thumbStrip').innerHTML =
+        '<p style="padding:12px;font-size:.8rem;color:var(--muted-text);">No images in this collection.</p>';
+      document.querySelector('.tgr-center').innerHTML =
+        '<p style="color:var(--muted-text);">Upload images first.</p>';
+    } else {
+      buildThumbs();
+      renderCenter();
+      renderControls();
+      updateProgress();
+    }
+  </script>
+</body>
+</html>

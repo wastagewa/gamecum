@@ -50,6 +50,9 @@ app.config['MAX_CONTENT_LENGTH'] = 300 * 1024 * 1024  # 300MB max file size (rai
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'mov', 'webm', 'mkv'}
 
+BODY_PARTS = ['boobs', 'pussy', 'butt', 'face', 'legs', 'belly', 'abs', 'chest', 'penis', 'feet']
+VALID_RATINGS = {'c', 'sn', 'n', 'x'}
+
 socketio = SocketIO(app, async_mode='gevent' if ON_RENDER else 'threading')
 
 # ── Backblaze B2 (S3-compatible) storage ────────────────────────────────────────
@@ -225,6 +228,11 @@ def init_db():
             ALTER TABLE images
             ADD COLUMN IF NOT EXISTS uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL
         """)
+        # Add body_parts JSONB column for structured body-part tagging
+        cur.execute("""
+            ALTER TABLE images
+            ADD COLUMN IF NOT EXISTS body_parts JSONB DEFAULT '{}'::jsonb
+        """)
         # Add user_id FK to scores if not present
         cur.execute("""
             ALTER TABLE scores
@@ -320,14 +328,15 @@ def _load_tags():
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT collection_name, filename, url, tags, locked FROM images"
+            "SELECT collection_name, filename, url, tags, locked, body_parts FROM images"
         )
         result = {}
-        for coll, fname, url, tags, locked in cur.fetchall():
+        for coll, fname, url, tags, locked, body_parts in cur.fetchall():
             result[f"{coll}/{fname}"] = {
-                'tags':   list(tags) if tags else [],
-                'locked': bool(locked),
-                'url':    url,
+                'tags':       list(tags) if tags else [],
+                'locked':     bool(locked),
+                'url':        url,
+                'body_parts': dict(body_parts) if body_parts else {},
             }
         return result
     finally:
@@ -345,14 +354,17 @@ def _save_tags(tags: dict):
                 continue
             coll, fname = key.split('/', 1)
             cur.execute("""
-                INSERT INTO images (collection_name, filename, url, tags, locked)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO images (collection_name, filename, url, tags, locked, body_parts)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb)
                 ON CONFLICT (collection_name, filename) DO UPDATE
-                  SET url    = EXCLUDED.url,
-                      tags   = EXCLUDED.tags,
-                      locked = EXCLUDED.locked
+                  SET url        = EXCLUDED.url,
+                      tags       = EXCLUDED.tags,
+                      locked     = EXCLUDED.locked,
+                      body_parts = EXCLUDED.body_parts
             """, (coll, fname, value['url'],
-                  value.get('tags', []), value.get('locked', False)))
+                  value.get('tags', []),
+                  value.get('locked', False),
+                  json.dumps(value.get('body_parts', {}))))
         conn.commit()
     finally:
         _release_db(conn)
@@ -438,6 +450,19 @@ def _set_image_tags(collection: str, filename: str, tags: list, locked: bool = N
                 UPDATE images SET tags = %s
                 WHERE collection_name = %s AND filename = %s
             """, (cleaned, collection, filename))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _set_image_body_parts_and_tags(collection: str, filename: str, body_parts: dict, tags: list):
+    """Update body_parts and tags for an image in a single round-trip."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE images SET body_parts = %s::jsonb, tags = %s WHERE collection_name = %s AND filename = %s",
+            (json.dumps(body_parts), tags, collection, filename)
+        )
         conn.commit()
     finally:
         _release_db(conn)
@@ -614,18 +639,19 @@ def _revoke_video_item_access(video_id: int, user_id: int):
 def _normalize_tags_entry(entry):
     """Normalize a tags entry dict — kept for callers that use _load_tags() output."""
     if isinstance(entry, list):
-        return {'tags': entry, 'locked': False}
+        return {'tags': entry, 'locked': False, 'body_parts': {}}
     elif isinstance(entry, dict):
         if 'tags' in entry:
             return {
-                'tags':   entry['tags'] if isinstance(entry['tags'], list) else [],
-                'locked': entry.get('locked', False),
+                'tags':       entry['tags'] if isinstance(entry['tags'], list) else [],
+                'locked':     entry.get('locked', False),
+                'body_parts': entry.get('body_parts', {}),
             }
         elif 'tag' in entry:
-            return {'tags': [entry['tag']], 'locked': False}
+            return {'tags': [entry['tag']], 'locked': False, 'body_parts': {}}
         else:
-            return {'tags': [str(v) for v in entry.values() if isinstance(v, str)], 'locked': False}
-    return {'tags': [], 'locked': False}
+            return {'tags': [str(v) for v in entry.values() if isinstance(v, str)], 'locked': False, 'body_parts': {}}
+    return {'tags': [], 'locked': False, 'body_parts': {}}
 
 # ── Scores ────────────────────────────────────────────────────────────────────
 
@@ -1615,10 +1641,11 @@ def api_collection_images(collection_name):
             continue
         normalized = _normalize_tags_entry(value)
         images.append({
-            'filename': filename,
-            'url': _b2_sign_url(value['url']),
-            'tags': normalized['tags'],
-            'locked': normalized.get('locked', False)
+            'filename':   filename,
+            'url':        _b2_sign_url(value['url']),
+            'tags':       normalized['tags'],
+            'body_parts': normalized.get('body_parts', {}),
+            'locked':     normalized.get('locked', False)
         })
 
     return jsonify({'success': True, 'images': images})
@@ -1704,6 +1731,63 @@ def api_copy_image_tags(collection_name, source_filename, target_filename):
     _set_image_tags(safe_name, target_filename, source_tags)
 
     return jsonify({'success': True, 'tags': source_tags, 'message': f'Copied {len(source_tags)} tags to target image'})
+
+
+@app.route('/tagger/<collection_name>')
+@admin_required
+def tagger_view(collection_name):
+    safe_name = _safe_collection_name(collection_name)
+    if not _collection_exists(safe_name):
+        return "Collection not found", 404
+    tags_data = _load_tags()
+    images = []
+    prefix = f"{safe_name}/"
+    for key, value in sorted(tags_data.items()):
+        if not key.startswith(prefix) or not isinstance(value, dict) or not value.get('url'):
+            continue
+        images.append({
+            'filename':   key[len(prefix):],
+            'url':        _b2_sign_url(value['url']),
+            'tags':       value.get('tags', []),
+            'body_parts': value.get('body_parts', {}),
+        })
+    return render_template('tagger.html',
+                           collection=safe_name,
+                           images=images,
+                           body_parts=BODY_PARTS)
+
+
+@app.route('/api/images/<collection_name>/<filename>/body-parts', methods=['POST'])
+@admin_required
+def api_update_body_parts(collection_name, filename):
+    """Save structured body-part ratings and free-form tags for one image."""
+    data = request.get_json() or {}
+    safe_name = _safe_collection_name(collection_name)
+
+    if not _image_exists_in_tags(safe_name, filename):
+        return jsonify({'success': False, 'error': 'Image not found'}), 404
+
+    raw_parts = data.get('body_parts', {})
+    cleaned_parts = {k: v for k, v in raw_parts.items()
+                     if k in BODY_PARTS and v in VALID_RATINGS}
+
+    if 'tags' in data:
+        cleaned_tags = [str(t).strip() for t in data['tags'] if t and str(t).strip()]
+        _set_image_body_parts_and_tags(safe_name, filename, cleaned_parts, cleaned_tags)
+    else:
+        # Body parts only — leave tags unchanged
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE images SET body_parts = %s::jsonb WHERE collection_name = %s AND filename = %s",
+                (json.dumps(cleaned_parts), safe_name, filename)
+            )
+            conn.commit()
+        finally:
+            _release_db(conn)
+
+    return jsonify({'success': True})
 
 
 @app.route('/api/collections')
@@ -3353,11 +3437,20 @@ CC_CATEGORY_KEYWORDS_DEFAULT = {
     'boobs': ['boobs', 'tits', 'breast', 'breasts'],
     'pussy': ['pussy', 'vagina'],
     'butt':  ['butt', 'ass', 'booty'],
+    'face':  ['face'],
+    'legs':  ['legs', 'thighs'],
+    'belly': ['belly', 'stomach', 'tummy'],
+    'abs':   ['abs'],
+    'feet':  ['feet'],
 }
 CC_CATEGORY_KEYWORDS_GAY = {
     'chest': ['chest', 'pecs', 'pec'],
     'butt':  ['butt', 'ass', 'booty'],
     'penis': ['penis', 'cock', 'dick'],
+    'face':  ['face'],
+    'legs':  ['legs', 'thighs'],
+    'abs':   ['abs'],
+    'feet':  ['feet'],
 }
 
 CC_MIN_ROUNDS = 1
@@ -3402,11 +3495,17 @@ def _cc_collection_images(collection, keyword_map):
     for key, value in tags_data.items():
         if not key.startswith(prefix) or not isinstance(value, dict) or not value.get('url'):
             continue
-        raw_tags = value.get('tags')
-        if not isinstance(raw_tags, list) or not raw_tags:
-            continue
-        tags = [str(t) for t in raw_tags if isinstance(t, (str, int, float))]
-        options = _cc_categorize_tags(tags, keyword_map)
+        body_parts = value.get('body_parts', {})
+        if body_parts:
+            # New structured format: body_parts dict keys are the categories
+            options = {part: part for part in body_parts if part in keyword_map}
+        else:
+            # Legacy: keyword-match against flat tags list
+            raw_tags = value.get('tags')
+            if not isinstance(raw_tags, list) or not raw_tags:
+                continue
+            tags = [str(t) for t in raw_tags if isinstance(t, (str, int, float))]
+            options = _cc_categorize_tags(tags, keyword_map)
         if len(options) >= 2:
             eligible.append({'filename': key[len(prefix):], 'url': _b2_sign_url(value['url']), 'options': options})
     return eligible
