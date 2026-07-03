@@ -917,7 +917,13 @@
       document.getElementById('bulkView').style.display       = bulkMode ? 'flex' : 'none';
       document.getElementById('singleControls').style.display = bulkMode ? 'none' : '';
       document.getElementById('bulkControls').style.display    = bulkMode ? '' : 'none';
-      if (!bulkMode) { selectedIndices.clear(); }
+      if (!bulkMode) {
+        selectedIndices.clear();
+        pendingBulkTags = [];
+        pendingBulkModelIds = [];
+        bulkTagCtl.render();
+        bulkModelCtl.render();
+      }
       buildThumbs();
       renderBulkGrid();
       updateApplyBtnState();
@@ -1089,7 +1095,8 @@
       clearTimeout(saveTimer);
       statusEl.textContent = 'Saving…';
       statusEl.className   = 'save-status saving';
-      saveTimer = setTimeout(() => saveImage(idx), 400);
+      const targetIdx = idx; // capture now — idx may change before the timer fires
+      saveTimer = setTimeout(() => saveImage(targetIdx), 400);
     }
 
     async function saveImage(i) {

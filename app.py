@@ -546,10 +546,16 @@ def _create_model(name: str):
         cur.execute("SELECT id FROM models WHERE LOWER(name) = LOWER(%s)", (name,))
         if cur.fetchone():
             return None
-        cur.execute("INSERT INTO models (name) VALUES (%s) RETURNING id", (name,))
-        model_id = cur.fetchone()[0]
-        conn.commit()
-        return model_id
+        try:
+            cur.execute("INSERT INTO models (name) VALUES (%s) RETURNING id", (name,))
+            model_id = cur.fetchone()[0]
+            conn.commit()
+            return model_id
+        except psycopg2.IntegrityError:
+            # Another request created the same name (case-insensitively) between our
+            # SELECT and INSERT — roll back so the pooled connection isn't left mid-transaction.
+            conn.rollback()
+            return None
     finally:
         _release_db(conn)
 
@@ -598,6 +604,9 @@ def _get_image_model_ids(collection: str, filename: str):
 
 def _set_image_models(collection: str, filename: str, model_ids: list):
     """Replace the full set of models linked to one image."""
+    # Validate/clean before touching the DB — if this raised after the DELETE below,
+    # the pooled connection would go back with an uncommitted DELETE and no rollback.
+    clean_ids = sorted({int(m) for m in model_ids if m is not None})
     conn = _get_db()
     try:
         cur = conn.cursor()
@@ -610,10 +619,10 @@ def _set_image_models(collection: str, filename: str, model_ids: list):
             return
         image_id = row[0]
         cur.execute("DELETE FROM image_models WHERE image_id = %s", (image_id,))
-        clean_ids = sorted({int(m) for m in model_ids if m is not None})
         if clean_ids:
-            cur.executemany(
-                "INSERT INTO image_models (image_id, model_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO image_models (image_id, model_id) VALUES %s ON CONFLICT DO NOTHING",
                 [(image_id, mid) for mid in clean_ids]
             )
         conn.commit()
@@ -635,11 +644,27 @@ def _bulk_add_image_models(collection: str, filenames: list, model_ids: list):
         image_ids = [r[0] for r in cur.fetchall()]
         pairs = [(iid, mid) for iid in image_ids for mid in clean_ids]
         if pairs:
-            cur.executemany(
-                "INSERT INTO image_models (image_id, model_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO image_models (image_id, model_id) VALUES %s ON CONFLICT DO NOTHING",
                 pairs
             )
         conn.commit()
+    finally:
+        _release_db(conn)
+
+def _count_existing_images(collection: str, filenames: list):
+    """How many of the given filenames actually exist in this collection right now."""
+    if not filenames:
+        return 0
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM images WHERE collection_name = %s AND filename = ANY(%s)",
+            (collection, list(filenames))
+        )
+        return cur.fetchone()[0]
     finally:
         _release_db(conn)
 
@@ -1948,7 +1973,7 @@ def api_get_lock_status(collection_name, filename):
 @app.route('/api/images/<collection_name>/<source_filename>/copy-tags/<target_filename>', methods=['POST'])
 @admin_required
 def api_copy_image_tags(collection_name, source_filename, target_filename):
-    """Copy tags from source image to target image."""
+    """Copy tags and model(s) from source image to target image."""
     safe_name = _safe_collection_name(collection_name)
 
     if not _image_exists_in_tags(safe_name, source_filename):
@@ -1958,6 +1983,9 @@ def api_copy_image_tags(collection_name, source_filename, target_filename):
 
     source_tags = _get_image_tags(safe_name, source_filename)
     _set_image_tags(safe_name, target_filename, source_tags)
+
+    source_model_ids = _get_image_model_ids(safe_name, source_filename)
+    _set_image_models(safe_name, target_filename, source_model_ids)
 
     return jsonify({'success': True, 'tags': source_tags, 'message': f'Copied {len(source_tags)} tags to target image'})
 
@@ -2024,6 +2052,10 @@ def api_update_body_parts(collection_name, filename):
         raw_model_ids = data['model_ids']
         if not isinstance(raw_model_ids, list):
             return jsonify({'success': False, 'error': 'model_ids must be an array'}), 400
+        try:
+            raw_model_ids = [int(m) for m in raw_model_ids]
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'model_ids must contain only integers'}), 400
         _set_image_models(safe_name, filename, raw_model_ids)
 
     return jsonify({'success': True})
@@ -2036,6 +2068,9 @@ def api_bulk_tag_images(collection_name):
     data = request.get_json() or {}
     safe_name = _safe_collection_name(collection_name)
 
+    if not _collection_exists(safe_name):
+        return jsonify({'success': False, 'error': 'Collection not found'}), 404
+
     filenames = data.get('filenames', [])
     if not isinstance(filenames, list) or not filenames:
         return jsonify({'success': False, 'error': 'filenames must be a non-empty array'}), 400
@@ -2044,13 +2079,19 @@ def api_bulk_tag_images(collection_name):
     model_ids = data.get('model_ids', [])
     if not isinstance(tags, list) or not isinstance(model_ids, list):
         return jsonify({'success': False, 'error': 'tags and model_ids must be arrays'}), 400
+    try:
+        model_ids = [int(m) for m in model_ids]
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'model_ids must contain only integers'}), 400
+
+    matched = _count_existing_images(safe_name, filenames)
 
     if tags:
         _bulk_add_image_tags(safe_name, filenames, tags)
     if model_ids:
         _bulk_add_image_models(safe_name, filenames, model_ids)
 
-    return jsonify({'success': True, 'updated': len(filenames)})
+    return jsonify({'success': True, 'updated': matched})
 
 
 @app.route('/api/models', methods=['GET'])
@@ -2127,9 +2168,10 @@ def api_images_by_model():
 
 
 @app.route('/manage-models')
-@admin_required
 def manage_models_view():
     """Render model (subject/person) management page."""
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
     return render_template('manage-models.html', models=_get_models_with_counts())
 
 
