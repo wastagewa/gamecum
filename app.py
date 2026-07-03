@@ -53,6 +53,20 @@ ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'mov', 'webm', 'mkv'}
 BODY_PARTS = ['boobs', 'pussy', 'butt', 'face', 'legs', 'belly', 'abs', 'chest', 'penis', 'feet']
 VALID_RATINGS = {'h', 'c', 'sn', 'n', 'x'}
 
+# Default AI-quote system prompt — admin-editable via /manage-quote-prompt, stored in
+# app_settings under key 'ai_quote_system_prompt'. This constant is only the seed value
+# and the fallback if that setting is ever missing. Must contain the literal
+# "{name_instruction}" placeholder — it's substituted per-image with either an
+# instruction to address the featured model by name, or to keep the quote generic.
+DEFAULT_AI_QUOTE_SYSTEM_PROMPT = (
+    "You write short, flirty, playful one-line captions for photos on an adult image "
+    "board, based only on the descriptive tags/details you're given. "
+    "{name_instruction} Keep it to one or two sentences, under 30 words total. "
+    "Be suggestive and fun, not vulgar or crude. Do not repeat the raw tag list "
+    "verbatim, add disclaimers, or break character with any meta-commentary — "
+    "reply with ONLY the quote text itself, no quotation marks."
+)
+
 socketio = SocketIO(app, async_mode='gevent' if ON_RENDER else 'threading')
 
 # ── Backblaze B2 (S3-compatible) storage ────────────────────────────────────────
@@ -239,6 +253,19 @@ def init_db():
             ALTER TABLE images
             ADD COLUMN IF NOT EXISTS ai_quote TEXT
         """)
+        # Generic admin-editable key/value settings (currently just the AI quote
+        # system prompt, kept here rather than a dedicated column so future settings
+        # don't each need their own migration).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key   VARCHAR(255) PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        cur.execute(
+            "INSERT INTO app_settings (key, value) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            ('ai_quote_system_prompt', DEFAULT_AI_QUOTE_SYSTEM_PROMPT)
+        )
         # Add user_id FK to scores if not present
         cur.execute("""
             ALTER TABLE scores
@@ -766,6 +793,28 @@ def _set_image_ai_quote(collection: str, filename: str, quote: str):
 _BODY_PART_RATING_LABELS = {'h': 'hidden', 'c': 'covered', 'sn': 'semi-nude', 'n': 'nude'}
 _QUOTE_HF_MODEL = os.environ.get('QUOTE_HF_MODEL', 'Qwen/Qwen2.5-72B-Instruct').strip()
 
+def _get_setting(key: str, default=None):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM app_settings WHERE key = %s", (key,))
+        row = cur.fetchone()
+        return row[0] if row else default
+    finally:
+        _release_db(conn)
+
+def _set_setting(key: str, value: str):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO app_settings (key, value) VALUES (%s, %s)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """, (key, value))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
 def _build_ai_quote_prompt(collection: str, filename: str):
     """
     Build the system/user prompt for generating a flirty, tag/model-aware quote
@@ -791,6 +840,10 @@ def _build_ai_quote_prompt(collection: str, filename: str):
             WHERE im.image_id = %s
         """, (image_id,))
         model_names = [r[0] for r in cur.fetchall()]
+
+        cur.execute("SELECT value FROM app_settings WHERE key = 'ai_quote_system_prompt'")
+        setting_row = cur.fetchone()
+        template = setting_row[0] if setting_row else DEFAULT_AI_QUOTE_SYSTEM_PROMPT
     finally:
         _release_db(conn)
 
@@ -817,14 +870,9 @@ def _build_ai_quote_prompt(collection: str, filename: str):
         if featured_model else
         "This image has no named model — keep the quote generic, don't invent a name."
     )
-    system_prompt = (
-        "You write short, flirty, playful one-line captions for photos on an adult image "
-        "board, based only on the descriptive tags/details you're given. "
-        f"{name_instruction} Keep it to one or two sentences, under 30 words total. "
-        "Be suggestive and fun, not vulgar or crude. Do not repeat the raw tag list "
-        "verbatim, add disclaimers, or break character with any meta-commentary — "
-        "reply with ONLY the quote text itself, no quotation marks."
-    )
+    # Plain substring replace (not str.format) so stray '{'/'}' an admin might type in
+    # the template can't raise a KeyError — only the exact placeholder is substituted.
+    system_prompt = template.replace('{name_instruction}', name_instruction)
     user_message = "Write the caption for a photo with these details:\n" + "\n".join(details)
 
     return {
@@ -1490,6 +1538,40 @@ def api_save_ai_quote(collection_name, filename):
 
     _set_image_ai_quote(safe_name, filename, quote)
     return jsonify({'success': True, 'quote': quote})
+
+
+@app.route('/api/settings/ai-quote-prompt', methods=['GET'])
+@admin_required
+def api_get_ai_quote_prompt_setting():
+    """Admin: read the current (or default) AI-quote system prompt template."""
+    template = _get_setting('ai_quote_system_prompt', DEFAULT_AI_QUOTE_SYSTEM_PROMPT)
+    return jsonify({'success': True, 'template': template, 'default': DEFAULT_AI_QUOTE_SYSTEM_PROMPT})
+
+
+@app.route('/api/settings/ai-quote-prompt', methods=['POST'])
+@admin_required
+def api_save_ai_quote_prompt_setting():
+    """Admin: update the AI-quote system prompt template. Takes effect on the next generation — already-cached quotes are unaffected until regenerated."""
+    data = request.get_json() or {}
+    template = str(data.get('template', '')).strip()
+
+    if not template:
+        return jsonify({'success': False, 'error': 'Template is required'}), 400
+    if len(template) > 4000:
+        return jsonify({'success': False, 'error': 'Template is too long (max 4000 characters)'}), 400
+    if '{name_instruction}' not in template:
+        return jsonify({'success': False, 'error': 'Template must include the {name_instruction} placeholder'}), 400
+
+    _set_setting('ai_quote_system_prompt', template)
+    return jsonify({'success': True, 'template': template})
+
+
+@app.route('/manage-quote-prompt')
+def manage_quote_prompt_view():
+    """Admin page for editing the AI-quote system prompt template."""
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
+    return render_template('manage-quote-prompt.html')
 
 
 @app.route('/create-collection', methods=['POST'])
