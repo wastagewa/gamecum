@@ -9,6 +9,11 @@
     --shadow-color: rgba(164, 6, 110, 0.08);
     --ring-color: rgba(255, 107, 129, 0.45);
     --gradient-accent: linear-gradient(135deg, #ff9ec1 0%, #a29bfe 100%);
+    /* Aliases used by the admin/browse pages (manage-*, tag/model browser) */
+    --card-bg: var(--surface-color);
+    --border-color: rgba(164, 6, 110, 0.15);
+    --input-bg: #fdf2f8;
+    --text-secondary: var(--muted-text);
 }
 
 /* Dark theme overrides */
@@ -22,6 +27,10 @@
     --shadow-color: rgba(0,0,0,0.5);
     --ring-color: rgba(202, 160, 255, 0.35);
     --gradient-accent: linear-gradient(135deg, #5f27cd 0%, #ff6b81 100%);
+    --card-bg: var(--surface-color);
+    --border-color: rgba(255, 255, 255, 0.12);
+    --input-bg: rgba(255, 255, 255, 0.05);
+    --text-secondary: var(--muted-text);
 }
 
 * {
@@ -2051,7 +2060,8 @@ body {
 }
 
 .slideshow-overlay.active {
-    display: block;
+    display: flex;
+    flex-direction: column;
     opacity: 1;
 }
 
@@ -2087,176 +2097,32 @@ body:has(.slideshow-overlay.active) .navbar {
 }
 
 .slideshow-container {
+    position: relative;
+    flex: 1;
+    min-height: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 100%;
-    height: 100%;
-    position: relative;
-    gap: 20px;
-    padding: 0 80px; /* symmetric padding so centering aligns to viewport */
+    padding: 70px 80px 16px;
 }
 
-.slideshow-content {
-    flex: 1;
+.slideshow-stage {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    height: 100%; /* allow vertical centering within overlay */
-    position: absolute; /* center across viewport */
-    left: 50%;
-    transform: translateX(-50%);
-    width: calc(100% - 300px); /* reserve space so image doesn't sit under the left panel */
-}
-
-/* Left-side tag panel (moved from right to avoid controls) */
-.slideshow-tags-panel {
-    width: 240px; /* was 320px */
-    max-height: 85vh;
-    background: rgba(255, 255, 255, 0.12);
-    backdrop-filter: blur(20px);
-    border-radius: 16px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    padding: 12px; /* was 20px */
-    overflow-y: auto;
-    animation: slideInLeft 0.5s ease both;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-    position: absolute; /* take out of flow so image can center */
-    left: 24px;
-    top: 50%;
-    transform: translateY(-50%);
-}
-
-@keyframes slideInLeft {
-    from {
-        opacity: 0;
-        transform: translateX(-30px);
-    }
-    to {
-        opacity: 1;
-        transform: translateX(0);
-    }
-}
-
-.tags-panel-header {
-    color: white;
-    font-size: 0.95rem; /* was 1.1rem */
-    font-weight: 600;
-    margin-bottom: 10px; /* was 16px */
-    padding-bottom: 8px; /* was 12px */
-    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-    display: flex;
-    align-items: center;
-    gap: 6px; /* was 8px */
-}
-
-.tags-panel-header i {
-    color: rgba(255, 107, 129, 1);
-}
-
-.tags-panel-content {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px; /* was 8px */
-}
-
-.slideshow-tag-badge {
-    display: inline-block;
-    background: rgba(255, 107, 129, 0.85);
-    color: white;
-    padding: 4px 8px; /* was 6px 12px */
-    border-radius: 12px; /* was 16px */
-    font-size: 0.75rem; /* was 0.85rem */
-    font-weight: 500;
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    animation: tagFadeIn 0.4s ease both;
-    transition: all 0.2s ease;
-    cursor: default;
-}
-
-.slideshow-tag-badge:hover {
-    background: rgba(255, 107, 129, 1);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(255, 107, 129, 0.4);
-}
-
-/* Highlighted tag when it matches the quote */
-.slideshow-tag-badge.tag-matched {
-    background: linear-gradient(135deg, #ffd700, #ffed4e);
-    color: #1a1a1a;
-    font-weight: 600;
-    border: 2px solid #ffd700;
-    box-shadow: 0 0 15px rgba(255, 215, 0, 0.6), 0 4px 12px rgba(255, 215, 0, 0.4);
-    transform: scale(1.1);
-    animation: tagPulse 1.5s ease-in-out infinite, tagFadeIn 0.4s ease both;
-}
-
-.slideshow-tag-badge.tag-matched:hover {
-    background: linear-gradient(135deg, #ffed4e, #ffd700);
-    transform: scale(1.15) translateY(-2px);
-    box-shadow: 0 0 20px rgba(255, 215, 0, 0.8), 0 6px 16px rgba(255, 215, 0, 0.5);
-}
-
-@keyframes tagPulse {
-    0%, 100% {
-        box-shadow: 0 0 15px rgba(255, 215, 0, 0.6), 0 4px 12px rgba(255, 215, 0, 0.4);
-    }
-    50% {
-        box-shadow: 0 0 25px rgba(255, 215, 0, 0.8), 0 4px 12px rgba(255, 215, 0, 0.6);
-    }
-}
-
-@keyframes tagFadeIn {
-    from {
-        opacity: 0;
-        transform: scale(0.8);
-    }
-    to {
-        opacity: 1;
-        transform: scale(1);
-    }
-}
-
-.tags-loading,
-.tags-empty,
-.tags-error {
-    color: rgba(255, 255, 255, 0.7);
-    font-size: 0.9rem;
-    text-align: center;
-    padding: 10px;
-}
-
-.tags-loading i {
-    margin-right: 8px;
-}
-
-/* Scrollbar styling for tag panel */
-.slideshow-tags-panel::-webkit-scrollbar {
-    width: 8px;
-}
-
-.slideshow-tags-panel::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-}
-
-.slideshow-tags-panel::-webkit-scrollbar-thumb {
-    background: rgba(255, 107, 129, 0.6);
-    border-radius: 10px;
-}
-
-.slideshow-tags-panel::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 107, 129, 0.8);
+    width: 100%;
+    height: 100%;
+    min-height: 0;
 }
 
 .slideshow-image {
     display: block;
-    margin: auto; /* center within content area */
     max-width: 100%;
-    max-height: 88vh; /* was 80vh; fill more of the viewport height */
-    object-fit: contain; /* fit image within available space */
-    border-radius: 12px;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 16px;
     box-shadow: 0 20px 80px rgba(0, 0, 0, 0.8);
     animation: slideIn 0.6s ease both;
 }
@@ -2272,50 +2138,237 @@ body:has(.slideshow-overlay.active) .navbar {
     }
 }
 
-.slideshow-quote-container {
+.slideshow-progress {
+    margin-top: 14px;
+    flex-shrink: 0;
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.15);
+    padding: 6px 16px;
+    border-radius: 20px;
+    backdrop-filter: blur(10px);
+}
+
+/* ── Bottom immersive info panel: models / body details / tags / AI quote ── */
+.slideshow-info-panel {
     position: relative;
-    margin-top: 30px;
-    max-width: 800px;
+    flex-shrink: 0;
+    max-height: 42vh;
+    background: rgba(18, 14, 24, 0.55);
+    backdrop-filter: blur(24px);
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 18px 40px 22px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.3s ease;
+    animation: slideUpFade 0.5s ease both;
+    /* No overflow/clip on this outer box — the handle button protrudes above
+       it via a negative top offset and must stay clickable; flex + min-height:0
+       on this container plus flex:1 on .info-panel-scroll below caps the
+       scrollable area at max-height without clipping the handle. */
+}
+
+/* Collapsed state shrinks to just enough height for the handle to stay visible
+   and clickable — never sets overflow:hidden on this outer box, since that
+   would also clip the handle's -20px protrusion above it. */
+.slideshow-info-panel.collapsed {
+    max-height: 22px;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-top-color: transparent;
+}
+.slideshow-info-panel.collapsed .info-panel-scroll {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.info-panel-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    transition: opacity 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+@keyframes slideUpFade {
+    from { opacity: 0; transform: translateY(24px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.info-panel-handle {
+    position: absolute;
+    top: -20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 46px;
+    height: 20px;
+    border: none;
+    border-radius: 12px 12px 0 0;
+    background: rgba(18, 14, 24, 0.7);
+    backdrop-filter: blur(10px);
+    color: rgba(255, 255, 255, 0.75);
+    cursor: pointer;
+    font-size: 0.72rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+.info-panel-handle:hover { color: #fff; background: rgba(164, 6, 110, 0.7); }
+.info-panel-handle i { transition: transform 0.3s ease; }
+.slideshow-info-panel.collapsed .info-panel-handle i { transform: rotate(180deg); }
+
+.info-panel-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.info-section {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.info-section-label {
+    font-size: 0.68rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(255, 255, 255, 0.5);
+    margin-right: 2px;
+    flex-shrink: 0;
+}
+
+.info-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    transition: all 0.2s ease;
+    animation: tagFadeIn 0.4s ease both;
+    cursor: default;
+}
+.info-badge:hover { transform: translateY(-2px); }
+
+.info-badge.badge-model {
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    color: #1a1206;
+    font-weight: 700;
+}
+.info-badge.badge-bodypart {
+    background: rgba(56, 189, 248, 0.9);
+    color: #06222f;
+}
+.info-badge.badge-tag {
+    background: rgba(255, 107, 129, 0.85);
+    color: white;
+}
+.info-badge.badge-tag.tag-matched {
+    background: linear-gradient(135deg, #ffd700, #ffed4e);
+    color: #1a1a1a;
+    box-shadow: 0 0 15px rgba(255, 215, 0, 0.6), 0 4px 12px rgba(255, 215, 0, 0.4);
+    transform: scale(1.08);
+    animation: tagPulse 1.5s ease-in-out infinite, tagFadeIn 0.4s ease both;
+}
+
+@keyframes tagPulse {
+    0%, 100% { box-shadow: 0 0 15px rgba(255, 215, 0, 0.6), 0 4px 12px rgba(255, 215, 0, 0.4); }
+    50%      { box-shadow: 0 0 25px rgba(255, 215, 0, 0.8), 0 4px 12px rgba(255, 215, 0, 0.6); }
+}
+
+@keyframes tagFadeIn {
+    from { opacity: 0; transform: scale(0.8); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+.tags-loading,
+.tags-empty,
+.tags-error {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 0.9rem;
     text-align: center;
-    padding: 0 20px;
-    animation: fadeIn 0.8s ease 0.3s both;
+    padding: 6px;
 }
+.tags-loading i { margin-right: 8px; }
 
-.slideshow-quote-container .quote-regen-btn {
-    bottom: 10px;
-    right: 30px;
-}
+.info-panel-scroll::-webkit-scrollbar { width: 8px; }
+.info-panel-scroll::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
+.info-panel-scroll::-webkit-scrollbar-thumb { background: rgba(255, 107, 129, 0.6); border-radius: 10px; }
+.info-panel-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255, 107, 129, 0.8); }
 
-@keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
+.info-quote-block {
+    position: relative;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    text-align: center;
 }
 
 .slideshow-quote {
     color: white;
-    font-size: 1.3rem;
+    font-size: 1.1rem;
     font-style: italic;
-    line-height: 1.8;
+    line-height: 1.6;
     text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
-    background: rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(20px);
-    padding: 20px 30px;
-    border-radius: 16px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    max-width: 720px;
+    margin: 0;
 }
 
-.slideshow-progress {
-    position: absolute;
-    bottom: -50px;
-    left: 50%;
-    transform: translateX(-50%);
-    color: white;
-    font-size: 1rem;
-    font-weight: 600;
+.quote-gen-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0.55rem 1.3rem;
+    border-radius: 999px;
+    border: none;
+    background: linear-gradient(135deg, var(--primary-color, #a4066e), #7c3aed);
+    color: #fff;
+    font-size: 0.85rem;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(164, 6, 110, 0.4);
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+.quote-gen-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(164, 6, 110, 0.55);
+}
+.quote-gen-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Once a quote already exists, this collapses to a small icon-only "regenerate" pill */
+.quote-gen-btn.is-regenerate {
     background: rgba(255, 255, 255, 0.15);
-    padding: 8px 16px;
-    border-radius: 20px;
-    backdrop-filter: blur(10px);
+    box-shadow: none;
+    padding: 0.5rem 0.7rem;
+}
+.quote-gen-btn.is-regenerate:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.28);
+    transform: none;
+}
+.quote-gen-btn.is-regenerate .quote-gen-btn-label { display: none; }
+
+.quote-gen-btn.spinning i { animation: quote-regen-spin 0.8s linear infinite; }
+
+.quote-gen-error {
+    margin: 0;
+    font-size: 0.78rem;
+    color: #fca5a5;
+    max-width: 500px;
+    text-align: center;
 }
 
 .slideshow-nav {
@@ -2352,9 +2405,12 @@ body:has(.slideshow-overlay.active) .navbar {
 }
 
 .slideshow-controls {
-    position: fixed;
-    bottom: 30px;
-    right: 30px;
+    /* Anchored to .slideshow-container (the image area, position:relative)
+       rather than the viewport, so it sits above the info panel below
+       instead of overlapping it regardless of the panel's expanded height. */
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
     display: flex !important;
     flex-direction: column;
     align-items: center;
@@ -2452,30 +2508,42 @@ body:has(.slideshow-overlay.active) .navbar {
     }
     
     .slideshow-container {
-        flex-direction: column;
-        padding: 80px 20px 120px;
-        gap: 15px;
+        padding: 60px 12px 8px;
     }
-    
-    .slideshow-content {
-        max-width: 100%;
-        position: static; /* reset from absolute on small screens */
-        left: auto;
-        transform: none;
+
+    .slideshow-info-panel {
+        max-height: 48vh;
+        padding: 16px 18px 18px;
+        gap: 10px;
+    }
+
+    .info-section-label {
         width: 100%;
+        margin-bottom: -2px;
     }
-    
-    .slideshow-tags-panel {
-        width: 100%;
-        max-height: 160px; /* was 200px */
-        padding: 10px; /* reduce padding on small screens */
-        order: 2;
-        position: static; /* reset from absolute on mobile */
-        transform: none;
+
+    .slideshow-quote {
+        font-size: 1rem;
     }
-    
+
+    .quote-gen-btn {
+        font-size: 0.8rem;
+        padding: 0.5rem 1.05rem;
+    }
+
     .slideshow-nav {
-        width: 50px;
+        width: 44px;
+        height: 44px;
+        font-size: 1.2rem;
+    }
+
+    .slideshow-nav.prev { left: 8px; }
+    .slideshow-nav.next { right: 8px; }
+
+    .slideshow-controls {
+        bottom: 12px;
+        right: 12px;
+        padding: 10px;
     }
 }
 

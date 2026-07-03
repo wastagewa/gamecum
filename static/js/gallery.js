@@ -85,49 +85,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 const tokenData = await tokenRes.json();
                 cachedHfToken   = tokenData.token || null;
             }
-            if (!cachedHfToken) {
-                throw new Error('HuggingFace token not configured on the server.');
-            }
 
-            const hfRes = await fetch('https://router.huggingface.co/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${cachedHfToken}`,
-                    'Content-Type':  'application/json',
-                },
-                body: JSON.stringify({
-                    model: promptData.model,
-                    messages: [
-                        { role: 'system', content: promptData.system_prompt },
-                        { role: 'user',   content: promptData.user_message },
-                    ],
-                    max_tokens:  80,
-                    temperature: 0.9,
-                }),
+            const quote = await callHuggingFaceChat({
+                token:        cachedHfToken,
+                model:        promptData.model,
+                systemPrompt: promptData.system_prompt,
+                userMessage:  promptData.user_message,
             });
-
-            const rawBody = await hfRes.text();
-            if (!hfRes.ok) {
-                let errMsg = `HTTP ${hfRes.status}`;
-                try {
-                    const errData = JSON.parse(rawBody);
-                    errMsg = errData?.error?.message || errData?.error || rawBody.slice(0, 200);
-                } catch { errMsg = rawBody.slice(0, 200) || errMsg; }
-                if (hfRes.status === 401) throw new Error('Invalid HuggingFace token. Check it at huggingface.co/settings/tokens.');
-                if (hfRes.status === 403) throw new Error(`Access denied for model "${promptData.model}". Try a different model or accept its license on HuggingFace.`);
-                if (hfRes.status === 503) throw new Error('Model warming up. Please wait ~30 seconds and try again.');
-                if (hfRes.status === 429) throw new Error('Rate limited. Wait a moment before regenerating.');
-                throw new Error(`HuggingFace API error ${hfRes.status}: ${errMsg}`);
-            }
-
-            let quote;
-            try {
-                const hfData = JSON.parse(rawBody);
-                quote = hfData.choices[0].message.content.trim().replace(/^["']|["']$/g, '');
-            } catch (e) {
-                throw new Error('Unexpected response format from HuggingFace');
-            }
-            if (!quote) throw new Error('Empty quote generated');
 
             // Cache it server-side so the next viewer (and the next slideshow pass) gets it
             // instantly. Best-effort: if the save fails, still return the quote we already
@@ -150,27 +114,44 @@ document.addEventListener('DOMContentLoaded', () => {
         // image in the meantime). If nothing is cached yet and `allowBackgroundGeneration`
         // is true, generate + cache one quietly so the NEXT view of this image is instant —
         // deduped per image so the same image never generates twice concurrently.
-        function refreshAiQuoteForElement(imageUrl, quoteElement, wrapInQuotes, isStillCurrent, allowBackgroundGeneration) {
+        // `onQuoteReady(hasAiQuote)` (optional) fires once we know whether an AI quote
+        // is showing, so callers can update a "Generate" vs "Regenerate" button state.
+        function refreshAiQuoteForElement(imageUrl, quoteElement, wrapInQuotes, isStillCurrent, allowBackgroundGeneration, onQuoteReady) {
             const { collection, filename } = imageQuoteParams(imageUrl);
-            if (!collection || !filename || !quoteElement) return;
+            if (!collection || !filename || !quoteElement) {
+                if (onQuoteReady) onQuoteReady(false);
+                return;
+            }
             const key = `${collection}/${filename}`;
 
             fetchCachedAiQuote(collection, filename).then(cached => {
                 if (!isStillCurrent()) return;
                 if (cached) {
                     quoteElement.textContent = wrapInQuotes ? `"${cached}"` : cached;
-                } else if (allowBackgroundGeneration && !aiQuoteGenerationInFlight.has(key)) {
+                    if (onQuoteReady) onQuoteReady(true);
+                    return;
+                }
+                if (onQuoteReady) onQuoteReady(false);
+                if (allowBackgroundGeneration && !aiQuoteGenerationInFlight.has(key)) {
                     aiQuoteGenerationInFlight.add(key);
                     generateAndSaveAiQuote(collection, filename)
                         .then(quote => {
                             if (isStillCurrent()) {
                                 quoteElement.textContent = wrapInQuotes ? `"${quote}"` : quote;
+                                if (onQuoteReady) onQuoteReady(true);
                             }
                         })
                         .catch(() => { /* static quote already showing — ignore */ })
                         .finally(() => aiQuoteGenerationInFlight.delete(key));
                 }
             });
+        }
+
+        function updateQuoteGenButtonState(btn, hasAiQuote) {
+            if (!btn) return;
+            btn.classList.toggle('is-regenerate', hasAiQuote);
+            btn.title = hasAiQuote ? 'Regenerate quote' : 'Generate AI quote';
+            btn.setAttribute('aria-label', btn.title);
         }
 
         function updateNavigationButtons() {
@@ -202,6 +183,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // Get a tag-matched quote for this image
                 const quoteElement = document.getElementById('modalQuote');
+                const modalRegenBtn = document.getElementById('modalQuoteRegenBtn');
                 try {
                     const quoteResponse = await fetch(imageQuoteUrl(imgSrc));
                     const quoteData = await quoteResponse.json();
@@ -211,7 +193,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch (err) {
                     console.error('Error fetching quote:', err);
                 }
-                refreshAiQuoteForElement(imgSrc, quoteElement, false, () => allImages[currentImageIndex] === imgSrc, true);
+                updateQuoteGenButtonState(modalRegenBtn, false);
+                refreshAiQuoteForElement(
+                    imgSrc, quoteElement, false,
+                    () => allImages[currentImageIndex] === imgSrc,
+                    true,
+                    hasAi => updateQuoteGenButtonState(modalRegenBtn, hasAi)
+                );
             }
         }
 
@@ -253,6 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Fetch a tag-matched quote for this image
             const quoteElement = document.getElementById('modalQuote');
+            const modalRegenBtn = document.getElementById('modalQuoteRegenBtn');
             try {
                 const quoteResponse = await fetch(imageQuoteUrl(imageUrl));
                 const quoteData = await quoteResponse.json();
@@ -262,7 +251,13 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (err) {
                 console.error('Error fetching quote:', err);
             }
-            refreshAiQuoteForElement(imageUrl, quoteElement, false, () => allImages[currentImageIndex] === imageUrl, true);
+            updateQuoteGenButtonState(modalRegenBtn, false);
+            refreshAiQuoteForElement(
+                imageUrl, quoteElement, false,
+                () => allImages[currentImageIndex] === imageUrl,
+                true,
+                hasAi => updateQuoteGenButtonState(modalRegenBtn, hasAi)
+            );
 
             modal.style.display = 'flex';
             modalImg.src = imageUrl;
@@ -515,7 +510,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (slideshowCounter) {
             slideshowCounter.textContent = `${slideshowIndex + 1} / ${allImages.length}`;
         }
-        
+        const slideshowQuoteErrorEl = document.getElementById('slideshowQuoteError');
+        if (slideshowQuoteErrorEl) slideshowQuoteErrorEl.style.display = 'none';
+
         // Extract collection and filename from image URL for quote matching
         const { collection, filename } = imageQuoteParams(imgSrc);
 
@@ -535,41 +532,62 @@ document.addEventListener('DOMContentLoaded', () => {
         // Slideshow autoplay can advance every couple of seconds — much faster than an
         // LLM round-trip — so it only ever shows an already-cached AI quote (never kicks
         // off a new background generation) to avoid piling up concurrent HF calls for
-        // images the viewer has already scrolled past. Use the regenerate button for that.
-        refreshAiQuoteForElement(imgSrc, slideshowQuote, true, () => allImages[slideshowIndex] === imgSrc, false);
+        // images the viewer has already scrolled past. Use the "Generate AI Quote" button for that.
+        updateQuoteGenButtonState(slideshowQuoteRegenBtn, false);
+        refreshAiQuoteForElement(
+            imgSrc, slideshowQuote, true,
+            () => allImages[slideshowIndex] === imgSrc,
+            false,
+            hasAi => updateQuoteGenButtonState(slideshowQuoteRegenBtn, hasAi)
+        );
     }
     
     async function updateSlideshowTags(imgSrc) {
         const tagsPanel = document.getElementById('slideshowTagsContent');
         if (!tagsPanel) return;
-        
-        // Extract filename from URL
-        // URL format: /static/uploads/<collection>/<filename>
+
+        const { collection, filename } = imageQuoteParams(imgSrc);
         try {
-            const url = new URL(imgSrc, window.location.origin);
-            const pathParts = url.pathname.split('/');
-            const filename = pathParts[pathParts.length - 1];
-            const collection = pathParts[pathParts.length - 2];
-            
-            // Show loading state
-            tagsPanel.innerHTML = '<p class="tags-loading"><i class="fas fa-spinner fa-spin"></i> Loading tags...</p>';
-            
-            // Fetch tags from API
+            tagsPanel.innerHTML = '<p class="tags-loading"><i class="fas fa-spinner fa-spin"></i> Loading details...</p>';
+
             const response = await fetch(`/api/tags/${collection}/${filename}`);
             const data = await response.json();
-            
-            if (data.success && data.tags && data.tags.length > 0) {
-                // Display tags as badges with data attribute for matching
-                const tagsHTML = data.tags.map((tag, index) => 
-                    `<span class="slideshow-tag-badge" data-tag="${tag}" style="animation-delay: ${index * 0.02}s">${tag}</span>`
-                ).join('');
-                tagsPanel.innerHTML = tagsHTML;
-            } else {
-                tagsPanel.innerHTML = '<p class="tags-empty">No tags available</p>';
+
+            if (!data.success) {
+                tagsPanel.innerHTML = '<p class="tags-empty">No details available</p>';
+                return;
             }
+
+            const sections = [];
+            if (data.models && data.models.length > 0) {
+                sections.push(`
+                    <div class="info-section">
+                        <span class="info-section-label"><i class="fas fa-user"></i> Model</span>
+                        ${data.models.map((name, i) => `<span class="info-badge badge-model" style="animation-delay:${i * 0.03}s">${escapeHtml(name)}</span>`).join('')}
+                    </div>
+                `);
+            }
+            if (data.body_parts && data.body_parts.length > 0) {
+                sections.push(`
+                    <div class="info-section">
+                        <span class="info-section-label"><i class="fas fa-child-reaching"></i> Details</span>
+                        ${data.body_parts.map((bp, i) => `<span class="info-badge badge-bodypart" style="animation-delay:${i * 0.03}s">${escapeHtml(bp.label)}</span>`).join('')}
+                    </div>
+                `);
+            }
+            if (data.tags && data.tags.length > 0) {
+                sections.push(`
+                    <div class="info-section">
+                        <span class="info-section-label"><i class="fas fa-tags"></i> Tags</span>
+                        ${data.tags.map((tag, i) => `<span class="info-badge badge-tag slideshow-tag-badge" data-tag="${escapeHtml(tag)}" style="animation-delay:${i * 0.03}s">${escapeHtml(tag)}</span>`).join('')}
+                    </div>
+                `);
+            }
+
+            tagsPanel.innerHTML = sections.length ? sections.join('') : '<p class="tags-empty">No tags, details, or model set for this image yet</p>';
         } catch (error) {
-            console.error('Error fetching tags:', error);
-            tagsPanel.innerHTML = '<p class="tags-error">Unable to load tags</p>';
+            console.error('Error fetching image details:', error);
+            tagsPanel.innerHTML = '<p class="tags-error">Unable to load details</p>';
         }
     }
     
@@ -742,18 +760,24 @@ document.addEventListener('DOMContentLoaded', () => {
         slideshowFullscreen.addEventListener('click', toggleSlideshowFullscreen);
     }
 
-    async function handleRegenerateQuoteClick(btn, imgSrc, quoteEl, wrapInQuotes, isStillCurrent) {
+    async function handleRegenerateQuoteClick(btn, imgSrc, quoteEl, wrapInQuotes, isStillCurrent, errorEl) {
         if (!btn || !imgSrc) return;
         const { collection, filename } = imageQuoteParams(imgSrc);
         btn.disabled = true;
         btn.classList.add('spinning');
+        if (errorEl) errorEl.style.display = 'none';
         try {
             const quote = await generateAndSaveAiQuote(collection, filename);
             if (isStillCurrent() && quoteEl) {
                 quoteEl.textContent = wrapInQuotes ? `"${quote}"` : quote;
+                updateQuoteGenButtonState(btn, true);
             }
         } catch (err) {
             console.error('Error regenerating quote:', err);
+            if (errorEl && isStillCurrent()) {
+                errorEl.textContent = err.message;
+                errorEl.style.display = 'block';
+            }
         } finally {
             btn.disabled = false;
             btn.classList.remove('spinning');
@@ -776,6 +800,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const slideshowQuoteRegenBtn = document.getElementById('slideshowQuoteRegenBtn');
+    const slideshowQuoteError    = document.getElementById('slideshowQuoteError');
     if (slideshowQuoteRegenBtn) {
         slideshowQuoteRegenBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -785,8 +810,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 imgSrc,
                 slideshowQuote,
                 true,
-                () => allImages[slideshowIndex] === imgSrc
+                () => allImages[slideshowIndex] === imgSrc,
+                slideshowQuoteError
             );
+        });
+    }
+
+    const infoPanelToggle = document.getElementById('infoPanelToggle');
+    const slideshowInfoPanel = document.getElementById('slideshowInfoPanel');
+    if (infoPanelToggle && slideshowInfoPanel) {
+        infoPanelToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const collapsed = slideshowInfoPanel.classList.toggle('collapsed');
+            infoPanelToggle.setAttribute('aria-expanded', String(!collapsed));
         });
     }
 

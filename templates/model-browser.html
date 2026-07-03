@@ -29,76 +29,101 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 
     <style>
-        .tag-browser-container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
-        .tag-browser-header { margin-bottom: 2rem; text-align: center; }
-        .tag-browser-header h1 { font-size: 2.5rem; margin-bottom: 0.5rem; color: var(--primary-color); }
-        .tag-browser-header p { font-size: 1.1rem; color: var(--text-secondary); }
-        .tag-browser-layout { display: grid; grid-template-columns: 350px 1fr; gap: 2rem; margin-bottom: 2rem; }
-        .tag-sidebar {
-            background: var(--card-bg); border-radius: 12px; padding: 1.5rem;
-            border: 1px solid var(--border-color); max-height: 80vh; overflow-y: auto;
-            position: sticky; top: 100px;
+        .browse-wrap { max-width: 1500px; margin: 0 auto; padding: 1.5rem 1.5rem 3rem; }
+        .browse-header { margin-bottom: 1.75rem; text-align: center; }
+        .browse-header h1 { font-size: 2.2rem; margin-bottom: 0.4rem; color: var(--primary-color); }
+        .browse-header p { font-size: 1rem; color: var(--text-secondary); }
+
+        .browse-layout { display: grid; grid-template-columns: 320px 1fr; gap: 1.5rem; align-items: start; }
+
+        .browse-sidebar {
+            background: var(--card-bg);
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            padding: 1.25rem;
+            position: sticky;
+            top: 90px;
+            max-height: calc(100vh - 110px);
+            overflow-y: auto;
         }
-        .tag-sidebar h2 { font-size: 1.3rem; margin-bottom: 1rem; color: var(--primary-color); }
-        .tag-search { margin-bottom: 1.5rem; }
-        .tag-search input {
-            width: 100%; padding: 0.75rem; border: 1px solid var(--border-color);
-            border-radius: 8px; background: var(--input-bg); color: var(--text-color); font-size: 1rem;
+        .facet-search input {
+            width: 100%; padding: 0.6rem 0.8rem; border: 1px solid var(--border-color);
+            border-radius: 8px; background: var(--input-bg); color: var(--text-color);
+            font-size: 0.88rem; margin-bottom: 0.6rem;
         }
-        .tag-sort-options { margin-bottom: 1.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
-        .tag-sort-btn {
-            padding: 0.5rem 1rem; border: 1px solid var(--border-color); border-radius: 6px;
-            background: var(--input-bg); color: var(--text-color); cursor: pointer; font-size: 0.9rem;
-            transition: all 0.3s ease;
+        .facet-sort-options { display: flex; gap: 0.5rem; margin-bottom: 0.9rem; flex-wrap: wrap; }
+        .facet-sort-btn {
+            padding: 0.4rem 0.8rem; border: 1px solid var(--border-color); border-radius: 8px;
+            background: var(--input-bg); color: var(--text-color); cursor: pointer; font-size: 0.8rem;
         }
-        .tag-sort-btn.active { background: var(--primary-color); color: white; border-color: var(--primary-color); }
-        .tag-sort-btn:hover { background: var(--primary-color); color: white; border-color: var(--primary-color); }
-        .tag-list { display: flex; flex-direction: column; gap: 0.5rem; }
-        .tag-item {
-            padding: 0.75rem; background: var(--input-bg); border: 1px solid var(--border-color);
-            border-radius: 6px; cursor: pointer; transition: all 0.2s ease;
-            display: flex; justify-content: space-between; align-items: center;
+        .facet-sort-btn.active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+        .facet-list { display: flex; flex-direction: column; gap: 0.4rem; }
+        .facet-item {
+            display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;
+            padding: 0.6rem 0.75rem; border-radius: 10px; cursor: pointer;
+            background: var(--input-bg); border: 1px solid var(--border-color);
+            font-size: 0.88rem; font-weight: 600; transition: all 0.15s ease;
         }
-        .tag-item:hover { background: var(--primary-color); color: white; border-color: var(--primary-color); }
-        .tag-item.selected { background: var(--primary-color); color: white; border-color: var(--primary-color); }
-        .tag-name { flex: 1; word-break: break-word; }
-        .tag-count {
-            font-weight: bold; font-size: 0.9rem; margin-left: 0.5rem;
-            background: rgba(255,255,255,0.2); padding: 0.25rem 0.5rem; border-radius: 4px;
+        .facet-item:hover { border-color: var(--primary-color); }
+        .facet-item.selected { background: linear-gradient(135deg, #f59e0b, #d97706); color: #1a1206; border-color: transparent; }
+        .facet-count {
+            font-size: 0.75rem; font-weight: 700; background: rgba(0,0,0,.15);
+            padding: 0.1rem 0.5rem; border-radius: 10px; flex-shrink: 0;
         }
-        .tag-items-wrapper { max-height: calc(80vh - 300px); overflow-y: auto; }
-        .tag-browser-main { background: var(--card-bg); border-radius: 12px; padding: 1.5rem; border: 1px solid var(--border-color); }
-        .filter-bar { margin-bottom: 1.5rem; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
-        .selected-tags { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-        .selected-tag-badge {
-            background: var(--primary-color); color: white; padding: 0.5rem 1rem; border-radius: 20px;
-            display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;
+        .facet-item.selected .facet-count { background: rgba(0,0,0,.25); }
+
+        .match-mode-row { display: flex; gap: 1rem; margin: 1.1rem 0 0.4rem; font-size: 0.85rem; }
+        .match-mode-row label { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+
+        .browse-main {
+            background: var(--card-bg); border-radius: 16px; border: 1px solid var(--border-color);
+            padding: 1.5rem;
         }
-        .selected-tag-badge button { background: none; border: none; color: white; cursor: pointer; padding: 0; margin-left: 0.25rem; font-size: 1.1rem; }
-        .match-mode { display: flex; gap: 0.5rem; }
-        .match-mode label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
-        .match-mode input { cursor: pointer; }
-        .images-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1.5rem; margin-top: 1.5rem; }
+        .selected-chips-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
+        .selected-chip {
+            display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.8rem;
+            border-radius: 20px; font-size: 0.82rem; font-weight: 700; color: #1a1206;
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+        }
+        .selected-chip button { background: none; border: none; color: inherit; cursor: pointer; font-size: 1rem; opacity: 0.75; }
+        .selected-chip button:hover { opacity: 1; }
+        .clear-filters-btn {
+            margin-left: auto; padding: 0.4rem 0.9rem; border-radius: 8px; border: 1px solid var(--border-color);
+            background: var(--input-bg); color: var(--text-color); cursor: pointer; font-size: 0.82rem;
+        }
+
+        .results-info { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.92rem; }
+        .results-count { font-weight: 800; color: var(--primary-color); }
+
+        .images-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1.25rem; }
         .image-card {
-            background: var(--input-bg); border-radius: 8px; overflow: hidden; border: 1px solid var(--border-color);
-            transition: all 0.3s ease; cursor: pointer; position: relative;
+            background: var(--input-bg); border-radius: 14px; overflow: hidden; border: 1px solid var(--border-color);
+            transition: all 0.25s ease; cursor: pointer; position: relative;
         }
-        .image-card:hover { transform: translateY(-5px); border-color: var(--primary-color); box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
-        .image-card-img { width: 100%; aspect-ratio: 1; object-fit: cover; }
-        .image-card-info { padding: 1rem; }
-        .image-card-filename { font-size: 0.85rem; color: var(--text-secondary); word-break: break-all; margin-bottom: 0.5rem; }
+        .image-card:hover { transform: translateY(-4px); border-color: var(--primary-color); box-shadow: 0 14px 34px rgba(0,0,0,0.25); }
+        .image-card-img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+        .image-card-info { padding: 0.85rem; }
         .image-card-collection {
-            font-size: 0.8rem; background: var(--primary-color); color: white; padding: 0.25rem 0.5rem;
-            border-radius: 4px; display: inline-block; margin-bottom: 0.5rem;
+            font-size: 0.72rem; background: var(--primary-color); color: white; padding: 0.2rem 0.55rem;
+            border-radius: 5px; display: inline-block; margin-bottom: 0.5rem; font-weight: 700;
         }
-        .loading { text-align: center; padding: 2rem; color: var(--text-secondary); }
-        .empty-state { text-align: center; padding: 3rem; color: var(--text-secondary); }
-        .empty-state i { font-size: 3rem; margin-bottom: 1rem; opacity: 0.5; }
-        .results-info { font-size: 1rem; color: var(--text-secondary); margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; }
-        .results-count { font-weight: bold; color: var(--primary-color); }
-        @media (max-width: 1024px) {
-            .tag-browser-layout { grid-template-columns: 1fr; }
-            .tag-sidebar { position: static; max-height: none; }
+        .image-card-badges { display: flex; flex-wrap: wrap; gap: 0.3rem; max-height: 62px; overflow: hidden; }
+        .card-badge { font-size: 0.68rem; font-weight: 700; padding: 0.18rem 0.5rem; border-radius: 10px; }
+        .card-badge.badge-bodypart { background: rgba(56,189,248,.9); color: #06222f; }
+        .card-badge.badge-tag { background: rgba(255,107,129,.85); color: white; }
+        .card-badge.badge-more { background: var(--border-color); color: var(--text-secondary); }
+
+        .loading, .empty-state { text-align: center; padding: 2.5rem 1rem; color: var(--text-secondary); }
+        .empty-state i { font-size: 2.6rem; margin-bottom: 0.9rem; opacity: 0.5; display: block; }
+
+        @media (max-width: 980px) {
+            .browse-layout { grid-template-columns: 1fr; }
+            .browse-sidebar { position: static; max-height: none; }
+        }
+        @media (max-width: 560px) {
+            .browse-wrap { padding: 1rem; }
+            .browse-header h1 { font-size: 1.6rem; }
+            .images-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.8rem; }
         }
     </style>
 </head>
@@ -128,49 +153,31 @@
     </nav>
 
     <main class="main-content">
-        <div class="tag-browser-container">
-            <div class="tag-browser-header">
+        <div class="browse-wrap">
+            <div class="browse-header">
                 <h1><i class="fas fa-user"></i> Browse Images by Model</h1>
                 <p>Find every image a subject/person appears in, across all collections</p>
             </div>
 
-            <div class="tag-browser-layout">
-                <aside class="tag-sidebar">
-                    <h2><i class="fas fa-list"></i> Models</h2>
-
-                    <div class="tag-search">
-                        <input type="text" id="modelSearchInput" placeholder="Search models...">
+            <div class="browse-layout">
+                <aside class="browse-sidebar">
+                    <div class="facet-search"><input type="text" id="modelSearchInput" placeholder="Search models..."></div>
+                    <div class="facet-sort-options">
+                        <button class="facet-sort-btn active" data-sort="count"><i class="fas fa-sort-numeric-down"></i> Count</button>
+                        <button class="facet-sort-btn" data-sort="alpha"><i class="fas fa-sort-alpha-down"></i> Name</button>
                     </div>
+                    <div class="facet-list" id="modelList"><div class="loading"><i class="fas fa-spinner fa-spin"></i></div></div>
 
-                    <div class="tag-sort-options">
-                        <button class="tag-sort-btn active" data-sort="count">
-                            <i class="fas fa-sort-numeric-down"></i> Count
-                        </button>
-                        <button class="tag-sort-btn" data-sort="alpha">
-                            <i class="fas fa-sort-alpha-down"></i> Name
-                        </button>
-                    </div>
-
-                    <div class="tag-items-wrapper">
-                        <div class="tag-list" id="modelList">
-                            <div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading models...</div>
-                        </div>
+                    <div class="match-mode-row">
+                        <label><input type="radio" name="matchMode" value="any" checked> Match any</label>
+                        <label><input type="radio" name="matchMode" value="all"> Match all</label>
                     </div>
                 </aside>
 
-                <div class="tag-browser-main">
-                    <div class="filter-bar">
-                        <div class="selected-tags" id="selectedModels"></div>
-                        <div class="match-mode">
-                            <label><input type="radio" name="matchMode" value="any" checked> Any model</label>
-                            <label><input type="radio" name="matchMode" value="all"> All models</label>
-                        </div>
-                        <button id="clearFiltersBtn" style="margin-left: auto; padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-color); cursor: pointer; display: none;">
-                            Clear Filters
-                        </button>
-                    </div>
+                <div class="browse-main">
+                    <div class="selected-chips-row" id="selectedChipsRow" style="display:none;"></div>
 
-                    <div class="results-info" id="resultsInfo" style="display: none;">
+                    <div class="results-info" id="resultsInfo" style="display:none;">
                         <span>Showing <span class="results-count" id="resultCount">0</span> images</span>
                     </div>
 
@@ -178,7 +185,7 @@
                         <div class="empty-state">
                             <i class="fas fa-search"></i>
                             <h2>Select a model to view images</h2>
-                            <p>Click on a name in the sidebar to filter images</p>
+                            <p>Click a name in the sidebar to filter images across all collections</p>
                         </div>
                     </div>
                 </div>
@@ -188,6 +195,7 @@
 
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/html-utils.js') }}"></script>
     <script>
         let allModels = [];
         let selectedModelIds = new Set();
@@ -197,96 +205,77 @@
             try {
                 const response = await fetch('/api/models-with-counts');
                 const data = await response.json();
-                if (data.success) {
-                    allModels = data.models;
-                    renderModels();
-                }
+                if (data.success) { allModels = data.models; renderModels(); }
             } catch (error) {
                 console.error('Error loading models:', error);
-                document.getElementById('modelList').innerHTML = '<div class="error">Error loading models</div>';
+                document.getElementById('modelList').innerHTML = '<div class="empty-state"><p>Error loading models</p></div>';
             }
         }
 
         function renderModels() {
-            const searchTerm = document.getElementById('modelSearchInput').value.toLowerCase();
-            const modelList = document.getElementById('modelList');
+            const term = document.getElementById('modelSearchInput').value.toLowerCase();
+            const list = document.getElementById('modelList');
+            let filtered = allModels.filter(m => m.name.toLowerCase().includes(term));
+            filtered.sort(currentSort === 'alpha' ? (a, b) => a.name.localeCompare(b.name) : (a, b) => b.count - a.count);
 
-            let filtered = allModels.filter(m => m.name.toLowerCase().includes(searchTerm));
+            if (!filtered.length) { list.innerHTML = '<div class="empty-state"><p>No models found</p></div>'; return; }
 
-            if (currentSort === 'alpha') {
-                filtered.sort((a, b) => a.name.localeCompare(b.name));
-            } else {
-                filtered.sort((a, b) => b.count - a.count);
-            }
-
-            if (filtered.length === 0) {
-                modelList.innerHTML = '<div class="empty-state"><p>No models found</p></div>';
-                return;
-            }
-
-            modelList.innerHTML = filtered.map(m => `
-                <div class="tag-item ${selectedModelIds.has(m.id) ? 'selected' : ''}" data-id="${m.id}" data-name="${escapeHtml(m.name)}">
-                    <span class="tag-name">${escapeHtml(m.name)}</span>
-                    <span class="tag-count">${m.count}</span>
+            list.innerHTML = filtered.map(m => `
+                <div class="facet-item ${selectedModelIds.has(m.id) ? 'selected' : ''}" data-id="${m.id}" data-name="${escapeHtml(m.name)}">
+                    <span>${escapeHtml(m.name)}</span>
+                    <span class="facet-count">${m.count}</span>
                 </div>
             `).join('');
 
-            document.querySelectorAll('.tag-item').forEach(el => {
+            list.querySelectorAll('.facet-item').forEach(el => {
                 el.addEventListener('click', () => {
                     const id = parseInt(el.dataset.id, 10);
-                    if (selectedModelIds.has(id)) {
-                        selectedModelIds.delete(id);
-                    } else {
-                        selectedModelIds.add(id);
-                    }
+                    selectedModelIds.has(id) ? selectedModelIds.delete(id) : selectedModelIds.add(id);
                     renderModels();
-                    updateSelectedDisplay();
+                    renderSelectedChips();
                     loadImages();
                 });
             });
         }
 
-        function updateSelectedDisplay() {
-            const container = document.getElementById('selectedModels');
-            if (selectedModelIds.size === 0) {
-                container.innerHTML = '';
-                document.getElementById('clearFiltersBtn').style.display = 'none';
-                return;
-            }
-            container.innerHTML = Array.from(selectedModelIds).map(id => {
+        function renderSelectedChips() {
+            const row = document.getElementById('selectedChipsRow');
+            if (selectedModelIds.size === 0) { row.style.display = 'none'; return; }
+            row.style.display = 'flex';
+            row.innerHTML = Array.from(selectedModelIds).map(id => {
                 const model = allModels.find(m => m.id === id);
-                const name = model ? model.name : id;
-                return `
-                    <div class="selected-tag-badge">
-                        ${escapeHtml(name)}
-                        <button onclick="removeModel(${id})" type="button">×</button>
-                    </div>
-                `;
-            }).join('');
-            document.getElementById('clearFiltersBtn').style.display = 'block';
-        }
+                return `<span class="selected-chip">${escapeHtml(model ? model.name : id)}<button data-id="${id}">&times;</button></span>`;
+            }).join('') + '<button class="clear-filters-btn" id="clearFiltersBtn">Clear all</button>';
 
-        function removeModel(id) {
-            selectedModelIds.delete(id);
-            renderModels();
-            updateSelectedDisplay();
-            loadImages();
+            row.querySelectorAll('button[data-id]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    selectedModelIds.delete(parseInt(btn.dataset.id, 10));
+                    renderModels(); renderSelectedChips(); loadImages();
+                });
+            });
+            document.getElementById('clearFiltersBtn').addEventListener('click', () => {
+                selectedModelIds.clear();
+                renderModels(); renderSelectedChips(); loadImages();
+            });
         }
 
         async function loadImages() {
+            const container = document.getElementById('imagesContainer');
+            const resultsInfo = document.getElementById('resultsInfo');
+
             if (selectedModelIds.size === 0) {
-                document.getElementById('imagesContainer').innerHTML = `
+                container.innerHTML = `
                     <div class="empty-state">
                         <i class="fas fa-search"></i>
                         <h2>Select a model to view images</h2>
-                        <p>Click on a name in the sidebar to filter images</p>
+                        <p>Click a name in the sidebar to filter images across all collections</p>
                     </div>
                 `;
-                document.getElementById('resultsInfo').style.display = 'none';
+                resultsInfo.style.display = 'none';
                 return;
             }
 
-            document.getElementById('imagesContainer').innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading images...</div>';
+            container.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading images...</div>';
 
             try {
                 const matchMode = document.querySelector('input[name="matchMode"]:checked').value;
@@ -299,19 +288,20 @@
                 if (data.success) {
                     renderImages(data.images);
                     document.getElementById('resultCount').textContent = data.count;
-                    document.getElementById('resultsInfo').style.display = 'flex';
+                    resultsInfo.style.display = 'flex';
                 } else {
-                    document.getElementById('imagesContainer').innerHTML = '<div class="error">Error loading images</div>';
+                    container.innerHTML = '<div class="empty-state"><p>Error loading images</p></div>';
                 }
             } catch (error) {
                 console.error('Error loading images:', error);
-                document.getElementById('imagesContainer').innerHTML = '<div class="error">Error loading images</div>';
+                container.innerHTML = '<div class="empty-state"><p>Error loading images</p></div>';
             }
         }
 
         function renderImages(images) {
+            const container = document.getElementById('imagesContainer');
             if (images.length === 0) {
-                document.getElementById('imagesContainer').innerHTML = `
+                container.innerHTML = `
                     <div class="empty-state">
                         <i class="fas fa-inbox"></i>
                         <h2>No images found</h2>
@@ -321,20 +311,29 @@
                 return;
             }
 
-            const grid = `
+            container.innerHTML = `
                 <div class="images-grid">
-                    ${images.map(img => `
-                        <div class="image-card" onclick="openImage('${escapeHtml(img.url)}')">
-                            <img src="${escapeHtml(img.url)}" alt="${escapeHtml(img.filename)}" class="image-card-img">
-                            <div class="image-card-info">
-                                <div class="image-card-filename" title="${escapeHtml(img.filename)}">${escapeHtml(img.filename.substring(0, 30))}${img.filename.length > 30 ? '...' : ''}</div>
-                                <div class="image-card-collection">${escapeHtml(img.collection)}</div>
+                    ${images.map(img => {
+                        const bodyParts = Object.entries(img.body_parts || {});
+                        const tags = img.tags || [];
+                        const badges = [
+                            ...bodyParts.slice(0, 2).map(([part]) => `<span class="card-badge badge-bodypart">${escapeHtml(part)}</span>`),
+                            ...tags.slice(0, 3).map(t => `<span class="card-badge badge-tag">${escapeHtml(t)}</span>`),
+                        ];
+                        const totalExtra = bodyParts.length + tags.length - badges.length;
+                        if (totalExtra > 0) badges.push(`<span class="card-badge badge-more">+${totalExtra}</span>`);
+                        return `
+                            <div class="image-card" onclick="openImage('${escapeHtml(img.url)}')">
+                                <img src="${escapeHtml(img.url)}" alt="${escapeHtml(img.filename)}" class="image-card-img" loading="lazy">
+                                <div class="image-card-info">
+                                    <div class="image-card-collection">${escapeHtml(img.collection)}</div>
+                                    <div class="image-card-badges">${badges.join('')}</div>
+                                </div>
                             </div>
-                        </div>
-                    `).join('')}
+                        `;
+                    }).join('')}
                 </div>
             `;
-            document.getElementById('imagesContainer').innerHTML = grid;
         }
 
         function openImage(url) {
@@ -344,18 +343,12 @@
                 background: rgba(0,0,0,0.9); display: flex; align-items: center;
                 justify-content: center; z-index: 1000; cursor: pointer;
             `;
-            modal.innerHTML = `<img src="${escapeHtml(url)}" style="max-width: 90vw; max-height: 90vh; object-fit: contain;">`;
+            modal.innerHTML = `<img src="${escapeHtml(url)}" style="max-width: 90vw; max-height: 90vh; object-fit: contain; border-radius: 8px;">`;
             modal.addEventListener('click', () => modal.remove());
             document.body.appendChild(modal);
         }
 
-        function escapeHtml(text) {
-            const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-            return String(text).replace(/[&<>"']/g, m => map[m]);
-        }
-
         document.getElementById('modelSearchInput').addEventListener('input', renderModels);
-
         document.querySelectorAll('[data-sort]').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 document.querySelectorAll('[data-sort]').forEach(b => b.classList.remove('active'));
@@ -364,17 +357,7 @@
                 renderModels();
             });
         });
-
-        document.querySelectorAll('input[name="matchMode"]').forEach(radio => {
-            radio.addEventListener('change', loadImages);
-        });
-
-        document.getElementById('clearFiltersBtn').addEventListener('click', () => {
-            selectedModelIds.clear();
-            renderModels();
-            updateSelectedDisplay();
-            loadImages();
-        });
+        document.querySelectorAll('input[name="matchMode"]').forEach(r => r.addEventListener('change', loadImages));
 
         loadModels();
     </script>

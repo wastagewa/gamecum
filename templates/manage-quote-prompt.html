@@ -70,6 +70,34 @@
             gap: 0.75rem;
             margin-top: 1.2rem;
         }
+        .prompt-divider {
+            border: none;
+            border-top: 1px solid var(--border-color);
+            margin: 2rem 0;
+        }
+        .test-gen-section h3 {
+            font-size: 1.1rem;
+            margin-bottom: 0.6rem;
+            color: var(--primary-color);
+        }
+        .test-gen-result {
+            margin-top: 1rem;
+            padding: 1rem 1.1rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+        .test-gen-result.success {
+            background: rgba(34,197,94,.1);
+            border: 1px solid rgba(34,197,94,.35);
+            color: var(--text-color);
+        }
+        .test-gen-result.error {
+            background: rgba(239,68,68,.1);
+            border: 1px solid rgba(239,68,68,.35);
+            color: var(--text-color);
+        }
     </style>
 </head>
 <body>
@@ -120,11 +148,26 @@
                 <button id="savePromptBtn" class="btn btn-primary"><i class="fas fa-check"></i> Save</button>
                 <button id="resetPromptBtn" class="btn btn-secondary"><i class="fas fa-undo"></i> Reset to Default</button>
             </div>
+
+            <hr class="prompt-divider">
+
+            <div class="test-gen-section">
+                <h3><i class="fas fa-vial"></i> Test Generation</h3>
+                <p class="prompt-hint" style="margin-bottom:1rem;">
+                    Runs one real generation right now using a made-up sample image, your saved (unsaved edits
+                    above are ignored) prompt, and the configured model <code id="testGenModelName">…</code> —
+                    the exact same client-side call the app makes for real images. Use this to check your
+                    HuggingFace token/config without having to open a real image.
+                </p>
+                <button id="testGenBtn" class="btn btn-secondary"><i class="fas fa-play"></i> Run Test Generation</button>
+                <div id="testGenResult" class="test-gen-result" style="display:none;"></div>
+            </div>
         </div>
     </div>
 
     <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/hf-client.js') }}"></script>
     <script src="{{ url_for('static', filename='js/manage-quote-prompt.js') }}"></script>
 </body>
 </html>
