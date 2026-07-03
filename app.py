@@ -274,6 +274,30 @@ def init_db():
                 UNIQUE(video_id, user_id)
             )
         """)
+        # Models = subject/person names appearing in an image (many-to-many, since
+        # multiple people can appear in one image). Kept as a proper lookup table
+        # (not a free-text array like `images.tags`) so admins can rename/delete a
+        # canonical name without rewriting every image row that references it.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS models (
+                id          SERIAL PRIMARY KEY,
+                name        VARCHAR(255) NOT NULL,
+                created_at  TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_models_name_lower ON models (LOWER(name))
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS image_models (
+                image_id  INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+                model_id  INTEGER NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+                PRIMARY KEY (image_id, model_id)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_image_models_model_id ON image_models (model_id)
+        """)
         cur.close()
         print("DB tables ready.")
     except Exception as e:
@@ -476,6 +500,209 @@ def _set_image_locked(collection: str, filename: str, locked: bool):
             (locked, collection, filename)
         )
         conn.commit()
+    finally:
+        _release_db(conn)
+
+# ── Models (subject/person names appearing in an image) ───────────────────────
+# Kept as a proper lookup table + many-to-many join (not a free-text array like
+# images.tags) because admins need to rename/delete a canonical name without
+# rewriting every image row that references it, and an image can show multiple
+# people at once.
+
+def _get_all_models():
+    """Every model as {id, name}, alphabetical — feeds the tagger's autocomplete."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name FROM models ORDER BY name")
+        return [{'id': r[0], 'name': r[1]} for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+
+def _get_models_with_counts():
+    """Every model as {id, name, count}, sorted by image count desc then name."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT m.id, m.name, COUNT(im.image_id)
+            FROM models m
+            LEFT JOIN image_models im ON im.model_id = m.id
+            GROUP BY m.id, m.name
+            ORDER BY COUNT(im.image_id) DESC, m.name ASC
+        """)
+        return [{'id': r[0], 'name': r[1], 'count': r[2]} for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+
+def _create_model(name: str):
+    """Insert a new model. Returns its id, or None if the name already exists (case-insensitive)."""
+    name = (name or '').strip()
+    if not name:
+        return None
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM models WHERE LOWER(name) = LOWER(%s)", (name,))
+        if cur.fetchone():
+            return None
+        cur.execute("INSERT INTO models (name) VALUES (%s) RETURNING id", (name,))
+        model_id = cur.fetchone()[0]
+        conn.commit()
+        return model_id
+    finally:
+        _release_db(conn)
+
+def _rename_model(model_id: int, new_name: str):
+    """Rename a model in place. Returns False if not found or the name collides with another model."""
+    new_name = (new_name or '').strip()
+    if not new_name:
+        return False
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM models WHERE LOWER(name) = LOWER(%s) AND id != %s", (new_name, model_id))
+        if cur.fetchone():
+            return False
+        cur.execute("UPDATE models SET name = %s WHERE id = %s", (new_name, model_id))
+        updated = cur.rowcount > 0
+        conn.commit()
+        return updated
+    finally:
+        _release_db(conn)
+
+def _delete_model(model_id: int):
+    """Delete a model. Cascades via FK to unlink it from every image that had it."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM models WHERE id = %s", (model_id,))
+        deleted = cur.rowcount > 0
+        conn.commit()
+        return deleted
+    finally:
+        _release_db(conn)
+
+def _get_image_model_ids(collection: str, filename: str):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT im.model_id FROM image_models im
+            JOIN images i ON i.id = im.image_id
+            WHERE i.collection_name = %s AND i.filename = %s
+        """, (collection, filename))
+        return [r[0] for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+
+def _set_image_models(collection: str, filename: str, model_ids: list):
+    """Replace the full set of models linked to one image."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM images WHERE collection_name = %s AND filename = %s",
+            (collection, filename)
+        )
+        row = cur.fetchone()
+        if not row:
+            return
+        image_id = row[0]
+        cur.execute("DELETE FROM image_models WHERE image_id = %s", (image_id,))
+        clean_ids = sorted({int(m) for m in model_ids if m is not None})
+        if clean_ids:
+            cur.executemany(
+                "INSERT INTO image_models (image_id, model_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                [(image_id, mid) for mid in clean_ids]
+            )
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _bulk_add_image_models(collection: str, filenames: list, model_ids: list):
+    """Add (union, non-destructive) a set of models to many images at once."""
+    clean_ids = sorted({int(m) for m in model_ids if m is not None})
+    if not filenames or not clean_ids:
+        return
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM images WHERE collection_name = %s AND filename = ANY(%s)",
+            (collection, list(filenames))
+        )
+        image_ids = [r[0] for r in cur.fetchall()]
+        pairs = [(iid, mid) for iid in image_ids for mid in clean_ids]
+        if pairs:
+            cur.executemany(
+                "INSERT INTO image_models (image_id, model_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                pairs
+            )
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _bulk_add_image_tags(collection: str, filenames: list, tags: list):
+    """Add (union, non-destructive) free-text tags to many images at once."""
+    clean_tags = [str(t).strip() for t in tags if t and str(t).strip()]
+    if not filenames or not clean_tags:
+        return
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE images
+            SET tags = (SELECT ARRAY(SELECT DISTINCT UNNEST(tags || %s)))
+            WHERE collection_name = %s AND filename = ANY(%s)
+        """, (clean_tags, collection, list(filenames)))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _get_collection_image_model_map(collection: str):
+    """Return {filename: [{'id':.., 'name':..}, ...]} for every image in a collection."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT i.filename, m.id, m.name
+            FROM images i
+            JOIN image_models im ON im.image_id = i.id
+            JOIN models m ON m.id = im.model_id
+            WHERE i.collection_name = %s
+        """, (collection,))
+        result = {}
+        for filename, model_id, model_name in cur.fetchall():
+            result.setdefault(filename, []).append({'id': model_id, 'name': model_name})
+        return result
+    finally:
+        _release_db(conn)
+
+def _get_images_by_model_ids(model_ids: list, match_all: bool = False):
+    """Image rows (across all collections) associated with any/all of the given model ids."""
+    if not model_ids:
+        return []
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        if match_all:
+            cur.execute("""
+                SELECT i.collection_name, i.filename, i.url, i.tags
+                FROM images i
+                JOIN image_models im ON im.image_id = i.id
+                WHERE im.model_id = ANY(%s)
+                GROUP BY i.id
+                HAVING COUNT(DISTINCT im.model_id) = %s
+            """, (model_ids, len(set(model_ids))))
+        else:
+            cur.execute("""
+                SELECT DISTINCT i.collection_name, i.filename, i.url, i.tags
+                FROM images i
+                JOIN image_models im ON im.image_id = i.id
+                WHERE im.model_id = ANY(%s)
+            """, (model_ids,))
+        return cur.fetchall()
     finally:
         _release_db(conn)
 
@@ -1630,6 +1857,7 @@ def api_collection_images(collection_name):
         return jsonify({'success': False, 'error': 'Collection not found'}), 404
 
     tags_data = _load_tags()
+    image_models = _get_collection_image_model_map(safe_name)
     images = []
     prefix = f"{safe_name}/"
 
@@ -1645,7 +1873,8 @@ def api_collection_images(collection_name):
             'url':        _b2_sign_url(value['url']),
             'tags':       normalized['tags'],
             'body_parts': normalized.get('body_parts', {}),
-            'locked':     normalized.get('locked', False)
+            'locked':     normalized.get('locked', False),
+            'models':     image_models.get(filename, [])
         })
 
     return jsonify({'success': True, 'images': images})
@@ -1740,21 +1969,25 @@ def tagger_view(collection_name):
     if not _collection_exists(safe_name):
         return "Collection not found", 404
     tags_data = _load_tags()
+    image_models = _get_collection_image_model_map(safe_name)
     images = []
     prefix = f"{safe_name}/"
     for key, value in sorted(tags_data.items()):
         if not key.startswith(prefix) or not isinstance(value, dict) or not value.get('url'):
             continue
+        filename = key[len(prefix):]
         images.append({
-            'filename':   key[len(prefix):],
+            'filename':   filename,
             'url':        _b2_sign_url(value['url']),
             'tags':       value.get('tags', []),
             'body_parts': value.get('body_parts', {}),
+            'model_ids':  [m['id'] for m in image_models.get(filename, [])],
         })
     return render_template('tagger.html',
                            collection=safe_name,
                            images=images,
-                           body_parts=BODY_PARTS)
+                           body_parts=BODY_PARTS,
+                           all_models=_get_all_models())
 
 
 @app.route('/api/images/<collection_name>/<filename>/body-parts', methods=['POST'])
@@ -1787,7 +2020,123 @@ def api_update_body_parts(collection_name, filename):
         finally:
             _release_db(conn)
 
+    if 'model_ids' in data:
+        raw_model_ids = data['model_ids']
+        if not isinstance(raw_model_ids, list):
+            return jsonify({'success': False, 'error': 'model_ids must be an array'}), 400
+        _set_image_models(safe_name, filename, raw_model_ids)
+
     return jsonify({'success': True})
+
+
+@app.route('/api/images/<collection_name>/bulk-tag', methods=['POST'])
+@admin_required
+def api_bulk_tag_images(collection_name):
+    """Apply tags and/or model names to many images at once (additive — does not remove existing values)."""
+    data = request.get_json() or {}
+    safe_name = _safe_collection_name(collection_name)
+
+    filenames = data.get('filenames', [])
+    if not isinstance(filenames, list) or not filenames:
+        return jsonify({'success': False, 'error': 'filenames must be a non-empty array'}), 400
+
+    tags = data.get('tags', [])
+    model_ids = data.get('model_ids', [])
+    if not isinstance(tags, list) or not isinstance(model_ids, list):
+        return jsonify({'success': False, 'error': 'tags and model_ids must be arrays'}), 400
+
+    if tags:
+        _bulk_add_image_tags(safe_name, filenames, tags)
+    if model_ids:
+        _bulk_add_image_models(safe_name, filenames, model_ids)
+
+    return jsonify({'success': True, 'updated': len(filenames)})
+
+
+@app.route('/api/models', methods=['GET'])
+def api_list_models():
+    """List all models (id + name) — feeds the tagger's autocomplete."""
+    return jsonify({'success': True, 'models': _get_all_models()})
+
+
+@app.route('/api/models-with-counts', methods=['GET'])
+def api_models_with_counts():
+    """List all models with how many images reference each — feeds admin page + browse page."""
+    return jsonify({'success': True, 'models': _get_models_with_counts()})
+
+
+@app.route('/api/models', methods=['POST'])
+@admin_required
+def api_create_model():
+    """Admin: register a new canonical model name."""
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'success': False, 'error': 'Name required'}), 400
+    model_id = _create_model(name)
+    if model_id is None:
+        return jsonify({'success': False, 'error': 'A model with that name already exists'}), 400
+    return jsonify({'success': True, 'model': {'id': model_id, 'name': name}})
+
+
+@app.route('/api/models/<int:model_id>/rename', methods=['POST'])
+@admin_required
+def api_rename_model(model_id):
+    """Admin: rename a model. Propagates instantly since images reference it by id."""
+    data = request.get_json() or {}
+    new_name = (data.get('name') or '').strip()
+    if not new_name:
+        return jsonify({'success': False, 'error': 'Name required'}), 400
+    if not _rename_model(model_id, new_name):
+        return jsonify({'success': False, 'error': 'Model not found, or name already in use'}), 400
+    return jsonify({'success': True, 'model': {'id': model_id, 'name': new_name}})
+
+
+@app.route('/api/models/<int:model_id>/delete', methods=['POST'])
+@admin_required
+def api_delete_model(model_id):
+    """Admin: delete a model. Cascades to unlink it from every image that had it."""
+    if not _delete_model(model_id):
+        return jsonify({'success': False, 'error': 'Model not found'}), 404
+    return jsonify({'success': True})
+
+
+@app.route('/api/images-by-model', methods=['GET'])
+def api_images_by_model():
+    """Get images filtered by model id(s), across all collections."""
+    model_ids_raw = request.args.getlist('model_id')
+    match_all = request.args.get('matchAll', 'false').lower() == 'true'
+
+    if not model_ids_raw:
+        return jsonify({'success': False, 'error': 'No model_id provided'}), 400
+
+    try:
+        model_ids = [int(m) for m in model_ids_raw]
+    except ValueError:
+        return jsonify({'success': False, 'error': 'model_id must be numeric'}), 400
+
+    rows = _get_images_by_model_ids(model_ids, match_all)
+    images = [{
+        'collection': coll,
+        'filename':   fname,
+        'url':        _b2_sign_url(url),
+        'tags':       list(tags) if tags else [],
+    } for coll, fname, url, tags in rows]
+
+    return jsonify({'success': True, 'images': images, 'count': len(images)})
+
+
+@app.route('/manage-models')
+@admin_required
+def manage_models_view():
+    """Render model (subject/person) management page."""
+    return render_template('manage-models.html', models=_get_models_with_counts())
+
+
+@app.route('/models')
+def models_view():
+    """Display all models with image counts — browse images by subject/person name."""
+    return render_template('model-browser.html')
 
 
 @app.route('/api/collections')

@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Browse Images by Model</title>
+
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+
+    <script>
+        (function(){
+            var theme = null;
+            try { theme = localStorage.getItem('imgur.theme'); } catch(e) {}
+            if(!theme){
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                theme = prefersDark ? 'dark' : 'light';
+            }
+            if(theme === 'dark'){
+                document.documentElement.setAttribute('data-theme','dark');
+                document.documentElement.style.colorScheme = 'dark';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                document.documentElement.style.colorScheme = 'light';
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+    <style>
+        .tag-browser-container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+        .tag-browser-header { margin-bottom: 2rem; text-align: center; }
+        .tag-browser-header h1 { font-size: 2.5rem; margin-bottom: 0.5rem; color: var(--primary-color); }
+        .tag-browser-header p { font-size: 1.1rem; color: var(--text-secondary); }
+        .tag-browser-layout { display: grid; grid-template-columns: 350px 1fr; gap: 2rem; margin-bottom: 2rem; }
+        .tag-sidebar {
+            background: var(--card-bg); border-radius: 12px; padding: 1.5rem;
+            border: 1px solid var(--border-color); max-height: 80vh; overflow-y: auto;
+            position: sticky; top: 100px;
+        }
+        .tag-sidebar h2 { font-size: 1.3rem; margin-bottom: 1rem; color: var(--primary-color); }
+        .tag-search { margin-bottom: 1.5rem; }
+        .tag-search input {
+            width: 100%; padding: 0.75rem; border: 1px solid var(--border-color);
+            border-radius: 8px; background: var(--input-bg); color: var(--text-color); font-size: 1rem;
+        }
+        .tag-sort-options { margin-bottom: 1.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .tag-sort-btn {
+            padding: 0.5rem 1rem; border: 1px solid var(--border-color); border-radius: 6px;
+            background: var(--input-bg); color: var(--text-color); cursor: pointer; font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+        .tag-sort-btn.active { background: var(--primary-color); color: white; border-color: var(--primary-color); }
+        .tag-sort-btn:hover { background: var(--primary-color); color: white; border-color: var(--primary-color); }
+        .tag-list { display: flex; flex-direction: column; gap: 0.5rem; }
+        .tag-item {
+            padding: 0.75rem; background: var(--input-bg); border: 1px solid var(--border-color);
+            border-radius: 6px; cursor: pointer; transition: all 0.2s ease;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .tag-item:hover { background: var(--primary-color); color: white; border-color: var(--primary-color); }
+        .tag-item.selected { background: var(--primary-color); color: white; border-color: var(--primary-color); }
+        .tag-name { flex: 1; word-break: break-word; }
+        .tag-count {
+            font-weight: bold; font-size: 0.9rem; margin-left: 0.5rem;
+            background: rgba(255,255,255,0.2); padding: 0.25rem 0.5rem; border-radius: 4px;
+        }
+        .tag-items-wrapper { max-height: calc(80vh - 300px); overflow-y: auto; }
+        .tag-browser-main { background: var(--card-bg); border-radius: 12px; padding: 1.5rem; border: 1px solid var(--border-color); }
+        .filter-bar { margin-bottom: 1.5rem; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
+        .selected-tags { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+        .selected-tag-badge {
+            background: var(--primary-color); color: white; padding: 0.5rem 1rem; border-radius: 20px;
+            display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;
+        }
+        .selected-tag-badge button { background: none; border: none; color: white; cursor: pointer; padding: 0; margin-left: 0.25rem; font-size: 1.1rem; }
+        .match-mode { display: flex; gap: 0.5rem; }
+        .match-mode label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+        .match-mode input { cursor: pointer; }
+        .images-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1.5rem; margin-top: 1.5rem; }
+        .image-card {
+            background: var(--input-bg); border-radius: 8px; overflow: hidden; border: 1px solid var(--border-color);
+            transition: all 0.3s ease; cursor: pointer; position: relative;
+        }
+        .image-card:hover { transform: translateY(-5px); border-color: var(--primary-color); box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+        .image-card-img { width: 100%; aspect-ratio: 1; object-fit: cover; }
+        .image-card-info { padding: 1rem; }
+        .image-card-filename { font-size: 0.85rem; color: var(--text-secondary); word-break: break-all; margin-bottom: 0.5rem; }
+        .image-card-collection {
+            font-size: 0.8rem; background: var(--primary-color); color: white; padding: 0.25rem 0.5rem;
+            border-radius: 4px; display: inline-block; margin-bottom: 0.5rem;
+        }
+        .loading { text-align: center; padding: 2rem; color: var(--text-secondary); }
+        .empty-state { text-align: center; padding: 3rem; color: var(--text-secondary); }
+        .empty-state i { font-size: 3rem; margin-bottom: 1rem; opacity: 0.5; }
+        .results-info { font-size: 1rem; color: var(--text-secondary); margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center; }
+        .results-count { font-weight: bold; color: var(--primary-color); }
+        @media (max-width: 1024px) {
+            .tag-browser-layout { grid-template-columns: 1fr; }
+            .tag-sidebar { position: static; max-height: none; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand">
+                <i class="fas fa-images"></i>
+                <span>ImgurMemory</span>
+            </a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu" id="collectionsDropdown"></div>
+                </div>
+                <a href="/tags" class="navbar-link"><i class="fas fa-tags"></i> Browse Tags</a>
+                <a href="/models" class="navbar-link active"><i class="fas fa-user"></i> Browse Models</a>
+                <a href="/manage-collections" class="navbar-link"><i class="fas fa-cog"></i> Manage</a>
+                <a href="/manage-models" class="navbar-link"><i class="fas fa-user-tag"></i> Manage Models</a>
+                <button id="themeToggle" class="navbar-theme-toggle" type="button">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <main class="main-content">
+        <div class="tag-browser-container">
+            <div class="tag-browser-header">
+                <h1><i class="fas fa-user"></i> Browse Images by Model</h1>
+                <p>Find every image a subject/person appears in, across all collections</p>
+            </div>
+
+            <div class="tag-browser-layout">
+                <aside class="tag-sidebar">
+                    <h2><i class="fas fa-list"></i> Models</h2>
+
+                    <div class="tag-search">
+                        <input type="text" id="modelSearchInput" placeholder="Search models...">
+                    </div>
+
+                    <div class="tag-sort-options">
+                        <button class="tag-sort-btn active" data-sort="count">
+                            <i class="fas fa-sort-numeric-down"></i> Count
+                        </button>
+                        <button class="tag-sort-btn" data-sort="alpha">
+                            <i class="fas fa-sort-alpha-down"></i> Name
+                        </button>
+                    </div>
+
+                    <div class="tag-items-wrapper">
+                        <div class="tag-list" id="modelList">
+                            <div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading models...</div>
+                        </div>
+                    </div>
+                </aside>
+
+                <div class="tag-browser-main">
+                    <div class="filter-bar">
+                        <div class="selected-tags" id="selectedModels"></div>
+                        <div class="match-mode">
+                            <label><input type="radio" name="matchMode" value="any" checked> Any model</label>
+                            <label><input type="radio" name="matchMode" value="all"> All models</label>
+                        </div>
+                        <button id="clearFiltersBtn" style="margin-left: auto; padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-color); cursor: pointer; display: none;">
+                            Clear Filters
+                        </button>
+                    </div>
+
+                    <div class="results-info" id="resultsInfo" style="display: none;">
+                        <span>Showing <span class="results-count" id="resultCount">0</span> images</span>
+                    </div>
+
+                    <div id="imagesContainer">
+                        <div class="empty-state">
+                            <i class="fas fa-search"></i>
+                            <h2>Select a model to view images</h2>
+                            <p>Click on a name in the sidebar to filter images</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+    <script>
+        let allModels = [];
+        let selectedModelIds = new Set();
+        let currentSort = 'count';
+
+        async function loadModels() {
+            try {
+                const response = await fetch('/api/models-with-counts');
+                const data = await response.json();
+                if (data.success) {
+                    allModels = data.models;
+                    renderModels();
+                }
+            } catch (error) {
+                console.error('Error loading models:', error);
+                document.getElementById('modelList').innerHTML = '<div class="error">Error loading models</div>';
+            }
+        }
+
+        function renderModels() {
+            const searchTerm = document.getElementById('modelSearchInput').value.toLowerCase();
+            const modelList = document.getElementById('modelList');
+
+            let filtered = allModels.filter(m => m.name.toLowerCase().includes(searchTerm));
+
+            if (currentSort === 'alpha') {
+                filtered.sort((a, b) => a.name.localeCompare(b.name));
+            } else {
+                filtered.sort((a, b) => b.count - a.count);
+            }
+
+            if (filtered.length === 0) {
+                modelList.innerHTML = '<div class="empty-state"><p>No models found</p></div>';
+                return;
+            }
+
+            modelList.innerHTML = filtered.map(m => `
+                <div class="tag-item ${selectedModelIds.has(m.id) ? 'selected' : ''}" data-id="${m.id}" data-name="${escapeHtml(m.name)}">
+                    <span class="tag-name">${escapeHtml(m.name)}</span>
+                    <span class="tag-count">${m.count}</span>
+                </div>
+            `).join('');
+
+            document.querySelectorAll('.tag-item').forEach(el => {
+                el.addEventListener('click', () => {
+                    const id = parseInt(el.dataset.id, 10);
+                    if (selectedModelIds.has(id)) {
+                        selectedModelIds.delete(id);
+                    } else {
+                        selectedModelIds.add(id);
+                    }
+                    renderModels();
+                    updateSelectedDisplay();
+                    loadImages();
+                });
+            });
+        }
+
+        function updateSelectedDisplay() {
+            const container = document.getElementById('selectedModels');
+            if (selectedModelIds.size === 0) {
+                container.innerHTML = '';
+                document.getElementById('clearFiltersBtn').style.display = 'none';
+                return;
+            }
+            container.innerHTML = Array.from(selectedModelIds).map(id => {
+                const model = allModels.find(m => m.id === id);
+                const name = model ? model.name : id;
+                return `
+                    <div class="selected-tag-badge">
+                        ${escapeHtml(name)}
+                        <button onclick="removeModel(${id})" type="button">×</button>
+                    </div>
+                `;
+            }).join('');
+            document.getElementById('clearFiltersBtn').style.display = 'block';
+        }
+
+        function removeModel(id) {
+            selectedModelIds.delete(id);
+            renderModels();
+            updateSelectedDisplay();
+            loadImages();
+        }
+
+        async function loadImages() {
+            if (selectedModelIds.size === 0) {
+                document.getElementById('imagesContainer').innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-search"></i>
+                        <h2>Select a model to view images</h2>
+                        <p>Click on a name in the sidebar to filter images</p>
+                    </div>
+                `;
+                document.getElementById('resultsInfo').style.display = 'none';
+                return;
+            }
+
+            document.getElementById('imagesContainer').innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Loading images...</div>';
+
+            try {
+                const matchMode = document.querySelector('input[name="matchMode"]:checked').value;
+                const idsParam = Array.from(selectedModelIds).map(id => `model_id=${id}`).join('&');
+                const matchAllParam = matchMode === 'all' ? '&matchAll=true' : '';
+
+                const response = await fetch(`/api/images-by-model?${idsParam}${matchAllParam}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    renderImages(data.images);
+                    document.getElementById('resultCount').textContent = data.count;
+                    document.getElementById('resultsInfo').style.display = 'flex';
+                } else {
+                    document.getElementById('imagesContainer').innerHTML = '<div class="error">Error loading images</div>';
+                }
+            } catch (error) {
+                console.error('Error loading images:', error);
+                document.getElementById('imagesContainer').innerHTML = '<div class="error">Error loading images</div>';
+            }
+        }
+
+        function renderImages(images) {
+            if (images.length === 0) {
+                document.getElementById('imagesContainer').innerHTML = `
+                    <div class="empty-state">
+                        <i class="fas fa-inbox"></i>
+                        <h2>No images found</h2>
+                        <p>Try selecting a different model</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const grid = `
+                <div class="images-grid">
+                    ${images.map(img => `
+                        <div class="image-card" onclick="openImage('${escapeHtml(img.url)}')">
+                            <img src="${escapeHtml(img.url)}" alt="${escapeHtml(img.filename)}" class="image-card-img">
+                            <div class="image-card-info">
+                                <div class="image-card-filename" title="${escapeHtml(img.filename)}">${escapeHtml(img.filename.substring(0, 30))}${img.filename.length > 30 ? '...' : ''}</div>
+                                <div class="image-card-collection">${escapeHtml(img.collection)}</div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            document.getElementById('imagesContainer').innerHTML = grid;
+        }
+
+        function openImage(url) {
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0,0,0,0.9); display: flex; align-items: center;
+                justify-content: center; z-index: 1000; cursor: pointer;
+            `;
+            modal.innerHTML = `<img src="${escapeHtml(url)}" style="max-width: 90vw; max-height: 90vh; object-fit: contain;">`;
+            modal.addEventListener('click', () => modal.remove());
+            document.body.appendChild(modal);
+        }
+
+        function escapeHtml(text) {
+            const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+            return String(text).replace(/[&<>"']/g, m => map[m]);
+        }
+
+        document.getElementById('modelSearchInput').addEventListener('input', renderModels);
+
+        document.querySelectorAll('[data-sort]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('[data-sort]').forEach(b => b.classList.remove('active'));
+                e.target.closest('[data-sort]').classList.add('active');
+                currentSort = e.target.closest('[data-sort]').dataset.sort;
+                renderModels();
+            });
+        });
+
+        document.querySelectorAll('input[name="matchMode"]').forEach(radio => {
+            radio.addEventListener('change', loadImages);
+        });
+
+        document.getElementById('clearFiltersBtn').addEventListener('click', () => {
+            selectedModelIds.clear();
+            renderModels();
+            updateSelectedDisplay();
+            loadImages();
+        });
+
+        loadModels();
+    </script>
+</body>
+</html>
