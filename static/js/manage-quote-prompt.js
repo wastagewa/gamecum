@@ -5,8 +5,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const message       = document.getElementById('promptMessage');
     const saveBtn       = document.getElementById('savePromptBtn');
     const resetBtn      = document.getElementById('resetPromptBtn');
+    const testGenBtn    = document.getElementById('testGenBtn');
+    const testGenResult = document.getElementById('testGenResult');
+    const testGenModelName = document.getElementById('testGenModelName');
 
     let defaultTemplate = '';
+    let savedTemplate   = '';
+    let currentModel    = '';
+
+    testGenBtn.disabled = true;  // re-enabled once loadTemplate() resolves below
 
     function updateCharCount() {
         const len = templateInput.value.length;
@@ -26,7 +33,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.success) {
                 templateInput.value = data.template;
                 defaultTemplate = data.default;
+                savedTemplate   = data.template;
+                currentModel    = data.model;
+                testGenModelName.textContent = currentModel;
                 updateCharCount();
+                testGenBtn.disabled = false;
             } else {
                 showMessage(data.error || 'Failed to load prompt', true);
             }
@@ -56,6 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const data = await res.json();
             if (data.success) {
+                savedTemplate = data.template;
                 showMessage('Prompt saved — new quotes will use this from now on.', false);
             } else {
                 showMessage(data.error || 'Failed to save prompt', true);
@@ -72,6 +84,42 @@ document.addEventListener('DOMContentLoaded', () => {
         templateInput.value = defaultTemplate;
         updateCharCount();
         showMessage('Reset in the editor — click Save to apply.', false);
+    });
+
+    function showTestResult(text, isError) {
+        testGenResult.style.display = 'block';
+        testGenResult.textContent = text;
+        testGenResult.className = 'test-gen-result ' + (isError ? 'error' : 'success');
+    }
+
+    testGenBtn.addEventListener('click', async () => {
+        testGenBtn.disabled = true;
+        showTestResult('Generating…', false);
+        try {
+            const tokenRes  = await fetch('/api/chat/token');
+            const tokenData = await tokenRes.json();
+            if (!tokenData.token) {
+                throw new Error('HuggingFace token not configured on the server (HF_TOKEN is empty).');
+            }
+
+            const nameInstruction = 'Address her directly by name ("Test Model") in the quote.';
+            const systemPrompt = savedTemplate.replace('{name_instruction}', nameInstruction);
+            const userMessage =
+                'Write the caption for a photo with these details:\n' +
+                'Tags: outdoor, smiling\nBody details: chest (nude)\nFeatured model: Test Model';
+
+            const quote = await callHuggingFaceChat({
+                token:        tokenData.token,
+                model:        currentModel,
+                systemPrompt,
+                userMessage,
+            });
+            showTestResult('✓ Success — the model generated:\n\n"' + quote + '"', false);
+        } catch (err) {
+            showTestResult('✗ ' + err.message, true);
+        } finally {
+            testGenBtn.disabled = false;
+        }
     });
 
     loadTemplate();

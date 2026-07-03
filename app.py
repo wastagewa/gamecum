@@ -746,7 +746,7 @@ def _get_images_by_model_ids(model_ids: list, match_all: bool = False):
         cur = conn.cursor()
         if match_all:
             cur.execute("""
-                SELECT i.collection_name, i.filename, i.url, i.tags
+                SELECT i.collection_name, i.filename, i.url, i.tags, i.body_parts
                 FROM images i
                 JOIN image_models im ON im.image_id = i.id
                 WHERE im.model_id = ANY(%s)
@@ -755,7 +755,7 @@ def _get_images_by_model_ids(model_ids: list, match_all: bool = False):
             """, (model_ids, len(set(model_ids))))
         else:
             cur.execute("""
-                SELECT DISTINCT i.collection_name, i.filename, i.url, i.tags
+                SELECT DISTINCT i.collection_name, i.filename, i.url, i.tags, i.body_parts
                 FROM images i
                 JOIN image_models im ON im.image_id = i.id
                 WHERE im.model_id = ANY(%s)
@@ -1545,7 +1545,12 @@ def api_save_ai_quote(collection_name, filename):
 def api_get_ai_quote_prompt_setting():
     """Admin: read the current (or default) AI-quote system prompt template."""
     template = _get_setting('ai_quote_system_prompt', DEFAULT_AI_QUOTE_SYSTEM_PROMPT)
-    return jsonify({'success': True, 'template': template, 'default': DEFAULT_AI_QUOTE_SYSTEM_PROMPT})
+    return jsonify({
+        'success':  True,
+        'template': template,
+        'default':  DEFAULT_AI_QUOTE_SYSTEM_PROMPT,
+        'model':    _QUOTE_HF_MODEL,
+    })
 
 
 @app.route('/api/settings/ai-quote-prompt', methods=['POST'])
@@ -2392,11 +2397,12 @@ def api_images_by_model():
 
     rows = _get_images_by_model_ids(model_ids, match_all)
     images = [{
-        'collection': coll,
-        'filename':   fname,
-        'url':        _b2_sign_url(url),
-        'tags':       list(tags) if tags else [],
-    } for coll, fname, url, tags in rows]
+        'collection':  coll,
+        'filename':    fname,
+        'url':         _b2_sign_url(url),
+        'tags':        list(tags) if tags else [],
+        'body_parts':  dict(body_parts) if body_parts else {},
+    } for coll, fname, url, tags, body_parts in rows]
 
     return jsonify({'success': True, 'images': images, 'count': len(images)})
 
@@ -2448,27 +2454,52 @@ def api_all_tags():
 
 @app.route('/api/tags/<collection>/<filename>')
 def api_image_tags(collection, filename):
-    """Get tags for a specific image."""
+    """Get tags, body-part ratings, and tagged model names for a specific image."""
     collection = _safe_collection_name(collection)
     image_key = _get_image_key(collection, filename)
     tags_data = _load_tags()
-    
-    if image_key in tags_data:
-        tags = tags_data[image_key]
-        # Handle both formats: list of strings or dict with 'tags' key
-        if isinstance(tags, list):
-            return jsonify({
-                'success': True,
-                'tags': tags,
-                'detailed': []
-            })
-        elif isinstance(tags, dict):
-            return jsonify({
-                'success': True,
-                'tags': tags.get('tags', []),
-                'detailed': tags.get('detailed', [])
-            })
-    return jsonify({'success': False, 'tags': []}), 404
+
+    if image_key not in tags_data:
+        return jsonify({'success': False, 'tags': []}), 404
+
+    entry = tags_data[image_key]
+    if isinstance(entry, list):
+        tags, detailed = entry, []
+    elif isinstance(entry, dict):
+        tags, detailed = entry.get('tags', []), entry.get('detailed', [])
+    else:
+        tags, detailed = [], []
+
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT i.body_parts, COALESCE(array_agg(m.name) FILTER (WHERE m.name IS NOT NULL), '{}')
+            FROM images i
+            LEFT JOIN image_models im ON im.image_id = i.id
+            LEFT JOIN models m ON m.id = im.model_id
+            WHERE i.collection_name = %s AND i.filename = %s
+            GROUP BY i.id
+        """, (collection, filename))
+        row = cur.fetchone()
+    finally:
+        _release_db(conn)
+
+    body_parts_raw = dict(row[0]) if row and row[0] else {}
+    body_parts = [
+        {'part': part, 'rating': rating, 'label': f"{part.title()} ({_BODY_PART_RATING_LABELS[rating]})"}
+        for part, rating in body_parts_raw.items()
+        if rating in _BODY_PART_RATING_LABELS
+    ]
+    model_names = list(row[1]) if row and row[1] else []
+
+    return jsonify({
+        'success': True,
+        'tags': tags,
+        'detailed': detailed,
+        'body_parts': body_parts,
+        'models': model_names,
+    })
 
 
 @app.route('/api/tags/<collection>/<filename>', methods=['PUT'])
@@ -2584,18 +2615,43 @@ def api_tags_with_counts():
     })
 
 
+def _get_all_image_extras():
+    """{'collection/filename': {'body_parts': {...}, 'models': [names...]}} for every image — used to enrich browse-page results with more than just free-text tags."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT i.collection_name, i.filename, i.body_parts,
+                   COALESCE(array_agg(m.name) FILTER (WHERE m.name IS NOT NULL), '{}')
+            FROM images i
+            LEFT JOIN image_models im ON im.image_id = i.id
+            LEFT JOIN models m ON m.id = im.model_id
+            GROUP BY i.id
+        """)
+        result = {}
+        for coll, fname, body_parts, model_names in cur.fetchall():
+            result[f"{coll}/{fname}"] = {
+                'body_parts': dict(body_parts) if body_parts else {},
+                'models': list(model_names) if model_names else [],
+            }
+        return result
+    finally:
+        _release_db(conn)
+
+
 @app.route('/api/images-by-tags')
 def api_images_by_tags():
     """Get images filtered by specific tags."""
     tags_filter = request.args.getlist('tags')  # Multiple tags can be passed
     match_all = request.args.get('matchAll', 'false').lower() == 'true'
-    
+
     if not tags_filter:
         return jsonify({'success': False, 'error': 'No tags provided'}), 400
-    
+
     tags_data = _load_tags()
+    extras = _get_all_image_extras()
     matching_images = []
-    
+
     # Iterate through all tagged images
     for image_key, tags_info in tags_data.items():
         if not isinstance(tags_info, dict) or not tags_info.get('url'):
@@ -2607,25 +2663,103 @@ def api_images_by_tags():
         collection = parts[0]
         filename = '/'.join(parts[1:])
         tags = tags_info.get('tags', [])
+        matched = all(tag in tags for tag in tags_filter) if match_all else any(tag in tags for tag in tags_filter)
+        if not matched:
+            continue
 
-        # Check if image matches filter
-        if match_all:
-            if all(tag in tags for tag in tags_filter):
-                matching_images.append({
-                    'filename': filename,
-                    'collection': collection,
-                    'url': _b2_sign_url(tags_info['url']),
-                    'tags': tags
-                })
-        else:
-            if any(tag in tags for tag in tags_filter):
-                matching_images.append({
-                    'filename': filename,
-                    'collection': collection,
-                    'url': _b2_sign_url(tags_info['url']),
-                    'tags': tags
-                })
-    
+        image_extras = extras.get(image_key, {})
+        matching_images.append({
+            'filename':    filename,
+            'collection':  collection,
+            'url':         _b2_sign_url(tags_info['url']),
+            'tags':        tags,
+            'body_parts':  image_extras.get('body_parts', {}),
+            'models':      image_extras.get('models', []),
+        })
+
+    return jsonify({'success': True, 'images': matching_images, 'count': len(matching_images)})
+
+
+@app.route('/api/body-parts-with-counts')
+def api_body_parts_with_counts():
+    """Return every (body part, rating) combination in use, with image counts — the body_parts facet list for the tag browser."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT body_parts FROM images WHERE body_parts IS NOT NULL AND body_parts != '{}'::jsonb")
+        rows = cur.fetchall()
+    finally:
+        _release_db(conn)
+
+    counts = {}  # (part, rating) -> count
+    for (body_parts,) in rows:
+        for part, rating in dict(body_parts).items():
+            if rating not in _BODY_PART_RATING_LABELS:
+                continue
+            key = (part, rating)
+            counts[key] = counts.get(key, 0) + 1
+
+    facets = [
+        {
+            'part': part,
+            'rating': rating,
+            'label': f"{part.title()} ({_BODY_PART_RATING_LABELS[rating]})",
+            'count': count,
+        }
+        for (part, rating), count in counts.items()
+    ]
+    facets.sort(key=lambda f: f['count'], reverse=True)
+    return jsonify({'success': True, 'body_parts': facets})
+
+
+@app.route('/api/images-by-body-parts')
+def api_images_by_body_parts():
+    """Get images filtered by specific (part, rating) combinations, e.g. ?parts=chest:n&parts=legs:sn."""
+    raw_filters = request.args.getlist('parts')
+    match_all = request.args.get('matchAll', 'false').lower() == 'true'
+
+    if not raw_filters:
+        return jsonify({'success': False, 'error': 'No parts provided'}), 400
+
+    filters = []
+    for raw in raw_filters:
+        if ':' not in raw:
+            continue
+        part, rating = raw.split(':', 1)
+        filters.append((part, rating))
+    if not filters:
+        return jsonify({'success': False, 'error': 'parts must be in "part:rating" form'}), 400
+
+    tags_data = _load_tags()
+    extras = _get_all_image_extras()
+    matching_images = []
+
+    for image_key, tags_info in tags_data.items():
+        if not isinstance(tags_info, dict) or not tags_info.get('url'):
+            continue
+        parts = image_key.split('/')
+        if len(parts) < 2:
+            continue
+        collection = parts[0]
+        filename = '/'.join(parts[1:])
+
+        image_extras = extras.get(image_key, {})
+        image_body_parts = image_extras.get('body_parts', {})
+        image_pairs = set(image_body_parts.items())
+
+        matched = all(f in image_pairs for f in filters) if match_all else any(f in image_pairs for f in filters)
+        if not matched:
+            continue
+
+        matching_images.append({
+            'filename':   filename,
+            'collection': collection,
+            'url':        _b2_sign_url(tags_info['url']),
+            'tags':       tags_info.get('tags', []),
+            'body_parts': image_body_parts,
+            'models':     image_extras.get('models', []),
+        })
+
     return jsonify({'success': True, 'images': matching_images, 'count': len(matching_images)})
 
 
