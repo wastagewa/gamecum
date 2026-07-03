@@ -233,6 +233,12 @@ def init_db():
             ALTER TABLE images
             ADD COLUMN IF NOT EXISTS body_parts JSONB DEFAULT '{}'::jsonb
         """)
+        # Cached AI-generated quote (built once from tags/body_parts/model name,
+        # regenerated only when the user explicitly asks for a new one)
+        cur.execute("""
+            ALTER TABLE images
+            ADD COLUMN IF NOT EXISTS ai_quote TEXT
+        """)
         # Add user_id FK to scores if not present
         cur.execute("""
             ALTER TABLE scores
@@ -730,6 +736,103 @@ def _get_images_by_model_ids(model_ids: list, match_all: bool = False):
         return cur.fetchall()
     finally:
         _release_db(conn)
+
+def _get_image_ai_quote(collection: str, filename: str):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT ai_quote FROM images WHERE collection_name = %s AND filename = %s",
+            (collection, filename)
+        )
+        row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    finally:
+        _release_db(conn)
+
+def _set_image_ai_quote(collection: str, filename: str, quote: str):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE images SET ai_quote = %s WHERE collection_name = %s AND filename = %s",
+            (quote, collection, filename)
+        )
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+# Human-readable labels for the body_parts rating codes, used only in the AI quote prompt
+_BODY_PART_RATING_LABELS = {'h': 'hidden', 'c': 'covered', 'sn': 'semi-nude', 'n': 'nude'}
+_QUOTE_HF_MODEL = os.environ.get('QUOTE_HF_MODEL', 'Qwen/Qwen2.5-72B-Instruct').strip()
+
+def _build_ai_quote_prompt(collection: str, filename: str):
+    """
+    Build the system/user prompt for generating a flirty, tag/model-aware quote
+    for one image. Returns None if the image doesn't exist.
+    """
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, tags, body_parts FROM images WHERE collection_name = %s AND filename = %s",
+            (collection, filename)
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        image_id, tags, body_parts = row
+        tags = list(tags) if tags else []
+        body_parts = dict(body_parts) if body_parts else {}
+
+        cur.execute("""
+            SELECT m.name FROM image_models im
+            JOIN models m ON m.id = im.model_id
+            WHERE im.image_id = %s
+        """, (image_id,))
+        model_names = [r[0] for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+
+    featured_model = random.choice(model_names) if model_names else None
+
+    details = []
+    if tags:
+        details.append(f"Tags: {', '.join(tags)}")
+    part_descriptions = [
+        f"{part} ({_BODY_PART_RATING_LABELS[rating]})"
+        for part, rating in body_parts.items()
+        if rating in _BODY_PART_RATING_LABELS
+    ]
+    if part_descriptions:
+        details.append(f"Body details: {', '.join(part_descriptions)}")
+    if featured_model:
+        details.append(f"Featured model: {featured_model}")
+
+    if not details:
+        return None  # nothing to work with — caller should fall back to the static quote bank
+
+    name_instruction = (
+        f'Address her directly by name ("{featured_model}") in the quote.'
+        if featured_model else
+        "This image has no named model — keep the quote generic, don't invent a name."
+    )
+    system_prompt = (
+        "You write short, flirty, playful one-line captions for photos on an adult image "
+        "board, based only on the descriptive tags/details you're given. "
+        f"{name_instruction} Keep it to one or two sentences, under 30 words total. "
+        "Be suggestive and fun, not vulgar or crude. Do not repeat the raw tag list "
+        "verbatim, add disclaimers, or break character with any meta-commentary — "
+        "reply with ONLY the quote text itself, no quotation marks."
+    )
+    user_message = "Write the caption for a photo with these details:\n" + "\n".join(details)
+
+    return {
+        'system_prompt': system_prompt,
+        'user_message': user_message,
+        'model': _QUOTE_HF_MODEL,
+        'featured_model': featured_model,
+    }
 
 # ── Videos / Access control ────────────────────────────────────────────────────
 
@@ -1336,8 +1439,57 @@ def _find_matching_quote_key(tag, quote_keys):
         # Key contains tag (e.g., tag="black", key="black_hair")
         if tag_normalized in key_normalized:
             return key
-    
+
     return None
+
+
+@app.route('/api/images/<collection_name>/<filename>/ai-quote', methods=['GET'])
+def api_get_ai_quote(collection_name, filename):
+    """
+    Return the cached AI-generated quote for an image, if one has been generated yet.
+    The actual HF call happens client-side (the server has no outbound path to
+    huggingface.co — see _call_hf_inference's comments / chat.js), so this endpoint
+    only ever reads/writes the cache; it never calls the model itself.
+    """
+    safe_name = _safe_collection_name(collection_name)
+    quote = _get_image_ai_quote(safe_name, filename)
+    return jsonify({'success': True, 'quote': quote, 'cached': bool(quote)})
+
+
+@app.route('/api/images/<collection_name>/<filename>/ai-quote-prompt', methods=['GET'])
+def api_get_ai_quote_prompt(collection_name, filename):
+    """
+    Build the system/user prompt the client should send to HuggingFace to generate
+    a quote for this image. Returns 422 if there's not enough tag/body-part/model
+    data on the image yet to build a meaningful prompt (caller should keep using
+    the static quote bank in that case).
+    """
+    safe_name = _safe_collection_name(collection_name)
+    prompt = _build_ai_quote_prompt(safe_name, filename)
+    if prompt is None:
+        return jsonify({'success': False, 'error': 'Not enough tag data for this image yet'}), 422
+    return jsonify({'success': True, **prompt})
+
+
+@app.route('/api/images/<collection_name>/<filename>/ai-quote', methods=['POST'])
+def api_save_ai_quote(collection_name, filename):
+    """Cache a client-generated quote for an image (used for first-generation and regenerate)."""
+    if not current_user.is_authenticated and not session.get('is_guest'):
+        return jsonify({'success': False, 'error': 'Authentication required'}), 401
+
+    safe_name = _safe_collection_name(collection_name)
+    data = request.get_json() or {}
+    quote = str(data.get('quote', '')).strip()
+
+    if not quote:
+        return jsonify({'success': False, 'error': 'quote is required'}), 400
+    if len(quote) > 500:
+        return jsonify({'success': False, 'error': 'quote is too long'}), 400
+    if not _image_exists_in_tags(safe_name, filename):
+        return jsonify({'success': False, 'error': 'Image not found'}), 404
+
+    _set_image_ai_quote(safe_name, filename, quote)
+    return jsonify({'success': True, 'quote': quote})
 
 
 @app.route('/create-collection', methods=['POST'])
