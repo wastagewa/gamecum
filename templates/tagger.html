@@ -77,6 +77,27 @@
       color: var(--muted-text);
       white-space: nowrap;
     }
+    .tgr-bulk-toggle {
+      flex-shrink: 0;
+      padding: .3rem .7rem;
+      border: 1.5px solid rgba(164,6,110,.25);
+      border-radius: .45rem;
+      background: transparent;
+      color: var(--text-color);
+      font-size: .78rem;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: .35rem;
+    }
+    .tgr-bulk-toggle:hover { border-color: var(--primary-color); color: var(--primary-color); }
+    .tgr-bulk-toggle.active {
+      background: var(--primary-color);
+      color: #fff;
+      border-color: var(--primary-color);
+    }
 
     /* ── Three-column body ── */
     .tgr-body {
@@ -105,6 +126,7 @@
     }
     .thumb-item:hover { background: rgba(164,6,110,.07); }
     .thumb-item.active { background: rgba(164,6,110,.15); }
+    .thumb-item.selected { outline: 2px solid var(--primary-color); outline-offset: -2px; }
     .thumb-item img {
       width: 100%;
       aspect-ratio: 4/3;
@@ -125,6 +147,22 @@
     .dot-green  { background: #22c55e; }
     .dot-yellow { background: #f59e0b; }
     .dot-none   { background: rgba(150,150,150,.35); }
+    .thumb-check {
+      position: absolute;
+      top: 7px;
+      left: 7px;
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      border: 1.5px solid rgba(255,255,255,.75);
+      background: rgba(0,0,0,.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: .6rem;
+      color: #fff;
+    }
+    .thumb-check.checked { background: var(--primary-color); border-color: var(--primary-color); }
 
     /* Center: main image */
     .tgr-center {
@@ -199,6 +237,91 @@
     .tgr-copy-btn:hover:not(:disabled) { color: var(--primary-color); border-color: var(--primary-color); }
     .tgr-copy-btn:disabled { opacity: .3; cursor: not-allowed; }
 
+    /* Bulk selection grid (replaces the center pane in bulk mode) */
+    .tgr-bulk-view {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      padding: 12px 16px;
+      gap: 10px;
+    }
+    .bulk-toolbar-top {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: .8rem;
+      color: var(--muted-text);
+    }
+    .bulk-toolbar-top button {
+      padding: .28rem .65rem;
+      border: 1.5px solid rgba(164,6,110,.18);
+      border-radius: .4rem;
+      background: transparent;
+      color: var(--text-color);
+      font-size: .75rem;
+      cursor: pointer;
+    }
+    .bulk-toolbar-top button:hover { border-color: var(--primary-color); color: var(--primary-color); }
+    #bulkSelCount { font-weight: 700; color: var(--text-color); }
+    .bulk-grid {
+      flex: 1;
+      overflow-y: auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+      align-content: start;
+    }
+    .bulk-cell {
+      position: relative;
+      background: var(--surface-color);
+      border: 1px solid rgba(164,6,110,.15);
+      border-radius: .5rem;
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .bulk-cell img {
+      width: 100%;
+      max-height: 45vh;
+      object-fit: contain;
+      border-radius: .35rem;
+      background: var(--bg-color);
+    }
+    .bulk-cell-name {
+      font-size: .68rem;
+      color: var(--muted-text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      padding: 0 2px;
+    }
+    .bulk-cell-remove {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(0,0,0,.55);
+      color: #fff;
+      cursor: pointer;
+      font-size: .9rem;
+      line-height: 1;
+    }
+    .bulk-cell-remove:hover { background: #ef4444; }
+    .bulk-empty-hint {
+      margin: auto;
+      text-align: center;
+      color: var(--muted-text);
+      font-size: .85rem;
+      max-width: 320px;
+    }
+
     /* Right: controls */
     .tgr-right {
       width: 268px;
@@ -270,8 +393,9 @@
       margin: 10px 0 2px;
     }
 
-    /* Tag chip input */
+    /* Tag / model chip input */
     .tag-input-wrap {
+      position: relative;
       display: flex;
       flex-wrap: wrap;
       gap: 4px;
@@ -296,6 +420,7 @@
       font-size: .7rem;
       font-weight: 600;
     }
+    .model-chip { background: #7c3aed; }
     .tag-chip button {
       background: none;
       border: none;
@@ -306,7 +431,7 @@
       line-height: 1;
     }
     .tag-chip button:hover { color: #fff; }
-    #tagInput {
+    .tag-input-wrap input {
       border: none;
       background: transparent;
       color: var(--text-color);
@@ -319,6 +444,33 @@
       font-size: .67rem;
       color: var(--muted-text);
       margin-top: 4px;
+    }
+    .tgr-tags-hint a { color: var(--primary-color); }
+    .model-suggestions {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      margin-top: 3px;
+      background: var(--surface-color);
+      border: 1px solid rgba(164,6,110,.25);
+      border-radius: .4rem;
+      box-shadow: 0 6px 18px rgba(0,0,0,.25);
+      max-height: 160px;
+      overflow-y: auto;
+      z-index: 20;
+    }
+    .model-sugg-item {
+      padding: 6px 10px;
+      font-size: .78rem;
+      cursor: pointer;
+    }
+    .model-sugg-item:hover { background: rgba(124,58,237,.15); }
+    .model-sugg-empty {
+      padding: 8px 10px;
+      font-size: .72rem;
+      color: var(--muted-text);
     }
 
     /* Save status */
@@ -333,6 +485,56 @@
     .save-status.saving { color: #f59e0b; }
     .save-status.saved  { color: #22c55e; }
     .save-status.error  { color: #ef4444; }
+
+    .bulk-apply-btn {
+      margin-top: 10px;
+      width: 100%;
+      padding: .55rem 0;
+      border: none;
+      border-radius: .5rem;
+      background: var(--primary-color);
+      color: #fff;
+      font-size: .82rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .bulk-apply-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .bulk-controls-hint {
+      font-size: .7rem;
+      color: var(--muted-text);
+      margin-bottom: 8px;
+      line-height: 1.4;
+    }
+
+    /* ── Mobile: stack thumbnails / image / controls instead of squeezing
+       three fixed-width columns into a narrow viewport ── */
+    @media (max-width: 860px) {
+      html, body { overflow-y: auto; height: auto; min-height: 100%; }
+      .tgr-body { flex-direction: column; overflow: visible; }
+      .tgr-thumbs {
+        width: 100%;
+        height: 96px;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: row;
+        overflow-x: auto;
+        overflow-y: hidden;
+        border-right: none;
+        border-bottom: 1px solid rgba(164,6,110,.12);
+      }
+      .thumb-item {
+        flex: 0 0 76px;
+        border-bottom: none;
+        border-right: 1px solid rgba(164,6,110,.07);
+      }
+      .tgr-center, .tgr-bulk-view { width: 100%; padding: 10px 12px; }
+      .tgr-main-img { max-height: 46vh; }
+      .bulk-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+      .bulk-cell img { max-height: 30vh; }
+      .tgr-right { width: 100%; border-left: none; border-top: 1px solid rgba(164,6,110,.12); max-height: none; }
+      .tgr-top { flex-wrap: wrap; height: auto; padding: 8px 14px; }
+      .tgr-progress-wrap { order: 3; width: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -341,6 +543,9 @@
   <div class="tgr-top">
     <a href="/manage-collections" class="tgr-back"><i class="fas fa-arrow-left"></i> Back</a>
     <span class="tgr-title"><i class="fas fa-folder"></i>{{ collection }}</span>
+    <button class="tgr-bulk-toggle" id="bulkModeBtn" type="button">
+      <i class="fas fa-check-square"></i> Select Multiple
+    </button>
     <div class="tgr-progress-wrap">
       <div class="tgr-progress-bar"><div class="tgr-progress-fill" id="progressFill"></div></div>
       <span class="tgr-progress-text" id="progressText"></span>
@@ -353,8 +558,8 @@
     <!-- Thumbnail strip -->
     <div class="tgr-thumbs" id="thumbStrip"></div>
 
-    <!-- Main image + nav -->
-    <div class="tgr-center">
+    <!-- Single-image view: main image + nav -->
+    <div class="tgr-center" id="singleView">
       <img id="mainImg" src="" alt="" class="tgr-main-img">
       <div class="tgr-nav">
         <button class="tgr-nav-btn" id="prevBtn"><i class="fas fa-chevron-left"></i> Prev</button>
@@ -367,34 +572,81 @@
       </button>
     </div>
 
-    <!-- Controls: body parts + tags -->
+    <!-- Bulk-selection view: full-size grid of every selected image -->
+    <div class="tgr-bulk-view" id="bulkView" style="display:none;">
+      <div class="bulk-toolbar-top">
+        <span id="bulkSelCount">0 selected</span>
+        <button id="selectAllBtn" type="button"><i class="fas fa-object-group"></i> Select All</button>
+        <button id="clearSelBtn" type="button"><i class="fas fa-times"></i> Clear</button>
+      </div>
+      <div class="bulk-grid" id="bulkGrid"></div>
+    </div>
+
+    <!-- Controls: body parts + tags + models (single) / bulk apply (bulk) -->
     <div class="tgr-right">
-      <div class="sect-label">Body Parts</div>
-      <div id="partsGrid">
-        {% for part in body_parts %}
-        <div class="part-row" data-part="{{ part }}">
-          <span class="part-label">{{ part|title }}</span>
-          <div class="rating-btns">
-            <button class="rating-btn" data-rating="" title="Not tagged">—</button>
-            <button class="rating-btn" data-rating="h" title="Hidden">H</button>
-            <button class="rating-btn" data-rating="c" title="Covered">C</button>
-            <button class="rating-btn" data-rating="sn" title="Semi-nude">SN</button>
-            <button class="rating-btn" data-rating="n" title="Nude">N</button>
-            <button class="rating-btn" data-rating="x" title="Not applicable">N/A</button>
+
+      <div id="singleControls">
+        <div class="sect-label">Body Parts</div>
+        <div id="partsGrid">
+          {% for part in body_parts %}
+          <div class="part-row" data-part="{{ part }}">
+            <span class="part-label">{{ part|title }}</span>
+            <div class="rating-btns">
+              <button class="rating-btn" data-rating="" title="Not tagged">—</button>
+              <button class="rating-btn" data-rating="h" title="Hidden">H</button>
+              <button class="rating-btn" data-rating="c" title="Covered">C</button>
+              <button class="rating-btn" data-rating="sn" title="Semi-nude">SN</button>
+              <button class="rating-btn" data-rating="n" title="Nude">N</button>
+              <button class="rating-btn" data-rating="x" title="Not applicable">N/A</button>
+            </div>
           </div>
+          {% endfor %}
         </div>
-        {% endfor %}
+
+        <hr class="tgr-divider">
+        <div class="sect-label">Tags</div>
+        <div class="tag-input-wrap" id="tagWrap">
+          <div id="tagChips" style="display:contents;"></div>
+          <input type="text" id="tagInput" placeholder="Add tag…" autocomplete="off" autocapitalize="off">
+        </div>
+        <div class="tgr-tags-hint">Enter or , to add &nbsp;·&nbsp; Backspace to remove last</div>
+
+        <hr class="tgr-divider">
+        <div class="sect-label">Model(s) / Subject Name(s)</div>
+        <div class="tag-input-wrap" id="modelWrap">
+          <div id="modelChips" style="display:contents;"></div>
+          <input type="text" id="modelInput" placeholder="Search a model name…" autocomplete="off" autocapitalize="off">
+          <div class="model-suggestions" id="modelSuggestions"></div>
+        </div>
+        <div class="tgr-tags-hint">Pick from existing models &nbsp;·&nbsp; <a href="/manage-models" target="_blank">add new ones here</a></div>
+
+        <div class="save-status" id="saveStatus">Ready</div>
       </div>
 
-      <hr class="tgr-divider">
-      <div class="sect-label">Tags</div>
-      <div class="tag-input-wrap" id="tagWrap" onclick="document.getElementById('tagInput').focus()">
-        <div id="tagChips" style="display:contents;"></div>
-        <input type="text" id="tagInput" placeholder="Add tag…" autocomplete="off" autocapitalize="off">
-      </div>
-      <div class="tgr-tags-hint">Enter or , to add &nbsp;·&nbsp; Backspace to remove last</div>
+      <div id="bulkControls" style="display:none;">
+        <div class="bulk-controls-hint">
+          Apply tags and/or model names to every image selected on the left. This <strong>adds</strong> to what's already there — it won't remove existing tags/models.
+        </div>
 
-      <div class="save-status" id="saveStatus">Ready</div>
+        <div class="sect-label">Tags to add</div>
+        <div class="tag-input-wrap" id="bulkTagWrap">
+          <div id="bulkTagChips" style="display:contents;"></div>
+          <input type="text" id="bulkTagInput" placeholder="Add tag…" autocomplete="off" autocapitalize="off">
+        </div>
+        <div class="tgr-tags-hint">Enter or , to add</div>
+
+        <hr class="tgr-divider">
+        <div class="sect-label">Model(s) to add</div>
+        <div class="tag-input-wrap" id="bulkModelWrap">
+          <div id="bulkModelChips" style="display:contents;"></div>
+          <input type="text" id="bulkModelInput" placeholder="Search a model name…" autocomplete="off" autocapitalize="off">
+          <div class="model-suggestions" id="bulkModelSuggestions"></div>
+        </div>
+
+        <button class="bulk-apply-btn" id="applyBulkBtn" disabled>Apply to 0 selected images</button>
+        <div class="save-status" id="bulkStatus"></div>
+      </div>
+
     </div>
   </div>
 
@@ -402,12 +654,174 @@
   <script>
     const COLLECTION = {{ collection|tojson }};
     const BODY_PARTS = {{ body_parts|tojson }};
+    const ALL_MODELS = {{ all_models|tojson }};
     const RATING_COLORS = { h: '#6b7280', c: '#3b82f6', sn: '#f59e0b', n: '#f97316', x: '#8b5cf6' };
     const RATING_LABELS = { c: 'C', sn: 'SN', n: 'N', x: 'X' };
 
     let images = {{ images|tojson }};
     let idx = 0;
     let saveTimer = null;
+
+    let bulkMode = false;
+    let selectedIndices = new Set();
+    let pendingBulkTags = [];
+    let pendingBulkModelIds = [];
+
+    function escapeHtmlLocal(str) {
+      return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+    }
+
+    function modelNameById(id) {
+      const m = ALL_MODELS.find(x => x.id === id);
+      return m ? m.name : `#${id}`;
+    }
+
+    // ── Reusable chip-input controllers ─────────────────────────────────────────
+
+    function makeTagChipController(wrapId, inputId, chipsId, getTags, setTags, onChange) {
+      const wrap  = document.getElementById(wrapId);
+      const input = document.getElementById(inputId);
+      const chipsContainer = document.getElementById(chipsId);
+      wrap.addEventListener('click', () => input.focus());
+
+      function render() {
+        const tags = getTags() || [];
+        chipsContainer.innerHTML = '';
+        tags.forEach(tag => {
+          const chip = document.createElement('span');
+          chip.className = 'tag-chip';
+          chip.appendChild(document.createTextNode(tag + ' '));
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = '×';
+          btn.addEventListener('click', e => { e.stopPropagation(); removeTag(tag); });
+          chip.appendChild(btn);
+          chipsContainer.appendChild(chip);
+        });
+      }
+      function addTag(raw) {
+        const tag = raw.trim().toLowerCase().replace(/,/g, '');
+        if (!tag) return;
+        const tags = getTags() || [];
+        if (!tags.includes(tag)) {
+          setTags([...tags, tag]);
+          render();
+          if (onChange) onChange();
+        }
+      }
+      function removeTag(tag) {
+        setTags((getTags() || []).filter(t => t !== tag));
+        render();
+        if (onChange) onChange();
+      }
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ',') {
+          e.preventDefault();
+          addTag(input.value);
+          input.value = '';
+        } else if (e.key === 'Backspace' && !input.value) {
+          const tags = getTags() || [];
+          if (tags.length) { setTags(tags.slice(0, -1)); render(); if (onChange) onChange(); }
+        }
+      });
+      input.addEventListener('blur', () => {
+        if (input.value.trim()) { addTag(input.value); input.value = ''; }
+      });
+      return { render };
+    }
+
+    function makeModelChipController(wrapId, inputId, chipsId, suggId, getIds, setIds, onChange) {
+      const wrap    = document.getElementById(wrapId);
+      const input   = document.getElementById(inputId);
+      const chipsContainer = document.getElementById(chipsId);
+      const suggBox = document.getElementById(suggId);
+      wrap.addEventListener('click', () => input.focus());
+
+      function render() {
+        const ids = getIds() || [];
+        chipsContainer.innerHTML = '';
+        ids.forEach(id => {
+          const chip = document.createElement('span');
+          chip.className = 'tag-chip model-chip';
+          chip.appendChild(document.createTextNode(modelNameById(id) + ' '));
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = '×';
+          btn.addEventListener('click', e => { e.stopPropagation(); removeId(id); });
+          chip.appendChild(btn);
+          chipsContainer.appendChild(chip);
+        });
+      }
+      function addId(id) {
+        const ids = getIds() || [];
+        if (!ids.includes(id)) {
+          setIds([...ids, id]);
+          render();
+          if (onChange) onChange();
+        }
+        input.value = '';
+        hideSugg();
+      }
+      function removeId(id) {
+        setIds((getIds() || []).filter(x => x !== id));
+        render();
+        if (onChange) onChange();
+      }
+      function hideSugg() { suggBox.style.display = 'none'; suggBox.innerHTML = ''; }
+      function showSuggestions() {
+        const term = input.value.trim().toLowerCase();
+        const ids = getIds() || [];
+        let matches = ALL_MODELS.filter(m => !ids.includes(m.id));
+        if (term) matches = matches.filter(m => m.name.toLowerCase().includes(term));
+        matches = matches.slice(0, 8);
+        if (!matches.length) {
+          suggBox.innerHTML = '<div class="model-sugg-empty">No matching model — add new ones via Manage Models</div>';
+          suggBox.style.display = 'block';
+          return;
+        }
+        suggBox.innerHTML = matches.map(m =>
+          `<div class="model-sugg-item" data-id="${m.id}">${escapeHtmlLocal(m.name)}</div>`
+        ).join('');
+        suggBox.style.display = 'block';
+        suggBox.querySelectorAll('.model-sugg-item').forEach(el => {
+          el.addEventListener('mousedown', e => {
+            e.preventDefault();
+            addId(parseInt(el.dataset.id, 10));
+          });
+        });
+      }
+      input.addEventListener('input', showSuggestions);
+      input.addEventListener('focus', showSuggestions);
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Escape') hideSugg();
+        else if (e.key === 'Backspace' && !input.value) {
+          const ids = getIds() || [];
+          if (ids.length) removeId(ids[ids.length - 1]);
+        }
+      });
+      document.addEventListener('click', e => {
+        if (!wrap.contains(e.target) && !suggBox.contains(e.target)) hideSugg();
+      });
+      return { render };
+    }
+
+    const singleTagCtl = makeTagChipController('tagWrap', 'tagInput', 'tagChips',
+      () => images[idx].tags,
+      (v) => { images[idx].tags = v; },
+      () => { updateThumbDot(idx); scheduleSave(); });
+
+    const singleModelCtl = makeModelChipController('modelWrap', 'modelInput', 'modelChips', 'modelSuggestions',
+      () => images[idx].model_ids,
+      (v) => { images[idx].model_ids = v; },
+      () => { updateThumbDot(idx); scheduleSave(); });
+
+    const bulkTagCtl = makeTagChipController('bulkTagWrap', 'bulkTagInput', 'bulkTagChips',
+      () => pendingBulkTags,
+      (v) => { pendingBulkTags = v; updateApplyBtnState(); });
+
+    const bulkModelCtl = makeModelChipController('bulkModelWrap', 'bulkModelInput', 'bulkModelChips', 'bulkModelSuggestions',
+      () => pendingBulkModelIds,
+      (v) => { pendingBulkModelIds = v; updateApplyBtnState(); });
 
     // ── Thumbnails ──────────────────────────────────────────────────────────────
 
@@ -416,19 +830,27 @@
       strip.innerHTML = '';
       images.forEach((img, i) => {
         const el = document.createElement('div');
-        el.className = 'thumb-item' + (i === idx ? ' active' : '');
+        const isSelected = selectedIndices.has(i);
+        el.className = 'thumb-item'
+          + (i === idx && !bulkMode ? ' active' : '')
+          + (bulkMode && isSelected ? ' selected' : '');
         el.dataset.i = i;
         const dotCls = thumbDotClass(img);
-        el.innerHTML = `<img src="${img.url}" alt="" loading="lazy"><span class="thumb-dot ${dotCls}"></span>`;
-        el.addEventListener('click', () => goTo(i));
+        const checkHtml = bulkMode
+          ? `<span class="thumb-check ${isSelected ? 'checked' : ''}"><i class="fas fa-check"></i></span>`
+          : '';
+        el.innerHTML = `<img src="${img.url}" alt="" loading="lazy">${checkHtml}<span class="thumb-dot ${dotCls}"></span>`;
+        el.addEventListener('click', () => {
+          if (bulkMode) { toggleSelect(i); } else { goTo(i); }
+        });
         strip.appendChild(el);
       });
     }
 
     function thumbDotClass(img) {
       const hasParts = Object.keys(img.body_parts || {}).length > 0;
-      const hasTags  = (img.tags || []).length > 0;
-      return hasParts ? 'dot-green' : (hasTags ? 'dot-yellow' : 'dot-none');
+      const hasTagsOrModels = (img.tags || []).length > 0 || (img.model_ids || []).length > 0;
+      return hasParts ? 'dot-green' : (hasTagsOrModels ? 'dot-yellow' : 'dot-none');
     }
 
     function updateThumbDot(i) {
@@ -438,10 +860,134 @@
 
     function scrollThumbIntoView() {
       const el = document.querySelector('.thumb-item.active');
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
     }
 
-    // ── Navigation ──────────────────────────────────────────────────────────────
+    // ── Bulk selection mode ──────────────────────────────────────────────────────
+
+    function toggleSelect(i) {
+      if (selectedIndices.has(i)) selectedIndices.delete(i); else selectedIndices.add(i);
+      buildThumbs();
+      renderBulkGrid();
+      updateApplyBtnState();
+    }
+
+    function renderBulkGrid() {
+      const grid = document.getElementById('bulkGrid');
+      document.getElementById('bulkSelCount').textContent = `${selectedIndices.size} selected`;
+      if (selectedIndices.size === 0) {
+        grid.innerHTML = '<p class="bulk-empty-hint">Tap images on the left to select them — they’ll show up here full-size so you can review what you’re about to tag before applying tags/models to all of them at once.</p>';
+        return;
+      }
+      grid.innerHTML = Array.from(selectedIndices).sort((a, b) => a - b).map(i => {
+        const img = images[i];
+        return `<div class="bulk-cell" data-i="${i}">
+          <button class="bulk-cell-remove" data-i="${i}" title="Remove from selection" type="button">&times;</button>
+          <img src="${img.url}" alt="">
+          <div class="bulk-cell-name">${escapeHtmlLocal(img.filename)}</div>
+        </div>`;
+      }).join('');
+      grid.querySelectorAll('.bulk-cell-remove').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const i = parseInt(btn.dataset.i, 10);
+          selectedIndices.delete(i);
+          buildThumbs();
+          renderBulkGrid();
+          updateApplyBtnState();
+        });
+      });
+    }
+
+    function updateApplyBtnState() {
+      const applyBtn = document.getElementById('applyBulkBtn');
+      const n = selectedIndices.size;
+      applyBtn.textContent = `Apply to ${n} selected image${n === 1 ? '' : 's'}`;
+      applyBtn.disabled = n === 0 || (pendingBulkTags.length === 0 && pendingBulkModelIds.length === 0);
+    }
+
+    document.getElementById('bulkModeBtn').addEventListener('click', () => {
+      bulkMode = !bulkMode;
+      const btn = document.getElementById('bulkModeBtn');
+      btn.classList.toggle('active', bulkMode);
+      btn.innerHTML = bulkMode
+        ? '<i class="fas fa-times"></i> Cancel Selection'
+        : '<i class="fas fa-check-square"></i> Select Multiple';
+      document.getElementById('singleView').style.display     = bulkMode ? 'none' : 'flex';
+      document.getElementById('bulkView').style.display       = bulkMode ? 'flex' : 'none';
+      document.getElementById('singleControls').style.display = bulkMode ? 'none' : '';
+      document.getElementById('bulkControls').style.display    = bulkMode ? '' : 'none';
+      if (!bulkMode) {
+        selectedIndices.clear();
+        pendingBulkTags = [];
+        pendingBulkModelIds = [];
+        bulkTagCtl.render();
+        bulkModelCtl.render();
+      }
+      buildThumbs();
+      renderBulkGrid();
+      updateApplyBtnState();
+    });
+
+    document.getElementById('selectAllBtn').addEventListener('click', () => {
+      images.forEach((_, i) => selectedIndices.add(i));
+      buildThumbs();
+      renderBulkGrid();
+      updateApplyBtnState();
+    });
+
+    document.getElementById('clearSelBtn').addEventListener('click', () => {
+      selectedIndices.clear();
+      buildThumbs();
+      renderBulkGrid();
+      updateApplyBtnState();
+    });
+
+    const bulkStatusEl = document.getElementById('bulkStatus');
+
+    document.getElementById('applyBulkBtn').addEventListener('click', async () => {
+      const filenames = Array.from(selectedIndices).map(i => images[i].filename);
+      if (!filenames.length || (!pendingBulkTags.length && !pendingBulkModelIds.length)) return;
+
+      const applyBtn = document.getElementById('applyBulkBtn');
+      applyBtn.disabled = true;
+      bulkStatusEl.textContent = 'Applying…';
+      bulkStatusEl.className = 'save-status saving';
+
+      try {
+        const r = await fetch(`/api/images/${encodeURIComponent(COLLECTION)}/bulk-tag`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filenames, tags: pendingBulkTags, model_ids: pendingBulkModelIds })
+        });
+        const d = await r.json();
+        if (d.success) {
+          selectedIndices.forEach(i => {
+            const img = images[i];
+            img.tags = Array.from(new Set([...(img.tags || []), ...pendingBulkTags]));
+            img.model_ids = Array.from(new Set([...(img.model_ids || []), ...pendingBulkModelIds]));
+          });
+          pendingBulkTags = [];
+          pendingBulkModelIds = [];
+          bulkTagCtl.render();
+          bulkModelCtl.render();
+          buildThumbs();
+          renderBulkGrid();
+          updateProgress();
+          bulkStatusEl.textContent = `✓ Applied to ${filenames.length} image${filenames.length === 1 ? '' : 's'}`;
+          bulkStatusEl.className = 'save-status saved';
+        } else {
+          bulkStatusEl.textContent = '✗ ' + (d.error || 'Error');
+          bulkStatusEl.className = 'save-status error';
+        }
+      } catch {
+        bulkStatusEl.textContent = '✗ Network error';
+        bulkStatusEl.className = 'save-status error';
+      }
+      updateApplyBtnState();
+    });
+
+    // ── Navigation (single-image mode) ──────────────────────────────────────────
 
     function goTo(i) {
       document.querySelector(`.thumb-item[data-i="${idx}"]`)?.classList.remove('active');
@@ -456,7 +1002,9 @@
     document.getElementById('nextBtn').addEventListener('click', () => goTo(idx + 1));
 
     document.addEventListener('keydown', e => {
-      if (document.activeElement === document.getElementById('tagInput')) return;
+      if (bulkMode) return;
+      const active = document.activeElement;
+      if (active && (active.id === 'tagInput' || active.id === 'modelInput')) return;
       if (e.key === 'ArrowLeft')  { e.preventDefault(); goTo(idx - 1); }
       if (e.key === 'ArrowRight') { e.preventDefault(); goTo(idx + 1); }
     });
@@ -479,7 +1027,9 @@
       const curr = images[idx];
       curr.body_parts = { ...(prev.body_parts || {}) };
       curr.tags = [...(prev.tags || [])];
+      curr.model_ids = [...(prev.model_ids || [])];
       renderControls();
+      updateThumbDot(idx);
       scheduleSave();
     });
 
@@ -513,7 +1063,8 @@
         const part = row.dataset.part;
         updatePartRow(row, part, bp[part] || null);
       });
-      renderTagChips(img.tags || []);
+      singleTagCtl.render();
+      singleModelCtl.render();
     }
 
     function updatePartRow(row, part, rating) {
@@ -536,69 +1087,6 @@
       });
     }
 
-    // ── Tags ───────────────────────────────────────────────────────────────────
-
-    function renderTagChips(tags) {
-      const container = document.getElementById('tagChips');
-      container.innerHTML = '';
-      (tags || []).forEach(tag => {
-        const chip = document.createElement('span');
-        chip.className = 'tag-chip';
-        const label = document.createTextNode(tag + ' ');
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.textContent = '×';
-        btn.addEventListener('click', e => { e.stopPropagation(); removeTag(tag); });
-        chip.appendChild(label);
-        chip.appendChild(btn);
-        container.appendChild(chip);
-      });
-    }
-
-    function addTag(raw) {
-      const tag = raw.trim().toLowerCase().replace(/,/g, '');
-      if (!tag) return;
-      const img = images[idx];
-      if (!img.tags) img.tags = [];
-      if (!img.tags.includes(tag)) {
-        img.tags.push(tag);
-        renderTagChips(img.tags);
-        updateThumbDot(idx);
-        scheduleSave();
-      }
-    }
-
-    function removeTag(tag) {
-      const img = images[idx];
-      img.tags = (img.tags || []).filter(t => t !== tag);
-      renderTagChips(img.tags);
-      updateThumbDot(idx);
-      scheduleSave();
-    }
-
-    const tagInput = document.getElementById('tagInput');
-    tagInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ',') {
-        e.preventDefault();
-        addTag(tagInput.value);
-        tagInput.value = '';
-      } else if (e.key === 'Backspace' && !tagInput.value) {
-        const img = images[idx];
-        if (img.tags && img.tags.length) {
-          img.tags.pop();
-          renderTagChips(img.tags);
-          updateThumbDot(idx);
-          scheduleSave();
-        }
-      }
-    });
-    tagInput.addEventListener('blur', () => {
-      if (tagInput.value.trim()) {
-        addTag(tagInput.value);
-        tagInput.value = '';
-      }
-    });
-
     // ── Save ────────────────────────────────────────────────────────────────────
 
     const statusEl = document.getElementById('saveStatus');
@@ -607,7 +1095,8 @@
       clearTimeout(saveTimer);
       statusEl.textContent = 'Saving…';
       statusEl.className   = 'save-status saving';
-      saveTimer = setTimeout(() => saveImage(idx), 400);
+      const targetIdx = idx; // capture now — idx may change before the timer fires
+      saveTimer = setTimeout(() => saveImage(targetIdx), 400);
     }
 
     async function saveImage(i) {
@@ -618,7 +1107,11 @@
           {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ body_parts: img.body_parts || {}, tags: img.tags || [] })
+            body:    JSON.stringify({
+              body_parts: img.body_parts || {},
+              tags:       img.tags || [],
+              model_ids:  img.model_ids || []
+            })
           }
         );
         const d = await r.json();
@@ -651,11 +1144,13 @@
         '<p style="padding:12px;font-size:.8rem;color:var(--muted-text);">No images in this collection.</p>';
       document.querySelector('.tgr-center').innerHTML =
         '<p style="color:var(--muted-text);">Upload images first.</p>';
+      document.getElementById('bulkModeBtn').style.display = 'none';
     } else {
       buildThumbs();
       renderCenter();
       renderControls();
       updateProgress();
+      updateApplyBtnState();
     }
   </script>
 </body>
