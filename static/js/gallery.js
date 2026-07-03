@@ -40,6 +40,139 @@ document.addEventListener('DOMContentLoaded', () => {
             return '/get-quote';
         }
 
+        // ── AI-generated quotes (tags/body_parts/model-name aware) ──────────────
+        // The server can't reach huggingface.co directly (see chat.js's
+        // callChatApi comment), so generation happens here in the browser: fetch
+        // the prompt + a token from the server, call HF directly, then POST the
+        // result back so the server can cache it for next time.
+
+        let cachedHfToken = null;                    // fetched once per page load, reused across calls
+        const aiQuoteGenerationInFlight = new Set();  // "collection/filename" keys currently generating — avoids duplicate concurrent HF calls for the same image
+
+        function imageQuoteParams(imageUrl) {
+            try {
+                const path = new URL(imageUrl, window.location.origin).pathname;
+                const parts = path.split('/').filter(Boolean);
+                if (parts.length >= 2) {
+                    return { collection: parts[parts.length - 2], filename: parts[parts.length - 1] };
+                }
+            } catch (e) {}
+            return { collection: '', filename: '' };
+        }
+
+        async function fetchCachedAiQuote(collection, filename) {
+            if (!collection || !filename) return null;
+            try {
+                const res = await fetch(`/api/images/${encodeURIComponent(collection)}/${encodeURIComponent(filename)}/ai-quote`);
+                const data = await res.json();
+                return (data.success && data.cached) ? data.quote : null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        async function generateAndSaveAiQuote(collection, filename) {
+            if (!collection || !filename) throw new Error('Missing collection/filename');
+
+            const promptRes  = await fetch(`/api/images/${encodeURIComponent(collection)}/${encodeURIComponent(filename)}/ai-quote-prompt`);
+            const promptData = await promptRes.json();
+            if (!promptRes.ok || !promptData.success) {
+                throw new Error(promptData.error || 'Not enough data to generate a quote for this image');
+            }
+
+            if (!cachedHfToken) {
+                const tokenRes  = await fetch('/api/chat/token');
+                const tokenData = await tokenRes.json();
+                cachedHfToken   = tokenData.token || null;
+            }
+            if (!cachedHfToken) {
+                throw new Error('HuggingFace token not configured on the server.');
+            }
+
+            const hfRes = await fetch('https://router.huggingface.co/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${cachedHfToken}`,
+                    'Content-Type':  'application/json',
+                },
+                body: JSON.stringify({
+                    model: promptData.model,
+                    messages: [
+                        { role: 'system', content: promptData.system_prompt },
+                        { role: 'user',   content: promptData.user_message },
+                    ],
+                    max_tokens:  80,
+                    temperature: 0.9,
+                }),
+            });
+
+            const rawBody = await hfRes.text();
+            if (!hfRes.ok) {
+                let errMsg = `HTTP ${hfRes.status}`;
+                try {
+                    const errData = JSON.parse(rawBody);
+                    errMsg = errData?.error?.message || errData?.error || rawBody.slice(0, 200);
+                } catch { errMsg = rawBody.slice(0, 200) || errMsg; }
+                if (hfRes.status === 401) throw new Error('Invalid HuggingFace token. Check it at huggingface.co/settings/tokens.');
+                if (hfRes.status === 403) throw new Error(`Access denied for model "${promptData.model}". Try a different model or accept its license on HuggingFace.`);
+                if (hfRes.status === 503) throw new Error('Model warming up. Please wait ~30 seconds and try again.');
+                if (hfRes.status === 429) throw new Error('Rate limited. Wait a moment before regenerating.');
+                throw new Error(`HuggingFace API error ${hfRes.status}: ${errMsg}`);
+            }
+
+            let quote;
+            try {
+                const hfData = JSON.parse(rawBody);
+                quote = hfData.choices[0].message.content.trim().replace(/^["']|["']$/g, '');
+            } catch (e) {
+                throw new Error('Unexpected response format from HuggingFace');
+            }
+            if (!quote) throw new Error('Empty quote generated');
+
+            // Cache it server-side so the next viewer (and the next slideshow pass) gets it
+            // instantly. Best-effort: if the save fails, still return the quote we already
+            // paid to generate rather than throwing it away.
+            try {
+                await fetch(`/api/images/${encodeURIComponent(collection)}/${encodeURIComponent(filename)}/ai-quote`, {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify({ quote }),
+                });
+            } catch (e) {
+                console.error('Failed to cache AI quote (showing it anyway):', e);
+            }
+
+            return quote;
+        }
+
+        // Non-blocking: if a cached AI quote already exists, swap it in immediately
+        // (only if `isStillCurrent()` says the viewer hasn't moved on to a different
+        // image in the meantime). If nothing is cached yet and `allowBackgroundGeneration`
+        // is true, generate + cache one quietly so the NEXT view of this image is instant —
+        // deduped per image so the same image never generates twice concurrently.
+        function refreshAiQuoteForElement(imageUrl, quoteElement, wrapInQuotes, isStillCurrent, allowBackgroundGeneration) {
+            const { collection, filename } = imageQuoteParams(imageUrl);
+            if (!collection || !filename || !quoteElement) return;
+            const key = `${collection}/${filename}`;
+
+            fetchCachedAiQuote(collection, filename).then(cached => {
+                if (!isStillCurrent()) return;
+                if (cached) {
+                    quoteElement.textContent = wrapInQuotes ? `"${cached}"` : cached;
+                } else if (allowBackgroundGeneration && !aiQuoteGenerationInFlight.has(key)) {
+                    aiQuoteGenerationInFlight.add(key);
+                    generateAndSaveAiQuote(collection, filename)
+                        .then(quote => {
+                            if (isStillCurrent()) {
+                                quoteElement.textContent = wrapInQuotes ? `"${quote}"` : quote;
+                            }
+                        })
+                        .catch(() => { /* static quote already showing — ignore */ })
+                        .finally(() => aiQuoteGenerationInFlight.delete(key));
+                }
+            });
+        }
+
         function updateNavigationButtons() {
             if (prevBtn && nextBtn) {
                 prevBtn.style.display = currentImageIndex > 0 ? 'flex' : 'none';
@@ -63,20 +196,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
         async function updateModalImage() {
             if (modalImg && allImages[currentImageIndex]) {
-                modalImg.src = allImages[currentImageIndex];
+                const imgSrc = allImages[currentImageIndex];
+                modalImg.src = imgSrc;
                 updateNavigationButtons();
-            
+
                 // Get a tag-matched quote for this image
+                const quoteElement = document.getElementById('modalQuote');
                 try {
-                    const quoteResponse = await fetch(imageQuoteUrl(allImages[currentImageIndex]));
+                    const quoteResponse = await fetch(imageQuoteUrl(imgSrc));
                     const quoteData = await quoteResponse.json();
-                    if (quoteData.quote) {
-                        const quoteElement = document.getElementById('modalQuote');
-                        if (quoteElement) quoteElement.textContent = quoteData.quote;
+                    if (quoteData.quote && quoteElement) {
+                        quoteElement.textContent = quoteData.quote;
                     }
                 } catch (err) {
                     console.error('Error fetching quote:', err);
                 }
+                refreshAiQuoteForElement(imgSrc, quoteElement, false, () => allImages[currentImageIndex] === imgSrc, true);
             }
         }
 
@@ -117,16 +252,17 @@ document.addEventListener('DOMContentLoaded', () => {
             updateNavigationButtons();
 
             // Fetch a tag-matched quote for this image
+            const quoteElement = document.getElementById('modalQuote');
             try {
                 const quoteResponse = await fetch(imageQuoteUrl(imageUrl));
                 const quoteData = await quoteResponse.json();
-                if (quoteData && quoteData.quote) {
-                    const quoteElement = document.getElementById('modalQuote');
-                    if (quoteElement) quoteElement.textContent = quoteData.quote;
+                if (quoteData && quoteData.quote && quoteElement) {
+                    quoteElement.textContent = quoteData.quote;
                 }
             } catch (err) {
                 console.error('Error fetching quote:', err);
             }
+            refreshAiQuoteForElement(imageUrl, quoteElement, false, () => allImages[currentImageIndex] === imageUrl, true);
 
             modal.style.display = 'flex';
             modalImg.src = imageUrl;
@@ -381,30 +517,26 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         // Extract collection and filename from image URL for quote matching
-        let collection = '';
-        let filename = '';
-        try {
-            const url = new URL(imgSrc, window.location.origin);
-            const pathParts = url.pathname.split('/');
-            filename = pathParts[pathParts.length - 1];
-            collection = pathParts[pathParts.length - 2];
-        } catch (e) {
-            console.error('Error parsing image URL:', e);
-        }
-        
+        const { collection, filename } = imageQuoteParams(imgSrc);
+
         // Fetch and display tags for the current image first
         await updateSlideshowTags(imgSrc);
-        
-        // Then fetch and display tag-based quote with highlighting
-        fetchRandomQuote(collection, filename).then(result => {
-            if (slideshowQuote) {
-                slideshowQuote.textContent = `"${result.quote}"`;
-            }
-            // Highlight the matched tag if not 'default'
-            if (result.matchedTag && result.matchedTag !== 'default') {
-                highlightMatchedTag(result.matchedTag);
-            }
-        });
+
+        // Then fetch and display the tag-based static quote with highlighting — awaited so
+        // it can never land after (and stomp) the AI-quote check that follows it.
+        const result = await fetchRandomQuote(collection, filename);
+        if (slideshowQuote) {
+            slideshowQuote.textContent = `"${result.quote}"`;
+        }
+        if (result.matchedTag && result.matchedTag !== 'default') {
+            highlightMatchedTag(result.matchedTag);
+        }
+
+        // Slideshow autoplay can advance every couple of seconds — much faster than an
+        // LLM round-trip — so it only ever shows an already-cached AI quote (never kicks
+        // off a new background generation) to avoid piling up concurrent HF calls for
+        // images the viewer has already scrolled past. Use the regenerate button for that.
+        refreshAiQuoteForElement(imgSrc, slideshowQuote, true, () => allImages[slideshowIndex] === imgSrc, false);
     }
     
     async function updateSlideshowTags(imgSrc) {
@@ -608,6 +740,54 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (slideshowFullscreen) {
         slideshowFullscreen.addEventListener('click', toggleSlideshowFullscreen);
+    }
+
+    async function handleRegenerateQuoteClick(btn, imgSrc, quoteEl, wrapInQuotes, isStillCurrent) {
+        if (!btn || !imgSrc) return;
+        const { collection, filename } = imageQuoteParams(imgSrc);
+        btn.disabled = true;
+        btn.classList.add('spinning');
+        try {
+            const quote = await generateAndSaveAiQuote(collection, filename);
+            if (isStillCurrent() && quoteEl) {
+                quoteEl.textContent = wrapInQuotes ? `"${quote}"` : quote;
+            }
+        } catch (err) {
+            console.error('Error regenerating quote:', err);
+        } finally {
+            btn.disabled = false;
+            btn.classList.remove('spinning');
+        }
+    }
+
+    const modalQuoteRegenBtn = document.getElementById('modalQuoteRegenBtn');
+    if (modalQuoteRegenBtn) {
+        modalQuoteRegenBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const imgSrc = allImages[currentImageIndex];
+            handleRegenerateQuoteClick(
+                modalQuoteRegenBtn,
+                imgSrc,
+                document.getElementById('modalQuote'),
+                false,
+                () => allImages[currentImageIndex] === imgSrc
+            );
+        });
+    }
+
+    const slideshowQuoteRegenBtn = document.getElementById('slideshowQuoteRegenBtn');
+    if (slideshowQuoteRegenBtn) {
+        slideshowQuoteRegenBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const imgSrc = allImages[slideshowIndex];
+            handleRegenerateQuoteClick(
+                slideshowQuoteRegenBtn,
+                imgSrc,
+                slideshowQuote,
+                true,
+                () => allImages[slideshowIndex] === imgSrc
+            );
+        });
     }
 
     if (slideshowSpeed) {

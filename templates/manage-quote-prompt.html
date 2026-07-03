@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark light">
+    <title>AI Quote Prompt - Imgur Gallery</title>
+    <script>
+        (function(){
+            var theme = null;
+            try { theme = localStorage.getItem('imgur.theme'); } catch(e) {}
+            if(!theme){
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                theme = prefersDark ? 'dark' : 'light';
+            }
+            if(theme === 'dark'){
+                document.documentElement.setAttribute('data-theme','dark');
+                document.documentElement.style.colorScheme = 'dark';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                document.documentElement.style.colorScheme = 'light';
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .prompt-editor-wrap {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .prompt-hint {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 0.9rem 1.1rem;
+            margin-bottom: 1.2rem;
+            font-size: 0.88rem;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+        .prompt-hint code {
+            background: rgba(164,6,110,.12);
+            color: var(--primary-color);
+            padding: 0.1rem 0.4rem;
+            border-radius: 4px;
+        }
+        #promptTemplateInput {
+            width: 100%;
+            min-height: 220px;
+            padding: 1rem;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            background: var(--input-bg);
+            color: var(--text-color);
+            font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+            font-size: 0.92rem;
+            line-height: 1.6;
+            resize: vertical;
+        }
+        .prompt-char-count {
+            text-align: right;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            margin-top: 0.4rem;
+        }
+        .prompt-char-count.over-limit { color: #ef4444; }
+        .prompt-actions {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1.2rem;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-container">
+            <a href="/" class="navbar-brand">
+                <i class="fas fa-images"></i>
+                <span>ImgurMemory</span>
+            </a>
+            <div class="navbar-menu">
+                <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+                <div class="navbar-dropdown">
+                    <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+                    <div class="navbar-dropdown-menu" id="collectionsDropdown"></div>
+                </div>
+                <a href="/tags" class="navbar-link"><i class="fas fa-tags"></i> Browse Tags</a>
+                <a href="/models" class="navbar-link"><i class="fas fa-user"></i> Browse Models</a>
+                <a href="/manage-collections" class="navbar-link"><i class="fas fa-cog"></i> Manage</a>
+                <a href="/manage-models" class="navbar-link"><i class="fas fa-user-tag"></i> Manage Models</a>
+                <a href="/manage-quote-prompt" class="navbar-link active"><i class="fas fa-quote-right"></i> Quote Prompt</a>
+                <button id="themeToggle" class="navbar-theme-toggle" type="button">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="manage-container">
+        <header class="manage-header">
+            <h1><i class="fas fa-quote-right"></i> AI Quote Prompt</h1>
+            <p class="manage-subtitle">Edit the instructions the AI uses to write image quotes — takes effect on the next generation, existing cached quotes are unaffected until regenerated</p>
+        </header>
+
+        <div class="prompt-editor-wrap">
+            <div class="prompt-hint">
+                <i class="fas fa-info-circle"></i>
+                Must include the placeholder <code>{name_instruction}</code> — it's automatically
+                replaced per-image with either "address her by name" or "keep it generic" depending
+                on whether that image has a tagged model.
+            </div>
+
+            <textarea id="promptTemplateInput" placeholder="Loading current prompt…" maxlength="4000"></textarea>
+            <div class="prompt-char-count"><span id="promptCharCount">0</span> / 4000</div>
+
+            <div id="promptMessage" class="message"></div>
+
+            <div class="prompt-actions">
+                <button id="savePromptBtn" class="btn btn-primary"><i class="fas fa-check"></i> Save</button>
+                <button id="resetPromptBtn" class="btn btn-secondary"><i class="fas fa-undo"></i> Reset to Default</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/manage-quote-prompt.js') }}"></script>
+</body>
+</html>
