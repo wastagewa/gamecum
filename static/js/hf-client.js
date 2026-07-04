@@ -1,10 +1,15 @@
-// hf-client.js — shared client-side HuggingFace chat-completions caller.
-// The server can't reach huggingface.co directly (see chat.js's callChatApi
-// comment), so any feature that needs a completion calls this from the browser.
-async function callHuggingFaceChat({ token, model, systemPrompt, userMessage, maxTokens = 500, temperature = 0.9 }) {
-    if (!token) throw new Error('HuggingFace token not configured on the server.');
+// hf-client.js — shared client-side chat-completions caller. Works against any
+// OpenAI-compatible chat-completions endpoint (HF's router by default, or e.g.
+// Venice.ai when apiBase/token are pointed elsewhere) — the server can't reach
+// some of these hosts directly (see chat.js's callChatApi comment), so any
+// feature that needs a completion calls this from the browser instead.
+async function callHuggingFaceChat({
+    token, model, systemPrompt, userMessage, maxTokens = 500, temperature = 0.9,
+    apiBase = 'https://router.huggingface.co/v1/chat/completions',
+}) {
+    if (!token) throw new Error('Chat API token not configured on the server.');
 
-    const res = await fetch('https://router.huggingface.co/v1/chat/completions', {
+    const res = await fetch(apiBase, {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${token}`,
@@ -28,18 +33,18 @@ async function callHuggingFaceChat({ token, model, systemPrompt, userMessage, ma
             const errData = JSON.parse(rawBody);
             errMsg = errData?.error?.message || errData?.error || rawBody.slice(0, 200);
         } catch { errMsg = rawBody.slice(0, 200) || errMsg; }
-        if (res.status === 401) throw new Error('Invalid HuggingFace token. Check it at huggingface.co/settings/tokens.');
-        if (res.status === 403) throw new Error(`Access denied for model "${model}". Try a different model or accept its license on HuggingFace.`);
+        if (res.status === 401) throw new Error('Invalid chat API token. Check the one configured for this provider.');
+        if (res.status === 403) throw new Error(`Access denied for model "${model}". Try a different model or check its access/license with the provider.`);
         if (res.status === 503) throw new Error('Model warming up. Please wait ~30 seconds and try again.');
         if (res.status === 429) throw new Error('Rate limited. Wait a moment before trying again.');
-        throw new Error(`HuggingFace API error ${res.status}: ${errMsg}`);
+        throw new Error(`Chat API error ${res.status}: ${errMsg}`);
     }
 
     let choice;
     try {
         choice = JSON.parse(rawBody).choices[0];
     } catch (e) {
-        throw new Error('Unexpected response format from HuggingFace');
+        throw new Error('Unexpected response format from chat API');
     }
 
     const text = (choice.message.content || '').trim().replace(/^["']|["']$/g, '');

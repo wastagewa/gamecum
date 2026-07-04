@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const testGenResult = document.getElementById('testGenResult');
     const testGenModelName = document.getElementById('testGenModelName');
     const testGenMaxTokens  = document.getElementById('testGenMaxTokens');
+    const testGenApiBase    = document.getElementById('testGenApiBase');
     const sampleTagsInput      = document.getElementById('sampleTagsInput');
     const sampleBodyPartsInput = document.getElementById('sampleBodyPartsInput');
     const sampleModelInput     = document.getElementById('sampleModelInput');
@@ -55,6 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let savedTemplate   = '';
     let currentModel    = '';
     let currentMaxTokens = 500;
+    let currentApiBase  = 'https://router.huggingface.co/v1/chat/completions';
 
     testGenBtn.disabled = true;  // re-enabled once loadTemplate() resolves below
 
@@ -79,8 +81,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 savedTemplate   = data.template;
                 currentModel    = data.model;
                 currentMaxTokens = data.maxTokens;
+                currentApiBase  = data.apiBase;
                 testGenModelName.textContent = currentModel;
                 if (testGenMaxTokens) testGenMaxTokens.textContent = currentMaxTokens;
+                if (testGenApiBase) testGenApiBase.textContent = currentApiBase;
                 updateCharCount();
                 testGenBtn.disabled = false;
             } else {
@@ -150,10 +154,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         showTestResult(promptBlock + '\n\nGenerating…', false);
         try {
-            const tokenRes  = await fetch('/api/chat/token');
+            const tokenRes  = await fetch('/api/quote-chat-token');
             const tokenData = await tokenRes.json();
             if (!tokenData.token) {
-                throw new Error('HuggingFace token not configured on the server (HF_TOKEN is empty).');
+                throw new Error('Chat API token not configured on the server (set QUOTE_CHAT_API_TOKEN or HF_TOKEN).');
             }
 
             const quote = await callHuggingFaceChat({
@@ -162,6 +166,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 systemPrompt,
                 userMessage,
                 maxTokens:    currentMaxTokens,
+                apiBase:      currentApiBase,
             });
             showTestResult(promptBlock + '\n\nGENERATED QUOTE:\n"' + quote + '"', false);
         } catch (err) {
