@@ -91,6 +91,20 @@
             text-align: center;
             color: var(--text-secondary);
         }
+        .model-gender-select {
+            padding: 0.35rem 0.6rem;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--input-bg);
+            color: var(--text-color);
+            font-size: 0.85rem;
+        }
+        .model-gender-status {
+            font-size: 0.78rem;
+            margin-left: 0.5rem;
+            color: var(--text-secondary);
+        }
+        .model-gender-status.error { color: #ef4444; }
     </style>
 </head>
 <body>
@@ -139,6 +153,7 @@
                 <thead>
                     <tr>
                         <th>Name</th>
+                        <th>Gender</th>
                         <th>Images</th>
                         <th>Actions</th>
                     </tr>
@@ -147,6 +162,14 @@
                     {% for m in models %}
                     <tr data-model-id="{{ m.id }}" data-model-name="{{ m.name }}">
                         <td class="model-name-cell">{{ m.name }}</td>
+                        <td>
+                            <select class="model-gender-select" data-id="{{ m.id }}">
+                                <option value="unspecified" {{ 'selected' if m.gender == 'unspecified' }}>Unspecified</option>
+                                <option value="female" {{ 'selected' if m.gender == 'female' }}>Female</option>
+                                <option value="male" {{ 'selected' if m.gender == 'male' }}>Male</option>
+                            </select>
+                            <span class="model-gender-status"></span>
+                        </td>
                         <td><span class="model-count-badge">{{ m.count }}</span></td>
                         <td>
                             <div class="model-row-actions">
@@ -180,6 +203,14 @@
                 <div class="form-group">
                     <label for="newModelName">Model Name</label>
                     <input type="text" id="newModelName" placeholder="e.g. Jane Doe" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="newModelGender">Gender</label>
+                    <select id="newModelGender">
+                        <option value="unspecified">Unspecified</option>
+                        <option value="female">Female</option>
+                        <option value="male">Male</option>
+                    </select>
                 </div>
                 <div id="createModelMessage" class="message"></div>
             </div>

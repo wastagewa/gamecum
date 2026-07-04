@@ -192,6 +192,13 @@
 
                     <label for="sampleModelInput">Sample model name <span class="field-hint">(leave blank to test the no-model case)</span></label>
                     <input type="text" id="sampleModelInput" placeholder="Test Model" value="Test Model">
+
+                    <label for="sampleModelGenderInput">Sample model gender <span class="field-hint">(picks the pronoun used to address the model)</span></label>
+                    <select id="sampleModelGenderInput">
+                        <option value="unspecified">Unspecified</option>
+                        <option value="female" selected>Female</option>
+                        <option value="male">Male</option>
+                    </select>
                 </div>
                 <button id="testGenBtn" class="btn btn-secondary"><i class="fas fa-play"></i> Run Test Generation</button>
                 <div id="testGenResult" class="test-gen-result" style="display:none;"></div>

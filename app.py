@@ -321,6 +321,12 @@ def init_db():
         cur.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_models_name_lower ON models (LOWER(name))
         """)
+        # Gender feeds the AI-quote prompt (correct pronoun/framing) — admin-set,
+        # defaults to 'unspecified' so existing models keep working unmodified.
+        cur.execute("""
+            ALTER TABLE models
+            ADD COLUMN IF NOT EXISTS gender VARCHAR(20) NOT NULL DEFAULT 'unspecified'
+        """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS image_models (
                 image_id  INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
@@ -543,36 +549,38 @@ def _set_image_locked(collection: str, filename: str, locked: bool):
 # people at once.
 
 def _get_all_models():
-    """Every model as {id, name}, alphabetical — feeds the tagger's autocomplete."""
+    """Every model as {id, name, gender}, alphabetical — feeds the tagger's autocomplete."""
     conn = _get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT id, name FROM models ORDER BY name")
-        return [{'id': r[0], 'name': r[1]} for r in cur.fetchall()]
+        cur.execute("SELECT id, name, gender FROM models ORDER BY name")
+        return [{'id': r[0], 'name': r[1], 'gender': r[2]} for r in cur.fetchall()]
     finally:
         _release_db(conn)
 
 def _get_models_with_counts():
-    """Every model as {id, name, count}, sorted by image count desc then name."""
+    """Every model as {id, name, gender, count}, sorted by image count desc then name."""
     conn = _get_db()
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT m.id, m.name, COUNT(im.image_id)
+            SELECT m.id, m.name, m.gender, COUNT(im.image_id)
             FROM models m
             LEFT JOIN image_models im ON im.model_id = m.id
-            GROUP BY m.id, m.name
+            GROUP BY m.id, m.name, m.gender
             ORDER BY COUNT(im.image_id) DESC, m.name ASC
         """)
-        return [{'id': r[0], 'name': r[1], 'count': r[2]} for r in cur.fetchall()]
+        return [{'id': r[0], 'name': r[1], 'gender': r[2], 'count': r[3]} for r in cur.fetchall()]
     finally:
         _release_db(conn)
 
-def _create_model(name: str):
+def _create_model(name: str, gender: str = 'unspecified'):
     """Insert a new model. Returns its id, or None if the name already exists (case-insensitive)."""
     name = (name or '').strip()
     if not name:
         return None
+    if gender not in VALID_MODEL_GENDERS:
+        gender = 'unspecified'
     conn = _get_db()
     try:
         cur = conn.cursor()
@@ -580,7 +588,7 @@ def _create_model(name: str):
         if cur.fetchone():
             return None
         try:
-            cur.execute("INSERT INTO models (name) VALUES (%s) RETURNING id", (name,))
+            cur.execute("INSERT INTO models (name, gender) VALUES (%s, %s) RETURNING id", (name, gender))
             model_id = cur.fetchone()[0]
             conn.commit()
             return model_id
@@ -589,6 +597,20 @@ def _create_model(name: str):
             # SELECT and INSERT — roll back so the pooled connection isn't left mid-transaction.
             conn.rollback()
             return None
+    finally:
+        _release_db(conn)
+
+def _set_model_gender(model_id: int, gender: str):
+    """Update a model's gender. Returns False if not found or gender is invalid."""
+    if gender not in VALID_MODEL_GENDERS:
+        return False
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE models SET gender = %s WHERE id = %s", (gender, model_id))
+        updated = cur.rowcount > 0
+        conn.commit()
+        return updated
     finally:
         _release_db(conn)
 
@@ -793,6 +815,15 @@ def _set_image_ai_quote(collection: str, filename: str, quote: str):
 _BODY_PART_RATING_LABELS = {'h': 'hidden', 'c': 'covered', 'sn': 'semi-nude', 'n': 'nude'}
 _QUOTE_HF_MODEL = os.environ.get('QUOTE_HF_MODEL', 'Qwen/Qwen2.5-72B-Instruct').strip()
 
+# Model gender — admin-set on the Manage Models page, used only to pick the correct
+# pronoun/framing for the AI quote prompt below.
+VALID_MODEL_GENDERS = {'female', 'male', 'unspecified'}
+_MODEL_GENDER_PRONOUNS = {
+    'female': 'her',
+    'male':   'him',
+}
+_MODEL_GENDER_NEUTRAL_PRONOUN = 'them'
+
 def _get_setting(key: str, default=None):
     conn = _get_db()
     try:
@@ -835,11 +866,11 @@ def _build_ai_quote_prompt(collection: str, filename: str):
         body_parts = dict(body_parts) if body_parts else {}
 
         cur.execute("""
-            SELECT m.name FROM image_models im
+            SELECT m.name, m.gender FROM image_models im
             JOIN models m ON m.id = im.model_id
             WHERE im.image_id = %s
         """, (image_id,))
-        model_names = [r[0] for r in cur.fetchall()]
+        models_data = cur.fetchall()
 
         cur.execute("SELECT value FROM app_settings WHERE key = 'ai_quote_system_prompt'")
         setting_row = cur.fetchone()
@@ -847,7 +878,7 @@ def _build_ai_quote_prompt(collection: str, filename: str):
     finally:
         _release_db(conn)
 
-    featured_model = random.choice(model_names) if model_names else None
+    featured_model, featured_gender = random.choice(models_data) if models_data else (None, None)
 
     details = []
     if tags:
@@ -861,12 +892,15 @@ def _build_ai_quote_prompt(collection: str, filename: str):
         details.append(f"Body details: {', '.join(part_descriptions)}")
     if featured_model:
         details.append(f"Featured model: {featured_model}")
+        if featured_gender in _MODEL_GENDER_PRONOUNS:
+            details.append(f"Subject gender: {featured_gender}")
 
     if not details:
         return None  # nothing to work with — caller should fall back to the static quote bank
 
+    pronoun = _MODEL_GENDER_PRONOUNS.get(featured_gender, _MODEL_GENDER_NEUTRAL_PRONOUN)
     name_instruction = (
-        f'Address her directly by name ("{featured_model}") in the quote.'
+        f'Address {pronoun} directly by name ("{featured_model}") in the quote.'
         if featured_model else
         "This image has no named model — keep the quote generic, don't invent a name."
     )
@@ -2351,12 +2385,28 @@ def api_create_model():
     """Admin: register a new canonical model name."""
     data = request.get_json() or {}
     name = (data.get('name') or '').strip()
+    gender = (data.get('gender') or 'unspecified').strip()
     if not name:
         return jsonify({'success': False, 'error': 'Name required'}), 400
-    model_id = _create_model(name)
+    if gender not in VALID_MODEL_GENDERS:
+        return jsonify({'success': False, 'error': 'Invalid gender'}), 400
+    model_id = _create_model(name, gender)
     if model_id is None:
         return jsonify({'success': False, 'error': 'A model with that name already exists'}), 400
-    return jsonify({'success': True, 'model': {'id': model_id, 'name': name}})
+    return jsonify({'success': True, 'model': {'id': model_id, 'name': name, 'gender': gender}})
+
+
+@app.route('/api/models/<int:model_id>/gender', methods=['POST'])
+@admin_required
+def api_set_model_gender(model_id):
+    """Admin: update a model's gender — used to pick the correct pronoun in the AI quote prompt."""
+    data = request.get_json() or {}
+    gender = (data.get('gender') or '').strip()
+    if gender not in VALID_MODEL_GENDERS:
+        return jsonify({'success': False, 'error': 'Invalid gender'}), 400
+    if not _set_model_gender(model_id, gender):
+        return jsonify({'success': False, 'error': 'Model not found'}), 404
+    return jsonify({'success': True, 'model': {'id': model_id, 'gender': gender}})
 
 
 @app.route('/api/models/<int:model_id>/rename', methods=['POST'])
