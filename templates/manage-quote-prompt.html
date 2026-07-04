@@ -98,6 +98,30 @@
             border: 1px solid rgba(239,68,68,.35);
             color: var(--text-color);
         }
+        .test-gen-inputs {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+            margin-bottom: 1.1rem;
+        }
+        .test-gen-inputs label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-color);
+            margin-top: 0.6rem;
+        }
+        .test-gen-inputs label .field-hint {
+            font-weight: 400;
+            color: var(--text-secondary);
+        }
+        .test-gen-inputs input {
+            padding: 0.6rem 0.8rem;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--input-bg);
+            color: var(--text-color);
+            font-size: 0.9rem;
+        }
     </style>
 </head>
 <body>
@@ -159,6 +183,16 @@
                     the exact same client-side call the app makes for real images. Use this to check your
                     HuggingFace token/config without having to open a real image.
                 </p>
+                <div class="test-gen-inputs">
+                    <label for="sampleTagsInput">Sample tags <span class="field-hint">(comma-separated)</span></label>
+                    <input type="text" id="sampleTagsInput" placeholder="outdoor, smiling" value="outdoor, smiling">
+
+                    <label for="sampleBodyPartsInput">Sample body parts <span class="field-hint">(part:rating, comma-separated — h=hidden, c=covered, sn=semi-nude, n=nude)</span></label>
+                    <input type="text" id="sampleBodyPartsInput" placeholder="chest:n, feet:c" value="chest:n, feet:c">
+
+                    <label for="sampleModelInput">Sample model name <span class="field-hint">(leave blank to test the no-model case)</span></label>
+                    <input type="text" id="sampleModelInput" placeholder="Test Model" value="Test Model">
+                </div>
                 <button id="testGenBtn" class="btn btn-secondary"><i class="fas fa-play"></i> Run Test Generation</button>
                 <div id="testGenResult" class="test-gen-result" style="display:none;"></div>
             </div>
