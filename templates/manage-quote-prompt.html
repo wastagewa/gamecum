@@ -179,7 +179,9 @@
                 <h3><i class="fas fa-vial"></i> Test Generation</h3>
                 <p class="prompt-hint" style="margin-bottom:1rem;">
                     Runs one real generation right now using a made-up sample image, your saved (unsaved edits
-                    above are ignored) prompt, and the configured model <code id="testGenModelName">…</code> —
+                    above are ignored) prompt, and the configured model <code id="testGenModelName">…</code> with a
+                    <code id="testGenMaxTokens">…</code>-token budget (set via the <code>QUOTE_HF_MAX_TOKENS</code>
+                    env var — raise it if a "thinking"/reasoning model burns through its budget before answering) —
                     the exact same client-side call the app makes for real images. Use this to check your
                     HuggingFace token/config without having to open a real image.
                 </p>

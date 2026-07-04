@@ -1,7 +1,7 @@
 // hf-client.js — shared client-side HuggingFace chat-completions caller.
 // The server can't reach huggingface.co directly (see chat.js's callChatApi
 // comment), so any feature that needs a completion calls this from the browser.
-async function callHuggingFaceChat({ token, model, systemPrompt, userMessage, maxTokens = 80, temperature = 0.9 }) {
+async function callHuggingFaceChat({ token, model, systemPrompt, userMessage, maxTokens = 500, temperature = 0.9 }) {
     if (!token) throw new Error('HuggingFace token not configured on the server.');
 
     const res = await fetch('https://router.huggingface.co/v1/chat/completions', {
@@ -35,13 +35,28 @@ async function callHuggingFaceChat({ token, model, systemPrompt, userMessage, ma
         throw new Error(`HuggingFace API error ${res.status}: ${errMsg}`);
     }
 
-    let text;
+    let choice;
     try {
-        const data = JSON.parse(rawBody);
-        text = data.choices[0].message.content.trim().replace(/^["']|["']$/g, '');
+        choice = JSON.parse(rawBody).choices[0];
     } catch (e) {
         throw new Error('Unexpected response format from HuggingFace');
     }
-    if (!text) throw new Error('Empty response generated');
+
+    const text = (choice.message.content || '').trim().replace(/^["']|["']$/g, '');
+    if (!text) {
+        // "Thinking"/reasoning models (e.g. GLM, DeepSeek-R1-style) can burn the whole
+        // token budget on a hidden reasoning_content field and never reach the final
+        // answer, leaving message.content empty with finish_reason "length" — a very
+        // different problem from a genuinely empty completion, so it gets its own message.
+        const reasoning = (choice.message.reasoning_content || choice.message.reasoning || '').trim();
+        if (reasoning && choice.finish_reason === 'length') {
+            throw new Error(
+                `Model "${model}" spent its entire ${maxTokens}-token budget on hidden reasoning ` +
+                `and never produced a final answer (finish_reason: length). Try a higher max_tokens, ` +
+                `or use a non-"thinking" variant of this model.`
+            );
+        }
+        throw new Error('Empty response generated');
+    }
     return text;
 }

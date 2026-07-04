@@ -814,6 +814,10 @@ def _set_image_ai_quote(collection: str, filename: str, quote: str):
 # Human-readable labels for the body_parts rating codes, used only in the AI quote prompt
 _BODY_PART_RATING_LABELS = {'h': 'hidden', 'c': 'covered', 'sn': 'semi-nude', 'n': 'nude'}
 _QUOTE_HF_MODEL = os.environ.get('QUOTE_HF_MODEL', 'Qwen/Qwen2.5-72B-Instruct').strip()
+# "Thinking"/reasoning models (e.g. GLM, DeepSeek-R1-style) spend a chunk of the token
+# budget on hidden reasoning before the final answer, so they need far more headroom
+# than a direct-answer model — left admin-tunable per model instead of a fixed guess.
+_QUOTE_HF_MAX_TOKENS = int(os.environ.get('QUOTE_HF_MAX_TOKENS', '500'))
 
 # Model gender — admin-set on the Manage Models page, used only to pick the correct
 # pronoun/framing for the AI quote prompt below.
@@ -913,6 +917,7 @@ def _build_ai_quote_prompt(collection: str, filename: str):
         'system_prompt': system_prompt,
         'user_message': user_message,
         'model': _QUOTE_HF_MODEL,
+        'max_tokens': _QUOTE_HF_MAX_TOKENS,
         'featured_model': featured_model,
     }
 
@@ -1580,10 +1585,11 @@ def api_get_ai_quote_prompt_setting():
     """Admin: read the current (or default) AI-quote system prompt template."""
     template = _get_setting('ai_quote_system_prompt', DEFAULT_AI_QUOTE_SYSTEM_PROMPT)
     return jsonify({
-        'success':  True,
-        'template': template,
-        'default':  DEFAULT_AI_QUOTE_SYSTEM_PROMPT,
-        'model':    _QUOTE_HF_MODEL,
+        'success':   True,
+        'template':  template,
+        'default':   DEFAULT_AI_QUOTE_SYSTEM_PROMPT,
+        'model':     _QUOTE_HF_MODEL,
+        'maxTokens': _QUOTE_HF_MAX_TOKENS,
     })
 
 

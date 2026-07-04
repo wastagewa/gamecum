@@ -91,6 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 model:        promptData.model,
                 systemPrompt: promptData.system_prompt,
                 userMessage:  promptData.user_message,
+                maxTokens:    promptData.max_tokens,
             });
 
             // Cache it server-side so the next viewer (and the next slideshow pass) gets it

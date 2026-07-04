@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const testGenBtn    = document.getElementById('testGenBtn');
     const testGenResult = document.getElementById('testGenResult');
     const testGenModelName = document.getElementById('testGenModelName');
+    const testGenMaxTokens  = document.getElementById('testGenMaxTokens');
     const sampleTagsInput      = document.getElementById('sampleTagsInput');
     const sampleBodyPartsInput = document.getElementById('sampleBodyPartsInput');
     const sampleModelInput     = document.getElementById('sampleModelInput');
@@ -53,6 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let defaultTemplate = '';
     let savedTemplate   = '';
     let currentModel    = '';
+    let currentMaxTokens = 500;
 
     testGenBtn.disabled = true;  // re-enabled once loadTemplate() resolves below
 
@@ -76,7 +78,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 defaultTemplate = data.default;
                 savedTemplate   = data.template;
                 currentModel    = data.model;
+                currentMaxTokens = data.maxTokens;
                 testGenModelName.textContent = currentModel;
+                if (testGenMaxTokens) testGenMaxTokens.textContent = currentMaxTokens;
                 updateCharCount();
                 testGenBtn.disabled = false;
             } else {
@@ -157,6 +161,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 model:        currentModel,
                 systemPrompt,
                 userMessage,
+                maxTokens:    currentMaxTokens,
             });
             showTestResult(promptBlock + '\n\nGENERATED QUOTE:\n"' + quote + '"', false);
         } catch (err) {
