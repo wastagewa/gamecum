@@ -8,12 +8,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const testGenBtn    = document.getElementById('testGenBtn');
     const testGenResult = document.getElementById('testGenResult');
     const testGenModelName = document.getElementById('testGenModelName');
+    const testGenMaxTokens  = document.getElementById('testGenMaxTokens');
     const sampleTagsInput      = document.getElementById('sampleTagsInput');
     const sampleBodyPartsInput = document.getElementById('sampleBodyPartsInput');
     const sampleModelInput     = document.getElementById('sampleModelInput');
+    const sampleModelGenderInput = document.getElementById('sampleModelGenderInput');
 
     // Mirrors _BODY_PART_RATING_LABELS in app.py — keep in sync if that ever changes.
     const BODY_PART_RATING_LABELS = { h: 'hidden', c: 'covered', sn: 'semi-nude', n: 'nude' };
+
+    // Mirrors _MODEL_GENDER_PRONOUNS / _MODEL_GENDER_NEUTRAL_PRONOUN in app.py.
+    const MODEL_GENDER_PRONOUNS = { female: 'her', male: 'him' };
+    const MODEL_GENDER_NEUTRAL_PRONOUN = 'them';
 
     function buildSampleUserMessage() {
         const tags = sampleTagsInput.value.split(',').map(t => t.trim()).filter(Boolean);
@@ -26,23 +32,29 @@ document.addEventListener('DOMContentLoaded', () => {
             })
             .filter(({ part, rating }) => part && BODY_PART_RATING_LABELS[rating]);
         const modelName = sampleModelInput.value.trim();
+        const modelGender = sampleModelGenderInput ? sampleModelGenderInput.value : 'unspecified';
 
         const details = [];
         if (tags.length) details.push('Tags: ' + tags.join(', '));
         if (bodyParts.length) {
             details.push('Body details: ' + bodyParts.map(({ part, rating }) => `${part} (${BODY_PART_RATING_LABELS[rating]})`).join(', '));
         }
-        if (modelName) details.push('Featured model: ' + modelName);
+        if (modelName) {
+            details.push('Featured model: ' + modelName);
+            if (modelGender in MODEL_GENDER_PRONOUNS) details.push('Subject gender: ' + modelGender);
+        }
 
         return {
             userMessage: 'Write the caption for a photo with these details:\n' + details.join('\n'),
             modelName,
+            modelGender,
         };
     }
 
     let defaultTemplate = '';
     let savedTemplate   = '';
     let currentModel    = '';
+    let currentMaxTokens = 500;
 
     testGenBtn.disabled = true;  // re-enabled once loadTemplate() resolves below
 
@@ -66,7 +78,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 defaultTemplate = data.default;
                 savedTemplate   = data.template;
                 currentModel    = data.model;
+                currentMaxTokens = data.maxTokens;
                 testGenModelName.textContent = currentModel;
+                if (testGenMaxTokens) testGenMaxTokens.textContent = currentMaxTokens;
                 updateCharCount();
                 testGenBtn.disabled = false;
             } else {
@@ -126,9 +140,10 @@ document.addEventListener('DOMContentLoaded', () => {
     testGenBtn.addEventListener('click', async () => {
         testGenBtn.disabled = true;
 
-        const { userMessage, modelName } = buildSampleUserMessage();
+        const { userMessage, modelName, modelGender } = buildSampleUserMessage();
+        const pronoun = MODEL_GENDER_PRONOUNS[modelGender] || MODEL_GENDER_NEUTRAL_PRONOUN;
         const nameInstruction = modelName
-            ? `Address her directly by name ("${modelName}") in the quote.`
+            ? `Address ${pronoun} directly by name ("${modelName}") in the quote.`
             : "This image has no named model — keep the quote generic, don't invent a name.";
         const systemPrompt = savedTemplate.replace('{name_instruction}', nameInstruction);
         const promptBlock = 'SYSTEM PROMPT:\n' + systemPrompt + '\n\nUSER MESSAGE:\n' + userMessage;
@@ -146,6 +161,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 model:        currentModel,
                 systemPrompt,
                 userMessage,
+                maxTokens:    currentMaxTokens,
             });
             showTestResult(promptBlock + '\n\nGENERATED QUOTE:\n"' + quote + '"', false);
         } catch (err) {

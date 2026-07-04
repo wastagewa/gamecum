@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const deleteModal = document.getElementById('deleteModelModal');
 
     const newModelInput = document.getElementById('newModelName');
+    const newModelGenderInput = document.getElementById('newModelGender');
     const createMessage = document.getElementById('createModelMessage');
     const confirmCreate = document.getElementById('confirmCreateModel');
 
@@ -48,6 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (createBtn) {
         createBtn.addEventListener('click', () => {
             newModelInput.value = '';
+            if (newModelGenderInput) newModelGenderInput.value = 'unspecified';
             createMessage.textContent = '';
             showModal(createModal);
             newModelInput.focus();
@@ -57,6 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (confirmCreate) {
         confirmCreate.addEventListener('click', async () => {
             const name = newModelInput.value.trim();
+            const gender = newModelGenderInput ? newModelGenderInput.value : 'unspecified';
             if (!name) {
                 createMessage.textContent = 'Please enter a model name';
                 createMessage.className = 'message error';
@@ -66,7 +69,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const res = await fetch('/api/models', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name })
+                    body: JSON.stringify({ name, gender })
                 });
                 const data = await res.json();
                 if (data.success) {
@@ -111,6 +114,34 @@ document.addEventListener('DOMContentLoaded', () => {
                 deleteModelNameSpan.textContent = btn.dataset.name;
                 deleteMessage.textContent = '';
                 showModal(deleteModal);
+            });
+        });
+
+        document.querySelectorAll('.model-gender-select').forEach(select => {
+            select.addEventListener('change', async () => {
+                const statusEl = select.nextElementSibling;
+                const gender = select.value;
+                select.disabled = true;
+                try {
+                    const res = await fetch(`/api/models/${select.dataset.id}/gender`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ gender })
+                    });
+                    const data = await res.json();
+                    if (statusEl) {
+                        statusEl.textContent = data.success ? 'Saved' : (data.error || 'Failed to save');
+                        statusEl.className = 'model-gender-status' + (data.success ? '' : ' error');
+                        setTimeout(() => { statusEl.textContent = ''; }, 2000);
+                    }
+                } catch (err) {
+                    if (statusEl) {
+                        statusEl.textContent = 'Error saving';
+                        statusEl.className = 'model-gender-status error';
+                    }
+                } finally {
+                    select.disabled = false;
+                }
             });
         });
     }
