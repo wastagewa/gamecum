@@ -818,6 +818,14 @@ _QUOTE_HF_MODEL = os.environ.get('QUOTE_HF_MODEL', 'Qwen/Qwen2.5-72B-Instruct').
 # budget on hidden reasoning before the final answer, so they need far more headroom
 # than a direct-answer model — left admin-tunable per model instead of a fixed guess.
 _QUOTE_HF_MAX_TOKENS = int(os.environ.get('QUOTE_HF_MAX_TOKENS', '500'))
+# The AI-quote feature's own chat-completions endpoint/token — separate from the
+# general chatbot feature's HF_TOKEN (chat.js), so quotes can point at a different,
+# less-restrictive OpenAI-chat-compatible provider (e.g. Venice.ai) without affecting
+# the general chatbot. Defaults preserve the original HF-router behavior untouched.
+_QUOTE_CHAT_API_BASE_URL = os.environ.get(
+    'QUOTE_CHAT_API_BASE_URL', 'https://router.huggingface.co/v1/chat/completions'
+).strip()
+_QUOTE_CHAT_API_TOKEN = os.environ.get('QUOTE_CHAT_API_TOKEN', '').strip() or os.environ.get('HF_TOKEN', '').strip()
 
 # Model gender — admin-set on the Manage Models page, used only to pick the correct
 # pronoun/framing for the AI quote prompt below.
@@ -918,6 +926,7 @@ def _build_ai_quote_prompt(collection: str, filename: str):
         'user_message': user_message,
         'model': _QUOTE_HF_MODEL,
         'max_tokens': _QUOTE_HF_MAX_TOKENS,
+        'api_base': _QUOTE_CHAT_API_BASE_URL,
         'featured_model': featured_model,
     }
 
@@ -1590,6 +1599,7 @@ def api_get_ai_quote_prompt_setting():
         'default':   DEFAULT_AI_QUOTE_SYSTEM_PROMPT,
         'model':     _QUOTE_HF_MODEL,
         'maxTokens': _QUOTE_HF_MAX_TOKENS,
+        'apiBase':   _QUOTE_CHAT_API_BASE_URL,
     })
 
 
@@ -3318,6 +3328,21 @@ def api_chat_token():
     """
     token = os.environ.get('HF_TOKEN', '').strip()
     return jsonify({'token': token, 'configured': bool(token)})
+
+
+@app.route('/api/quote-chat-token')
+def api_quote_chat_token():
+    """
+    Same idea as /api/chat/token, but scoped to the AI-quote feature: returns the
+    quote feature's own token + API base URL (QUOTE_CHAT_API_TOKEN / _BASE_URL,
+    falling back to HF_TOKEN / HF's router) so it can point at a different provider
+    (e.g. Venice.ai) than the general chatbot without touching that feature.
+    """
+    return jsonify({
+        'token':      _QUOTE_CHAT_API_TOKEN,
+        'apiBase':    _QUOTE_CHAT_API_BASE_URL,
+        'configured': bool(_QUOTE_CHAT_API_TOKEN),
+    })
 
 
 @app.route('/collection/<collection_name>/chat')

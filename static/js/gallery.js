@@ -81,7 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (!cachedHfToken) {
-                const tokenRes  = await fetch('/api/chat/token');
+                const tokenRes  = await fetch('/api/quote-chat-token');
                 const tokenData = await tokenRes.json();
                 cachedHfToken   = tokenData.token || null;
             }
@@ -92,6 +92,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 systemPrompt: promptData.system_prompt,
                 userMessage:  promptData.user_message,
                 maxTokens:    promptData.max_tokens,
+                apiBase:      promptData.api_base,
             });
 
             // Cache it server-side so the next viewer (and the next slideshow pass) gets it
