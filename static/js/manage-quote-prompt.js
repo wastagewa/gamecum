@@ -8,6 +8,37 @@ document.addEventListener('DOMContentLoaded', () => {
     const testGenBtn    = document.getElementById('testGenBtn');
     const testGenResult = document.getElementById('testGenResult');
     const testGenModelName = document.getElementById('testGenModelName');
+    const sampleTagsInput      = document.getElementById('sampleTagsInput');
+    const sampleBodyPartsInput = document.getElementById('sampleBodyPartsInput');
+    const sampleModelInput     = document.getElementById('sampleModelInput');
+
+    // Mirrors _BODY_PART_RATING_LABELS in app.py — keep in sync if that ever changes.
+    const BODY_PART_RATING_LABELS = { h: 'hidden', c: 'covered', sn: 'semi-nude', n: 'nude' };
+
+    function buildSampleUserMessage() {
+        const tags = sampleTagsInput.value.split(',').map(t => t.trim()).filter(Boolean);
+        const bodyParts = sampleBodyPartsInput.value.split(',')
+            .map(pair => pair.trim())
+            .filter(Boolean)
+            .map(pair => {
+                const [part, rating] = pair.split(':').map(s => (s || '').trim());
+                return { part, rating };
+            })
+            .filter(({ part, rating }) => part && BODY_PART_RATING_LABELS[rating]);
+        const modelName = sampleModelInput.value.trim();
+
+        const details = [];
+        if (tags.length) details.push('Tags: ' + tags.join(', '));
+        if (bodyParts.length) {
+            details.push('Body details: ' + bodyParts.map(({ part, rating }) => `${part} (${BODY_PART_RATING_LABELS[rating]})`).join(', '));
+        }
+        if (modelName) details.push('Featured model: ' + modelName);
+
+        return {
+            userMessage: 'Write the caption for a photo with these details:\n' + details.join('\n'),
+            modelName,
+        };
+    }
 
     let defaultTemplate = '';
     let savedTemplate   = '';
@@ -94,7 +125,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     testGenBtn.addEventListener('click', async () => {
         testGenBtn.disabled = true;
-        showTestResult('Generating…', false);
+
+        const { userMessage, modelName } = buildSampleUserMessage();
+        const nameInstruction = modelName
+            ? `Address her directly by name ("${modelName}") in the quote.`
+            : "This image has no named model — keep the quote generic, don't invent a name.";
+        const systemPrompt = savedTemplate.replace('{name_instruction}', nameInstruction);
+        const promptBlock = 'SYSTEM PROMPT:\n' + systemPrompt + '\n\nUSER MESSAGE:\n' + userMessage;
+
+        showTestResult(promptBlock + '\n\nGenerating…', false);
         try {
             const tokenRes  = await fetch('/api/chat/token');
             const tokenData = await tokenRes.json();
@@ -102,21 +141,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error('HuggingFace token not configured on the server (HF_TOKEN is empty).');
             }
 
-            const nameInstruction = 'Address her directly by name ("Test Model") in the quote.';
-            const systemPrompt = savedTemplate.replace('{name_instruction}', nameInstruction);
-            const userMessage =
-                'Write the caption for a photo with these details:\n' +
-                'Tags: outdoor, smiling\nBody details: chest (nude)\nFeatured model: Test Model';
-
             const quote = await callHuggingFaceChat({
                 token:        tokenData.token,
                 model:        currentModel,
                 systemPrompt,
                 userMessage,
             });
-            showTestResult('✓ Success — the model generated:\n\n"' + quote + '"', false);
+            showTestResult(promptBlock + '\n\nGENERATED QUOTE:\n"' + quote + '"', false);
         } catch (err) {
-            showTestResult('✗ ' + err.message, true);
+            showTestResult(promptBlock + '\n\n✗ ' + err.message, true);
         } finally {
             testGenBtn.disabled = false;
         }
