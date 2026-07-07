@@ -408,5 +408,144 @@ class TestImageStorageHelpers(unittest.TestCase):
         self.assertEqual(url, 'https://res.cloudinary.com/x/newcol/abc')
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Image health admin pages: untagged / unknown-subject / orphaned / missing-B2-backup
+# ─────────────────────────────────────────────────────────────────────────────
+class TestImageHealthRoutes(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        self.client = _app.app.test_client()
+
+    def test_untagged_images_query_requires_all_body_parts_present(self):
+        """'Untagged' means missing a rating for at least one BODY_PARTS entry —
+        checked via jsonb '?&' against every configured body part, not the
+        free-text tags array."""
+        _cur.fetchall.return_value = [{
+            'id': 1, 'collection_name': 'col', 'filename': 'a.jpg',
+            'url': 'https://res.cloudinary.com/x/col/a.jpg', 'tags': ['x'], 'body_parts': {'boobs': 'n'},
+            'created_at': None, 'uploader_username': None, 'uploader_email': None,
+        }]
+        resp = self.client.get('/admin/untagged-images')
+        self.assertEqual(resp.status_code, 200)
+        sql, params = _cur.execute.call_args.args
+        self.assertIn('deleted_at IS NULL', sql)
+        self.assertIn('?&', sql)
+        self.assertIn('body_parts', sql)
+        self.assertEqual(params, (_app.BODY_PARTS,))
+
+    def test_unknown_subject_images_query_filters_no_image_models(self):
+        _cur.fetchall.return_value = [{
+            'id': 1, 'collection_name': 'col', 'filename': 'a.jpg',
+            'url': 'https://res.cloudinary.com/x/col/a.jpg', 'created_at': None,
+            'uploader_username': None, 'uploader_email': None,
+        }]
+        resp = self.client.get('/admin/unknown-subject-images')
+        self.assertEqual(resp.status_code, 200)
+        sql = _cur.execute.call_args.args[0]
+        self.assertIn('deleted_at IS NULL', sql)
+        self.assertIn('NOT EXISTS', sql)
+        self.assertIn('image_models', sql)
+
+    def test_missing_backup_images_query_filters_null_backup_key(self):
+        resp = self.client.get('/admin/missing-backup-images')
+        self.assertEqual(resp.status_code, 200)
+        sql = _cur.execute.call_args.args[0]
+        self.assertIn('b2_backup_key IS NULL', sql)
+        self.assertIn('deleted_at IS NULL', sql)
+
+    def test_retry_backup_404_when_image_missing(self):
+        _cur.fetchone.return_value = None
+        resp = self.client.post('/api/admin/images/999/retry-backup')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_retry_backup_rejects_when_already_deleted(self):
+        _cur.fetchone.return_value = ('col', 'a.jpg', 'https://res.cloudinary.com/x/col/a.jpg', None, '2026-01-01')
+        resp = self.client.post('/api/admin/images/1/retry-backup')
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.get_json()['success'])
+
+    def test_retry_backup_rejects_when_backup_already_exists(self):
+        _cur.fetchone.return_value = ('col', 'a.jpg', 'https://res.cloudinary.com/x/col/a.jpg', 'col/a.jpg', None)
+        resp = self.client.post('/api/admin/images/1/retry-backup')
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.get_json()['success'])
+
+    @patch.object(_app, '_http')
+    @patch.object(_app, '_b2_upload_fileobj')
+    def test_retry_backup_success_sets_backup_key(self, mock_upload, mock_http):
+        _cur.fetchone.return_value = ('col', 'a.jpg', 'https://res.cloudinary.com/x/col/a.jpg', None, None)
+        mock_resp = MagicMock(content=b'filedata', headers={'Content-Type': 'image/jpeg'})
+        mock_http.get.return_value = mock_resp
+        resp = self.client.post('/api/admin/images/1/retry-backup')
+        data = resp.get_json()
+        self.assertTrue(data['success'])
+        self.assertEqual(data['b2_backup_key'], 'col/a.jpg')
+        mock_upload.assert_called_once()
+        sql = _cur.execute.call_args_list[-1].args[0]
+        self.assertIn('UPDATE images', sql)
+        self.assertIn('b2_backup_key', sql)
+
+    @patch.object(_app, '_http')
+    def test_retry_backup_failure_reports_error(self, mock_http):
+        _cur.fetchone.return_value = ('col', 'a.jpg', 'https://res.cloudinary.com/x/col/a.jpg', None, None)
+        mock_http.get.side_effect = Exception('network down')
+        resp = self.client.post('/api/admin/images/1/retry-backup')
+        self.assertEqual(resp.status_code, 500)
+        self.assertFalse(resp.get_json()['success'])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin: AI-quote batch generation (dashboard lists collections + counts,
+# detail page lists one collection's images + quote status; the actual chat
+# call always happens client-side, so these routes only ever read/list).
+# ─────────────────────────────────────────────────────────────────────────────
+class TestAiQuoteBatchRoutes(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        _cur.fetchall.side_effect = None  # defensive: clear any leaked side_effect iterator
+        self.client = _app.app.test_client()
+
+    def tearDown(self):
+        # This class is the only one that sets fetchall.side_effect (a one-shot
+        # iterator) — must clear it so it doesn't leak into later tests/classes
+        # that rely on fetchall.return_value instead.
+        _cur.fetchall.side_effect = None
+
+    def test_dashboard_merges_counts_with_zero_image_collections(self):
+        _cur.fetchall.side_effect = [
+            [('GayReal', 10, 7)],           # GROUP BY counts query
+            [('GayReal',), ('EmptyOne',)],   # _load_collections()
+        ]
+        resp = self.client.get('/admin/ai-quotes')
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_data(as_text=True)
+        self.assertIn('GayReal', body)
+        self.assertIn('EmptyOne', body)
+
+    def test_collection_detail_404_when_collection_missing(self):
+        _cur.fetchone.return_value = None  # _collection_exists() -> False
+        resp = self.client.get('/admin/ai-quotes/NoSuchCollection')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_collection_detail_query_scoped_to_collection_and_active_rows(self):
+        _cur.fetchone.return_value = ('GayReal',)  # _collection_exists() -> True
+        _cur.fetchall.return_value = [{
+            'filename': 'a.jpg', 'url': 'https://res.cloudinary.com/x/GayReal/a.jpg',
+            'tags': ['beach'], 'ai_quote': None,
+        }]
+        resp = self.client.get('/admin/ai-quotes/GayReal')
+        self.assertEqual(resp.status_code, 200)
+        sql, params = _cur.execute.call_args.args
+        self.assertIn('collection_name = %s', sql)
+        self.assertIn('deleted_at IS NULL', sql)
+        self.assertEqual(params, ('GayReal',))
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

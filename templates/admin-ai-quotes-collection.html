@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Quotes — {{ collection }} — Admin</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script>
+    (function(){var t=null;try{t=localStorage.getItem('imgur.theme');}catch(e){}
+    if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}})();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    .adm-wrap{max-width:1200px;margin:0 auto;padding:2rem 1.5rem;}
+    .back-link{color:var(--muted-text);text-decoration:none;font-size:.88rem;
+      display:inline-flex;align-items:center;gap:.4rem;margin-bottom:1.2rem;}
+    .back-link:hover{color:var(--primary-color);}
+    .adm-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:1rem;}
+    .adm-header h1{font-size:1.5rem;font-weight:700;}
+    .adm-header h1 i{color:var(--primary-color);margin-right:.5rem;}
+
+    .toolbar{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:1rem;
+      background:var(--surface-color);border:1px solid rgba(164,6,110,.1);border-radius:.9rem;
+      padding:.8rem 1rem;box-shadow:0 2px 10px var(--shadow-color);}
+    .tb-btn{padding:.4rem .8rem;border-radius:.5rem;font-size:.78rem;font-weight:700;
+      border:1.5px solid var(--primary-color);cursor:pointer;background:transparent;
+      color:var(--primary-color);}
+    .tb-btn:hover{background:var(--primary-color);color:#fff;}
+    .tb-btn.primary{background:var(--primary-color);color:#fff;}
+    .tb-btn.stop{border-color:#ef4444;color:#ef4444;}
+    .tb-btn.stop:hover{background:#ef4444;color:#fff;}
+    .tb-btn:disabled{opacity:.5;cursor:not-allowed;}
+    .tb-status{font-size:.8rem;color:var(--muted-text);margin-left:auto;}
+
+    .tbl-wrap{overflow-x:auto;background:var(--surface-color);border-radius:1rem;
+      border:1px solid rgba(164,6,110,.1);box-shadow:0 2px 10px var(--shadow-color);}
+    table{width:100%;border-collapse:collapse;font-size:.87rem;}
+    th{padding:.7rem 1rem;text-align:left;font-size:.74rem;text-transform:uppercase;
+      letter-spacing:.06em;color:var(--muted-text);border-bottom:1px solid rgba(164,6,110,.1);}
+    td{padding:.6rem 1rem;border-bottom:1px solid rgba(164,6,110,.05);vertical-align:middle;}
+    tr:last-child td{border-bottom:none;}
+    .thumb{width:44px;height:44px;border-radius:.5rem;object-fit:cover;display:block;
+      background:rgba(164,6,110,.06);}
+    .tag-pill{display:inline-block;background:rgba(164,6,110,.08);color:var(--muted-text);
+      border-radius:999px;padding:.1rem .5rem;font-size:.7rem;margin:.1rem .2rem .1rem 0;}
+    .quote-text{font-size:.8rem;color:var(--muted-text);max-width:280px;overflow:hidden;
+      text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle;}
+    .badge{display:inline-flex;align-items:center;gap:.3rem;font-size:.72rem;font-weight:700;
+      padding:.15rem .5rem;border-radius:999px;}
+    .badge.has{background:rgba(34,197,94,.12);color:#22c55e;}
+    .badge.missing{background:rgba(239,68,68,.1);color:#ef4444;}
+    .row-status{font-size:.75rem;color:var(--muted-text);white-space:nowrap;}
+    .row-status.working{color:#f59e0b;}
+    .row-status.ok{color:#22c55e;}
+    .row-status.err{color:#ef4444;}
+    .row-icon-btn{background:none;border:none;color:var(--muted-text);cursor:pointer;font-size:.85rem;padding:.2rem .4rem;}
+    .row-icon-btn:hover{color:var(--primary-color);}
+    .empty{text-align:center;padding:2rem;color:var(--muted-text);}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-container">
+      <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+      <div class="navbar-menu">
+        <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+        <a href="/admin" class="navbar-link"><i class="fas fa-shield-alt"></i> Admin</a>
+        <a href="/admin/videos" class="navbar-link"><i class="fas fa-video"></i> Videos</a>
+        <a href="/admin/ai-quotes" class="navbar-link active"><i class="fas fa-quote-right"></i> AI Quotes</a>
+        <div class="navbar-dropdown">
+          <button type="button" class="navbar-link navbar-dropdown-toggle"><i class="fas fa-heartbeat"></i> Image Health <i class="fas fa-caret-down"></i></button>
+          <div class="navbar-dropdown-menu">
+            <a href="/admin/untagged-images" class="navbar-dropdown-item"><i class="fas fa-tags"></i> Untagged Images</a>
+            <a href="/admin/unknown-subject-images" class="navbar-dropdown-item"><i class="fas fa-user-slash"></i> Unknown Subject</a>
+            <a href="/admin/orphaned-images" class="navbar-dropdown-item"><i class="fas fa-trash-restore"></i> Orphaned Images</a>
+            <a href="/admin/missing-backup-images" class="navbar-dropdown-item"><i class="fas fa-cloud-upload-alt"></i> Missing B2 Backup</a>
+          </div>
+        </div>
+        <a href="/logout" class="navbar-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="adm-wrap">
+    <a href="/admin/ai-quotes" class="back-link"><i class="fas fa-arrow-left"></i> Back to Collections</a>
+    <div class="adm-header">
+      <h1><i class="fas fa-quote-right"></i> {{ collection }} — AI Quotes ({{ images|length }})</h1>
+    </div>
+
+    {% if images %}
+    <div class="toolbar">
+      <button type="button" class="tb-btn" id="selectAllBtn">Select All</button>
+      <button type="button" class="tb-btn" id="selectMissingBtn">Select Missing Only</button>
+      <button type="button" class="tb-btn" id="selectNoneBtn">Clear</button>
+      <button type="button" class="tb-btn primary" id="generateBtn" disabled><i class="fas fa-wand-magic-sparkles"></i> Generate for Selected (<span id="selCount">0</span>)</button>
+      <button type="button" class="tb-btn stop" id="stopBtn" style="display:none;"><i class="fas fa-stop"></i> Stop</button>
+      <span class="tb-status" id="progressStatus"></span>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="headerCb"></th>
+            <th></th>
+            <th>Filename</th>
+            <th>Tags</th>
+            <th>Quote Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="quotesBody">
+          {% for img in images %}
+          <tr data-filename="{{ img.filename }}">
+            <td><input type="checkbox" class="sel-cb"></td>
+            <td><img class="thumb" src="{{ img.url }}" alt="" loading="lazy"></td>
+            <td>{{ img.filename }}</td>
+            <td>{% for tag in img.tags[:4] %}<span class="tag-pill">{{ tag }}</span>{% endfor %}</td>
+            <td>
+              {% if img.ai_quote %}
+                <span class="badge has"><i class="fas fa-check"></i> Has quote</span>
+                <span class="quote-text" title="{{ img.ai_quote }}">{{ img.ai_quote }}</span>
+              {% else %}
+                <span class="badge missing"><i class="fas fa-xmark"></i> Missing</span>
+              {% endif %}
+              <span class="row-status" data-role="status"></span>
+            </td>
+            <td><button type="button" class="row-icon-btn" title="Generate for this image only" onclick="generateSingleRow(this)"><i class="fas fa-wand-magic-sparkles"></i></button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <p class="empty"><i class="fas fa-images"></i><br>No images in this collection.</p>
+    {% endif %}
+  </div>
+
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/hf-client.js') }}"></script>
+  <script>
+    const COLLECTION = {{ collection|tojson }};
+    let cachedHfToken = null;
+    let stopRequested = false;
+
+    async function getHfToken() {
+      if (cachedHfToken) return cachedHfToken;
+      const res = await fetch('/api/quote-chat-token');
+      const data = await res.json();
+      cachedHfToken = data.token || null;
+      return cachedHfToken;
+    }
+
+    // Mirrors gallery.js's generateAndSaveAiQuote() — fetch the prompt, call the
+    // chat API from the browser (server has no outbound path to huggingface.co),
+    // then cache the result server-side.
+    async function generateAndSaveAiQuote(collection, filename) {
+      const promptRes = await fetch(`/api/images/${encodeURIComponent(collection)}/${encodeURIComponent(filename)}/ai-quote-prompt`);
+      const promptData = await promptRes.json();
+      if (!promptRes.ok || !promptData.success) {
+        throw new Error(promptData.error || 'Not enough tag data to generate a quote');
+      }
+      const token = await getHfToken();
+      const quote = await callHuggingFaceChat({
+        token, model: promptData.model, systemPrompt: promptData.system_prompt,
+        userMessage: promptData.user_message, maxTokens: promptData.max_tokens,
+        apiBase: promptData.api_base,
+      });
+      await fetch(`/api/images/${encodeURIComponent(collection)}/${encodeURIComponent(filename)}/ai-quote`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quote }),
+      });
+      return quote;
+    }
+
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    function setRowStatus(row, state, message) {
+      const el = row.querySelector('[data-role="status"]');
+      el.className = 'row-status' + (state ? ' ' + state : '');
+      const icons = { working: '<i class="fas fa-spinner fa-spin"></i> Generating…', ok: '<i class="fas fa-check"></i> Saved', err: '<i class="fas fa-triangle-exclamation"></i> ' };
+      el.innerHTML = state ? (icons[state] || '') + (state === 'err' ? escapeHtml(message || 'Failed') : '') : '';
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+    }
+
+    function updateBadgeToHas(row, quote) {
+      const td = row.children[4];
+      const badge = td.querySelector('.badge');
+      badge.className = 'badge has';
+      badge.innerHTML = '<i class="fas fa-check"></i> Has quote';
+      let qt = td.querySelector('.quote-text');
+      if (!qt) {
+        qt = document.createElement('span');
+        qt.className = 'quote-text';
+        td.insertBefore(qt, td.querySelector('[data-role="status"]'));
+      }
+      qt.title = quote;
+      qt.textContent = quote;
+    }
+
+    async function generateForRow(row) {
+      setRowStatus(row, 'working');
+      try {
+        const quote = await generateAndSaveAiQuote(COLLECTION, row.dataset.filename);
+        updateBadgeToHas(row, quote);
+        setRowStatus(row, 'ok');
+        setTimeout(() => setRowStatus(row, null), 2000);
+        return true;
+      } catch (err) {
+        setRowStatus(row, 'err', err.message);
+        return false;
+      }
+    }
+
+    function generateSingleRow(btn) {
+      generateForRow(btn.closest('tr'));
+    }
+
+    function selectedCheckboxes() {
+      return [...document.querySelectorAll('.sel-cb:checked')];
+    }
+
+    function updateSelCount() {
+      const n = selectedCheckboxes().length;
+      document.getElementById('selCount').textContent = n;
+      document.getElementById('generateBtn').disabled = n === 0;
+    }
+
+    document.getElementById('selectAllBtn').addEventListener('click', () => {
+      document.querySelectorAll('.sel-cb').forEach(cb => cb.checked = true);
+      updateSelCount();
+    });
+    document.getElementById('selectNoneBtn').addEventListener('click', () => {
+      document.querySelectorAll('.sel-cb').forEach(cb => cb.checked = false);
+      updateSelCount();
+    });
+    document.getElementById('selectMissingBtn').addEventListener('click', () => {
+      document.querySelectorAll('#quotesBody tr').forEach(row => {
+        const cb = row.querySelector('.sel-cb');
+        cb.checked = !!row.querySelector('.badge.missing');
+      });
+      updateSelCount();
+    });
+    document.getElementById('headerCb').addEventListener('change', (e) => {
+      document.querySelectorAll('.sel-cb').forEach(cb => cb.checked = e.target.checked);
+      updateSelCount();
+    });
+    document.querySelectorAll('.sel-cb').forEach(cb => cb.addEventListener('change', updateSelCount));
+
+    document.getElementById('stopBtn').addEventListener('click', () => { stopRequested = true; });
+
+    document.getElementById('generateBtn').addEventListener('click', async () => {
+      const rows = selectedCheckboxes().map(cb => cb.closest('tr'));
+      if (!rows.length) return;
+      stopRequested = false;
+      const generateBtn = document.getElementById('generateBtn');
+      const stopBtn = document.getElementById('stopBtn');
+      const status = document.getElementById('progressStatus');
+      generateBtn.disabled = true;
+      stopBtn.style.display = 'inline-block';
+      let done = 0, failed = 0;
+      for (const row of rows) {
+        if (stopRequested) { status.textContent = `Stopped — ${done + failed}/${rows.length} processed`; break; }
+        const ok = await generateForRow(row);
+        ok ? done++ : failed++;
+        status.textContent = `${done + failed}/${rows.length} processed (${done} ok, ${failed} failed)`;
+        if (!stopRequested && (done + failed) < rows.length) await sleep(400);
+      }
+      stopBtn.style.display = 'none';
+      updateSelCount();
+    });
+
+    updateSelCount();
+  </script>
+</body>
+</html>

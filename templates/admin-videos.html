@@ -63,7 +63,16 @@
         <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
         <a href="/admin" class="navbar-link"><i class="fas fa-shield-alt"></i> Admin</a>
         <a href="/admin/videos" class="navbar-link active"><i class="fas fa-video"></i> Videos</a>
-        <a href="/admin/orphaned-images" class="navbar-link"><i class="fas fa-trash-restore"></i> Orphaned Images</a>
+        <a href="/admin/ai-quotes" class="navbar-link"><i class="fas fa-quote-right"></i> AI Quotes</a>
+        <div class="navbar-dropdown">
+          <button type="button" class="navbar-link navbar-dropdown-toggle"><i class="fas fa-heartbeat"></i> Image Health <i class="fas fa-caret-down"></i></button>
+          <div class="navbar-dropdown-menu">
+            <a href="/admin/untagged-images" class="navbar-dropdown-item"><i class="fas fa-tags"></i> Untagged Images</a>
+            <a href="/admin/unknown-subject-images" class="navbar-dropdown-item"><i class="fas fa-user-slash"></i> Unknown Subject</a>
+            <a href="/admin/orphaned-images" class="navbar-dropdown-item"><i class="fas fa-trash-restore"></i> Orphaned Images</a>
+            <a href="/admin/missing-backup-images" class="navbar-dropdown-item"><i class="fas fa-cloud-upload-alt"></i> Missing B2 Backup</a>
+          </div>
+        </div>
         <a href="/logout" class="navbar-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
         <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
       </div>

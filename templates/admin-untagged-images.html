@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Untagged Images — Admin</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script>
+    (function(){var t=null;try{t=localStorage.getItem('imgur.theme');}catch(e){}
+    if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}})();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    .adm-wrap{max-width:1200px;margin:0 auto;padding:2rem 1.5rem;}
+    .back-link{color:var(--muted-text);text-decoration:none;font-size:.88rem;
+      display:inline-flex;align-items:center;gap:.4rem;margin-bottom:1.2rem;}
+    .back-link:hover{color:var(--primary-color);}
+    .adm-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:1rem;}
+    .adm-header h1{font-size:1.5rem;font-weight:700;}
+    .adm-header h1 i{color:var(--primary-color);margin-right:.5rem;}
+
+    .tbl-wrap{overflow-x:auto;background:var(--surface-color);border-radius:1rem;
+      border:1px solid rgba(164,6,110,.1);box-shadow:0 2px 10px var(--shadow-color);}
+    table{width:100%;border-collapse:collapse;font-size:.87rem;}
+    th{padding:.7rem 1rem;text-align:left;font-size:.74rem;text-transform:uppercase;
+      letter-spacing:.06em;color:var(--muted-text);border-bottom:1px solid rgba(164,6,110,.1);}
+    td{padding:.65rem 1rem;border-bottom:1px solid rgba(164,6,110,.05);vertical-align:middle;}
+    tr:last-child td{border-bottom:none;}
+    .thumb{width:48px;height:48px;border-radius:.5rem;object-fit:cover;display:block;cursor:pointer;
+      background:rgba(164,6,110,.06);}
+    .user-cell{display:flex;align-items:center;gap:.6rem;}
+    .av{width:28px;height:28px;border-radius:50%;object-fit:cover;
+        background:linear-gradient(135deg,var(--primary-color),var(--secondary-color));
+        display:inline-flex;align-items:center;justify-content:center;
+        color:#fff;font-size:.75rem;font-weight:700;flex-shrink:0;}
+    .no-user{color:var(--muted-text);font-style:italic;font-size:.8rem;}
+    .vc-btn{padding:.35rem .7rem;border-radius:.5rem;font-size:.76rem;font-weight:700;
+      border:1.5px solid var(--primary-color);cursor:pointer;background:transparent;
+      color:var(--primary-color);text-align:center;text-decoration:none;display:inline-block;}
+    .vc-btn:hover{background:var(--primary-color);color:#fff;}
+    .vc-btn:disabled{opacity:.5;cursor:not-allowed;}
+    .empty{text-align:center;padding:2rem;color:var(--muted-text);}
+
+    /* Tag modal */
+    .modal-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:2000;
+      align-items:center;justify-content:center;padding:1rem;}
+    .modal-backdrop.open{display:flex;}
+    .tag-modal{background:var(--surface-color);border-radius:1rem;max-width:460px;width:100%;
+      max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.4);}
+    .tag-modal-header{display:flex;align-items:center;gap:.8rem;padding:1rem 1.2rem;
+      border-bottom:1px solid rgba(164,6,110,.1);position:sticky;top:0;background:var(--surface-color);}
+    .tag-modal-header img{width:56px;height:56px;border-radius:.6rem;object-fit:cover;flex-shrink:0;}
+    .tm-close{margin-left:auto;background:none;border:none;color:var(--muted-text);
+      font-size:1.1rem;cursor:pointer;padding:.3rem;}
+    .tm-close:hover{color:var(--primary-color);}
+    .tag-modal-body{padding:1rem 1.2rem;}
+    .sect-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;
+      color:var(--muted-text);font-weight:700;margin-bottom:.5rem;}
+    .part-row{display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.3rem 0;}
+    .part-label{font-size:.85rem;text-transform:capitalize;font-weight:600;}
+    .rating-btns{display:flex;gap:.3rem;}
+    .rating-btn{padding:.25rem .5rem;border-radius:.4rem;font-size:.68rem;font-weight:700;
+      border:1.5px solid rgba(164,6,110,.2);background:transparent;color:var(--muted-text);cursor:pointer;}
+    .rating-btn:hover{border-color:var(--primary-color);}
+    .rating-btn.active{background:var(--primary-color);border-color:var(--primary-color);color:#fff;}
+    #tmTags{width:100%;padding:.6rem .8rem;border-radius:.6rem;border:1.5px solid rgba(164,6,110,.2);
+      background:transparent;color:var(--text-color);font-size:.85rem;}
+    .tag-modal-footer{display:flex;align-items:center;justify-content:space-between;gap:.6rem;
+      padding:1rem 1.2rem;border-top:1px solid rgba(164,6,110,.1);}
+    .tm-status{font-size:.78rem;color:var(--muted-text);}
+    .tm-full-link{font-size:.78rem;color:var(--muted-text);text-decoration:none;}
+    .tm-full-link:hover{color:var(--primary-color);}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-container">
+      <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+      <div class="navbar-menu">
+        <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+        <a href="/admin" class="navbar-link"><i class="fas fa-shield-alt"></i> Admin</a>
+        <a href="/admin/videos" class="navbar-link"><i class="fas fa-video"></i> Videos</a>
+        <a href="/admin/ai-quotes" class="navbar-link"><i class="fas fa-quote-right"></i> AI Quotes</a>
+        <div class="navbar-dropdown">
+          <button type="button" class="navbar-link navbar-dropdown-toggle active"><i class="fas fa-heartbeat"></i> Image Health <i class="fas fa-caret-down"></i></button>
+          <div class="navbar-dropdown-menu">
+            <a href="/admin/untagged-images" class="navbar-dropdown-item active"><i class="fas fa-tags"></i> Untagged Images</a>
+            <a href="/admin/unknown-subject-images" class="navbar-dropdown-item"><i class="fas fa-user-slash"></i> Unknown Subject</a>
+            <a href="/admin/orphaned-images" class="navbar-dropdown-item"><i class="fas fa-trash-restore"></i> Orphaned Images</a>
+            <a href="/admin/missing-backup-images" class="navbar-dropdown-item"><i class="fas fa-cloud-upload-alt"></i> Missing B2 Backup</a>
+          </div>
+        </div>
+        <a href="/logout" class="navbar-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="adm-wrap">
+    <a href="/admin" class="back-link"><i class="fas fa-arrow-left"></i> Back to Admin</a>
+    <div class="adm-header">
+      <h1><i class="fas fa-tags"></i> Untagged Images ({{ untagged|length }})</h1>
+    </div>
+    <p style="color:var(--muted-text);font-size:.85rem;margin-bottom:1.2rem;">
+      Active images missing a rating for at least one of the {{ body_parts|length }} body-part
+      categories. Click the thumbnail or Tag to rate just that image here.
+    </p>
+
+    {% if untagged %}
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Collection</th>
+            <th>Filename</th>
+            <th>Uploader</th>
+            <th>Uploaded</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="untaggedBody">
+          {% for img in untagged %}
+          <tr data-image-id="{{ img.id }}" data-collection="{{ img.collection_name }}"
+              data-filename="{{ img.filename }}" data-url="{{ img.url }}"
+              data-tags='{{ img.tags|tojson }}' data-body-parts='{{ img.body_parts|tojson }}'>
+            <td><img class="thumb" src="{{ img.url }}" alt="" loading="lazy" onclick="openTagModal(this)"></td>
+            <td>{{ img.collection_name }}</td>
+            <td>{{ img.filename }}</td>
+            <td>
+              {% if img.uploader_username %}
+              <div class="user-cell">
+                <div class="av">{{ img.uploader_username[0]|upper }}</div>
+                <div>
+                  <div style="font-weight:600;">{{ img.uploader_username }}</div>
+                  <div style="font-size:.76rem;color:var(--muted-text);">{{ img.uploader_email }}</div>
+                </div>
+              </div>
+              {% else %}
+              <span class="no-user">Unknown</span>
+              {% endif %}
+            </td>
+            <td>{{ img.created_at }}</td>
+            <td><button type="button" class="vc-btn" onclick="openTagModal(this)"><i class="fas fa-tag"></i> Tag</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <p class="empty"><i class="fas fa-check-circle"></i><br>No untagged images.</p>
+    {% endif %}
+  </div>
+
+  <!-- Single-image tag modal -->
+  <div class="modal-backdrop" id="tagModalBackdrop">
+    <div class="tag-modal">
+      <div class="tag-modal-header">
+        <img id="tmThumb" src="" alt="">
+        <div>
+          <div id="tmCollection" style="font-weight:700;"></div>
+          <div id="tmFilename" style="font-size:.78rem;color:var(--muted-text);"></div>
+        </div>
+        <button type="button" class="tm-close" id="tmClose"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="tag-modal-body">
+        <div class="sect-label">Body Parts</div>
+        <div id="tmParts"></div>
+        <div class="sect-label" style="margin-top:1rem;">Tags (comma separated)</div>
+        <input type="text" id="tmTags" placeholder="e.g. outdoor, smiling, beach">
+      </div>
+      <div class="tag-modal-footer">
+        <a href="#" id="tmFullLink" class="tm-full-link" target="_blank">Open in full tagger <i class="fas fa-arrow-up-right-from-square"></i></a>
+        <div style="display:flex;align-items:center;gap:.6rem;">
+          <span class="tm-status" id="tmStatus"></span>
+          <button type="button" class="vc-btn" id="tmSave"><i class="fas fa-save"></i> Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script>
+    const BODY_PARTS = {{ body_parts|tojson }};
+    const RATING_OPTIONS = [
+      { v: '',   label: '—',   title: 'Not tagged' },
+      { v: 'h',  label: 'H',   title: 'Hidden' },
+      { v: 'c',  label: 'C',   title: 'Covered' },
+      { v: 'sn', label: 'SN',  title: 'Semi-nude' },
+      { v: 'n',  label: 'N',   title: 'Nude' },
+      { v: 'x',  label: 'N/A', title: 'Not applicable' },
+    ];
+
+    let currentImg = null;
+
+    function renderParts() {
+      document.getElementById('tmParts').innerHTML = BODY_PARTS.map(part => {
+        const current = currentImg.bodyParts[part] || '';
+        const btns = RATING_OPTIONS.map(opt =>
+          `<button type="button" class="rating-btn${opt.v === current ? ' active' : ''}" data-part="${part}" data-rating="${opt.v}" title="${opt.title}">${opt.label}</button>`
+        ).join('');
+        return `<div class="part-row"><span class="part-label">${part}</span><div class="rating-btns">${btns}</div></div>`;
+      }).join('');
+    }
+
+    function openTagModal(el) {
+      const row = el.closest('tr');
+      currentImg = {
+        collection: row.dataset.collection,
+        filename: row.dataset.filename,
+        url: row.dataset.url,
+        bodyParts: JSON.parse(row.dataset.bodyParts || '{}'),
+        tags: JSON.parse(row.dataset.tags || '[]'),
+      };
+      document.getElementById('tmThumb').src = currentImg.url;
+      document.getElementById('tmCollection').textContent = currentImg.collection;
+      document.getElementById('tmFilename').textContent = currentImg.filename;
+      document.getElementById('tmTags').value = currentImg.tags.join(', ');
+      document.getElementById('tmFullLink').href = `/tagger/${encodeURIComponent(currentImg.collection)}`;
+      document.getElementById('tmStatus').textContent = '';
+      document.getElementById('tmSave').disabled = false;
+      renderParts();
+      document.getElementById('tagModalBackdrop').classList.add('open');
+    }
+
+    function closeTagModal() {
+      document.getElementById('tagModalBackdrop').classList.remove('open');
+      currentImg = null;
+    }
+
+    document.getElementById('tmParts').addEventListener('click', (e) => {
+      const btn = e.target.closest('.rating-btn');
+      if (!btn) return;
+      currentImg.bodyParts[btn.dataset.part] = btn.dataset.rating;
+      btn.closest('.rating-btns').querySelectorAll('.rating-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+
+    document.getElementById('tmClose').addEventListener('click', closeTagModal);
+    document.getElementById('tagModalBackdrop').addEventListener('click', (e) => {
+      if (e.target.id === 'tagModalBackdrop') closeTagModal();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.getElementById('tagModalBackdrop').classList.contains('open')) closeTagModal();
+    });
+
+    document.getElementById('tmSave').addEventListener('click', async () => {
+      if (!currentImg) return;
+      const saveBtn = document.getElementById('tmSave');
+      const status = document.getElementById('tmStatus');
+      const tags = document.getElementById('tmTags').value.split(',').map(t => t.trim()).filter(Boolean);
+      const bodyParts = {};
+      for (const [part, rating] of Object.entries(currentImg.bodyParts)) {
+        if (rating) bodyParts[part] = rating;
+      }
+      saveBtn.disabled = true;
+      status.textContent = 'Saving…';
+      try {
+        const res = await fetch(`/api/images/${encodeURIComponent(currentImg.collection)}/${encodeURIComponent(currentImg.filename)}/body-parts`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ body_parts: bodyParts, tags: tags }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          location.reload();
+        } else {
+          status.textContent = data.error || 'Failed to save';
+          saveBtn.disabled = false;
+        }
+      } catch (err) {
+        status.textContent = 'Network error';
+        saveBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

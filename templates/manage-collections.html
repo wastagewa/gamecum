@@ -43,9 +43,15 @@
                 </div>
                 <a href="/tags" class="navbar-link"><i class="fas fa-tags"></i> Browse Tags</a>
                 <a href="/models" class="navbar-link"><i class="fas fa-user"></i> Browse Models</a>
-                <a href="/manage-collections" class="navbar-link active"><i class="fas fa-cog"></i> Manage</a>
-                <a href="/manage-models" class="navbar-link"><i class="fas fa-user-tag"></i> Manage Models</a>
-                <a href="/manage-quote-prompt" class="navbar-link"><i class="fas fa-quote-right"></i> Quote Prompt</a>
+                <div class="navbar-dropdown">
+                  <button type="button" class="navbar-link navbar-dropdown-toggle active"><i class="fas fa-cog"></i> Manage <i class="fas fa-caret-down"></i></button>
+                  <div class="navbar-dropdown-menu">
+                    <a href="/manage-collections" class="navbar-dropdown-item active"><i class="fas fa-cog"></i> Collections</a>
+                    <a href="/manage-models" class="navbar-dropdown-item"><i class="fas fa-user-tag"></i> Models</a>
+                    <a href="/manage-quote-prompt" class="navbar-dropdown-item"><i class="fas fa-quote-right"></i> Quote Prompt</a>
+                    <a href="/admin/ai-quotes" class="navbar-dropdown-item"><i class="fas fa-wand-magic-sparkles"></i> AI Quotes</a>
+                  </div>
+                </div>
                 <button id="themeToggle" class="navbar-theme-toggle" type="button">
                     <i class="fas fa-moon"></i>
                 </button>

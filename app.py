@@ -3972,6 +3972,187 @@ def api_set_video_item_access(collection_name, video_id):
 
     return jsonify({'success': True, 'granted': grant})
 
+# ── Admin: image health (untagged / unknown subject / orphaned / missing B2 backup) ──
+# Four views over the images table's edge cases:
+#  - untagged: active images missing a rating for at least one BODY_PARTS entry
+#  - unknown-subject: active images with no rows in image_models (no subject assigned)
+#  - orphaned: soft-deleted images whose B2 backup still exists, awaiting purge
+#  - missing-backup: active images where the best-effort B2 backup upload never
+#    landed (or hasn't been retried since), so they exist only on Cloudinary
+
+@app.route('/admin/untagged-images')
+def admin_untagged_images():
+    """An image counts as 'untagged' only once EVERY body part in BODY_PARTS has
+    a rating — the jsonb '?&' operator checks all of those keys are present."""
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT i.id, i.collection_name, i.filename, i.url, i.tags, i.body_parts, i.created_at,
+                   u.username AS uploader_username, u.email AS uploader_email
+            FROM images i
+            LEFT JOIN users u ON u.id = i.uploaded_by
+            WHERE i.deleted_at IS NULL
+              AND NOT (COALESCE(i.body_parts, '{}'::jsonb) ?& %s)
+            ORDER BY i.created_at DESC
+        """, (BODY_PARTS,))
+        untagged = [dict(r) for r in cur.fetchall()]
+        for row in untagged:
+            row['tags'] = list(row['tags']) if row['tags'] else []
+            row['body_parts'] = dict(row['body_parts']) if row['body_parts'] else {}
+    finally:
+        _release_db(conn)
+    return render_template('admin-untagged-images.html', untagged=untagged, body_parts=BODY_PARTS)
+
+@app.route('/admin/unknown-subject-images')
+def admin_unknown_subject_images():
+    """Images with zero rows in image_models — nobody has assigned a subject/model to them."""
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT i.id, i.collection_name, i.filename, i.url, i.created_at,
+                   u.username AS uploader_username, u.email AS uploader_email
+            FROM images i
+            LEFT JOIN users u ON u.id = i.uploaded_by
+            WHERE i.deleted_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM image_models im WHERE im.image_id = i.id)
+            ORDER BY i.created_at DESC
+        """)
+        unknown_subject = [dict(r) for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+    return render_template('admin-unknown-subject-images.html', unknown_subject=unknown_subject)
+
+@app.route('/admin/missing-backup-images')
+def admin_missing_backup_images():
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT i.id, i.collection_name, i.filename, i.url, i.created_at,
+                   u.username AS uploader_username, u.email AS uploader_email
+            FROM images i
+            LEFT JOIN users u ON u.id = i.uploaded_by
+            WHERE i.deleted_at IS NULL AND i.b2_backup_key IS NULL
+            ORDER BY i.created_at DESC
+        """)
+        missing_backup = [dict(r) for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+    return render_template('admin-missing-backup-images.html', missing_backup=missing_backup)
+
+@app.route('/api/admin/images/<int:image_id>/retry-backup', methods=['POST'])
+@admin_required
+def api_retry_image_backup(image_id):
+    """Best-effort: download an image back off Cloudinary and upload it to B2,
+    for images whose original upload-time backup attempt failed or was never
+    tried. No-ops (400) if a backup already exists or the image is deleted."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT collection_name, filename, url, b2_backup_key, deleted_at FROM images WHERE id = %s",
+            (image_id,)
+        )
+        row = cur.fetchone()
+    finally:
+        _release_db(conn)
+
+    if not row:
+        return jsonify({'success': False, 'error': 'Image not found'}), 404
+    collection, filename, url, existing_backup_key, deleted_at = row
+    if deleted_at is not None:
+        return jsonify({'success': False, 'error': 'Image is deleted'}), 400
+    if existing_backup_key:
+        return jsonify({'success': False, 'error': 'Backup already exists'}), 400
+    if not _HTTP_AVAILABLE:
+        return jsonify({'success': False, 'error': 'HTTP client not available'}), 500
+
+    key = _get_image_key(collection, filename)
+    try:
+        resp = _http.get(url, timeout=30)
+        resp.raise_for_status()
+        _b2_upload_fileobj(io.BytesIO(resp.content), key, resp.headers.get('Content-Type'))
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Backup retry failed: {str(e)}'}), 500
+
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE images SET b2_backup_key = %s WHERE id = %s", (key, image_id))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+    return jsonify({'success': True, 'b2_backup_key': key})
+
+# ── Admin: AI quote batch generation ────────────────────────────────────────────
+# The chat completion call itself always happens client-side (see hf-client.js —
+# the server has no outbound path to huggingface.co), so these routes only ever
+# list collections/images and their current ai_quote status; the actual
+# generate-and-cache loop is driven by the browser hitting the same
+# /api/images/<collection>/<filename>/ai-quote-prompt and .../ai-quote endpoints
+# the single-image gallery flow already uses, once per selected image.
+
+@app.route('/admin/ai-quotes')
+def admin_ai_quotes_dashboard():
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT collection_name,
+                   COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE ai_quote IS NOT NULL AND ai_quote <> '') AS with_quote
+            FROM images
+            WHERE deleted_at IS NULL
+            GROUP BY collection_name
+        """)
+        counts = {row[0]: {'total': row[1], 'with_quote': row[2]} for row in cur.fetchall()}
+    finally:
+        _release_db(conn)
+
+    collections = []
+    for name in _load_collections():
+        c = counts.get(name, {'total': 0, 'with_quote': 0})
+        collections.append({
+            'name': name, 'total': c['total'], 'with_quote': c['with_quote'],
+            'missing': c['total'] - c['with_quote'],
+        })
+    collections.sort(key=lambda c: c['name'])
+    return render_template('admin-ai-quotes.html', collections=collections)
+
+@app.route('/admin/ai-quotes/<collection_name>')
+def admin_ai_quotes_collection(collection_name):
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
+    safe_name = _safe_collection_name(collection_name)
+    if not _collection_exists(safe_name):
+        return "Collection not found", 404
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT filename, url, tags, ai_quote
+            FROM images
+            WHERE collection_name = %s AND deleted_at IS NULL
+            ORDER BY created_at DESC
+        """, (safe_name,))
+        images = [dict(r) for r in cur.fetchall()]
+        for img in images:
+            img['tags'] = list(img['tags']) if img['tags'] else []
+    finally:
+        _release_db(conn)
+    return render_template('admin-ai-quotes-collection.html', collection=safe_name, images=images)
+
 # ── Admin: orphaned image backups ──────────────────────────────────────────────
 # Soft-deleted images keep their row (deleted_at set) and their B2 backup key so
 # an admin can review what was deleted and, if needed, recover it from B2 before

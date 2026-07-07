@@ -13,10 +13,13 @@
     const btn = document.getElementById('themeToggle');
     if(btn){
       const isDark = theme === 'dark';
+      const label = isDark ? 'Switch to light mode' : 'Switch to dark mode';
       btn.setAttribute('aria-pressed', String(isDark));
-      btn.innerHTML = isDark
-        ? '<i class="fas fa-sun"></i> Light'
-        : '<i class="fas fa-moon"></i> Dark';
+      btn.setAttribute('aria-label', label);
+      btn.setAttribute('title', label);
+      // Icon-only (no text label) — keeps this button's footprint small so it
+      // doesn't tip an already-tight navbar row into wrapping.
+      btn.innerHTML = isDark ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>';
     }
   }
   function initTheme(){

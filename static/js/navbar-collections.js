@@ -1,4 +1,16 @@
 // Dynamically load collections into navbar dropdown
+
+// Global (not inside the IIFE below) so the inline onerror="" attribute on the
+// nav avatar <img> can reach it — swaps a failed-to-load avatar image for the
+// same initial-letter badge used when there's no avatar_url at all.
+window.__navAvatarError = function(imgEl) {
+    const initial = imgEl.getAttribute('data-fallback-initial') || '?';
+    const span = document.createElement('span');
+    span.style.cssText = 'width:22px;height:22px;border-radius:50%;background:var(--primary-color);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;flex-shrink:0;';
+    span.textContent = initial;
+    imgEl.replaceWith(span);
+};
+
 (function() {
     async function loadCollections() {
         const dropdown = document.getElementById('collectionsDropdown');
@@ -61,29 +73,42 @@
 
             const el = document.createElement('div');
             el.id = 'user-nav-item';
-            el.style.cssText = 'display:flex;align-items:center;gap:.5rem;';
 
             if (d.authenticated) {
+                // One compact "Account" dropdown instead of separate admin/avatar/logout
+                // items — same navbar-dropdown pattern as "View Collections" — so the
+                // authenticated cluster never balloons into 3-4 extra top-level items.
+                el.className = 'navbar-dropdown';
+                const initial = d.username.charAt(0).toUpperCase();
+                // Google's avatar URL can fail to load client-side (ad-blockers/privacy
+                // extensions commonly block googleusercontent.com, expired sessions, etc.)
+                // even though the URL itself is valid — fall back to the initial-letter
+                // badge instead of showing a broken-image icon.
                 const avatar = d.avatar_url
-                    ? `<img src="${d.avatar_url}" style="width:26px;height:26px;border-radius:50%;object-fit:cover;" alt="">`
-                    : `<span style="width:26px;height:26px;border-radius:50%;background:var(--primary-color);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;">${d.username[0].toUpperCase()}</span>`;
-                const adminLink = d.is_admin
-                    ? `<a href="/admin" class="navbar-link" title="Admin"><i class="fas fa-shield-alt"></i></a>`
+                    ? `<img src="${d.avatar_url}" data-fallback-initial="${initial}" style="width:22px;height:22px;border-radius:50%;object-fit:cover;flex-shrink:0;" alt="" onerror="window.__navAvatarError(this)">`
+                    : `<span style="width:22px;height:22px;border-radius:50%;background:var(--primary-color);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;flex-shrink:0;">${initial}</span>`;
+                const adminItem = d.is_admin
+                    ? `<a href="/admin" class="navbar-dropdown-item"><i class="fas fa-shield-alt"></i> Admin Dashboard</a>`
                     : '';
                 el.innerHTML = `
-                    ${adminLink}
-                    <span class="navbar-link" style="cursor:default;gap:.45rem;">
+                    <button type="button" class="navbar-link navbar-dropdown-toggle">
                         ${avatar}
-                        <span style="font-size:.85rem;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.username}</span>
-                    </span>
-                    <a href="/logout" class="navbar-link" title="Logout"><i class="fas fa-sign-out-alt"></i></a>`;
+                        <span style="max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.username}</span>
+                        <i class="fas fa-caret-down"></i>
+                    </button>
+                    <div class="navbar-dropdown-menu">
+                        ${adminItem}
+                        <a href="/logout" class="navbar-dropdown-item"><i class="fas fa-sign-out-alt"></i> Logout</a>
+                    </div>`;
             } else if (d.is_guest) {
+                el.style.cssText = 'display:flex;align-items:center;gap:.5rem;';
                 el.innerHTML = `
                     <span class="navbar-link" style="cursor:default;font-size:.85rem;color:var(--muted-text);">
                         <i class="fas fa-user-secret"></i> ${d.username}
                     </span>
                     <a href="/logout" class="navbar-link" title="Sign In"><i class="fas fa-sign-in-alt"></i></a>`;
             } else {
+                el.style.cssText = 'display:flex;align-items:center;';
                 el.innerHTML = `<a href="/login" class="navbar-link"><i class="fas fa-sign-in-alt"></i> Sign In</a>`;
             }
 
