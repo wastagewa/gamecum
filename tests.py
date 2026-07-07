@@ -56,6 +56,12 @@ sys.modules['psycopg2.extras']  = _pg.extras
 # boto3: S3 client is created at import time
 sys.modules['boto3'] = MagicMock()
 
+# cloudinary: cloudinary.config() is called at import time
+_cloudinary = MagicMock()
+sys.modules['cloudinary'] = _cloudinary
+sys.modules['cloudinary.uploader'] = _cloudinary.uploader
+sys.modules['cloudinary.api'] = _cloudinary.api
+
 # authlib: OAuth is instantiated at import time
 sys.modules['authlib']                              = MagicMock()
 sys.modules['authlib.integrations']                 = MagicMock()
@@ -271,8 +277,7 @@ class TestCcCollectionImages(unittest.TestCase):
         return data
 
     @patch.object(_app, '_load_tags')
-    @patch.object(_app, '_b2_sign_url', side_effect=lambda k: f'signed:{k}')
-    def test_two_matching_parts_eligible(self, _sign, mock_load):
+    def test_two_matching_parts_eligible(self, mock_load):
         mock_load.return_value = self._fake_tags_data([
             ({'boobs': 'n', 'pussy': 'x'}, []),
         ])
@@ -280,8 +285,7 @@ class TestCcCollectionImages(unittest.TestCase):
         self.assertEqual(len(result), 1)
 
     @patch.object(_app, '_load_tags')
-    @patch.object(_app, '_b2_sign_url', side_effect=lambda k: f'signed:{k}')
-    def test_one_matching_part_not_eligible(self, _sign, mock_load):
+    def test_one_matching_part_not_eligible(self, mock_load):
         mock_load.return_value = self._fake_tags_data([
             ({'boobs': 'n'}, []),
         ])
@@ -289,8 +293,7 @@ class TestCcCollectionImages(unittest.TestCase):
         self.assertEqual(len(result), 0)
 
     @patch.object(_app, '_load_tags')
-    @patch.object(_app, '_b2_sign_url', side_effect=lambda k: f'signed:{k}')
-    def test_options_keys_match_body_part_names(self, _sign, mock_load):
+    def test_options_keys_match_body_part_names(self, mock_load):
         mock_load.return_value = self._fake_tags_data([
             ({'boobs': 'n', 'butt': 'sn', 'face': 'c'}, []),
         ])
@@ -298,8 +301,7 @@ class TestCcCollectionImages(unittest.TestCase):
         self.assertSetEqual(set(result[0]['options'].keys()), {'boobs', 'butt', 'face'})
 
     @patch.object(_app, '_load_tags')
-    @patch.object(_app, '_b2_sign_url', side_effect=lambda k: f'signed:{k}')
-    def test_body_part_not_in_keyword_map_excluded_from_options(self, _sign, mock_load):
+    def test_body_part_not_in_keyword_map_excluded_from_options(self, mock_load):
         # 'chest' is in CC_CATEGORY_KEYWORDS_GAY but not DEFAULT — should be ignored
         mock_load.return_value = self._fake_tags_data([
             ({'boobs': 'n', 'chest': 'sn'}, []),   # only 1 valid for DEFAULT map
@@ -308,8 +310,7 @@ class TestCcCollectionImages(unittest.TestCase):
         self.assertEqual(len(result), 0)
 
     @patch.object(_app, '_load_tags')
-    @patch.object(_app, '_b2_sign_url', side_effect=lambda k: f'signed:{k}')
-    def test_legacy_flat_tags_fallback_when_no_body_parts(self, _sign, mock_load):
+    def test_legacy_flat_tags_fallback_when_no_body_parts(self, mock_load):
         mock_load.return_value = self._fake_tags_data([
             ({}, ['boobs', 'pussy', 'n']),
         ])
@@ -319,8 +320,7 @@ class TestCcCollectionImages(unittest.TestCase):
         self.assertIn('pussy', result[0]['options'])
 
     @patch.object(_app, '_load_tags')
-    @patch.object(_app, '_b2_sign_url', side_effect=lambda k: f'signed:{k}')
-    def test_empty_body_parts_and_no_tags_not_eligible(self, _sign, mock_load):
+    def test_empty_body_parts_and_no_tags_not_eligible(self, mock_load):
         mock_load.return_value = self._fake_tags_data([
             ({}, []),
         ])
@@ -328,8 +328,7 @@ class TestCcCollectionImages(unittest.TestCase):
         self.assertEqual(len(result), 0)
 
     @patch.object(_app, '_load_tags')
-    @patch.object(_app, '_b2_sign_url', side_effect=lambda k: f'signed:{k}')
-    def test_mixed_new_and_legacy_images(self, _sign, mock_load):
+    def test_mixed_new_and_legacy_images(self, mock_load):
         mock_load.return_value = self._fake_tags_data([
             ({'boobs': 'n', 'face': 'sn'}, []),          # new format — eligible
             ({}, ['boobs', 'butt', 'sn']),                 # legacy — eligible
@@ -339,13 +338,74 @@ class TestCcCollectionImages(unittest.TestCase):
         self.assertEqual(len(result), 2)
 
     @patch.object(_app, '_load_tags')
-    @patch.object(_app, '_b2_sign_url', side_effect=lambda k: f'signed:{k}')
-    def test_url_is_signed(self, _sign, mock_load):
+    def test_url_passed_through_unchanged(self, mock_load):
         mock_load.return_value = self._fake_tags_data([
             ({'boobs': 'n', 'butt': 'sn'}, []),
         ])
         result = _app._cc_collection_images('col', self.KM)
-        self.assertTrue(result[0]['url'].startswith('signed:'))
+        self.assertEqual(result[0]['url'], 'col/0.jpg')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. Image storage: Cloudinary primary + B2 backup, soft-delete
+# ─────────────────────────────────────────────────────────────────────────────
+class TestImageStorageHelpers(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        _cloudinary.reset_mock()
+
+    def test_db_insert_image_passes_b2_backup_key(self):
+        _app._db_insert_image('col', 'file.jpg', 'https://res.cloudinary.com/x/col/file',
+                               user_id=1, b2_backup_key='col/file.jpg')
+        sql, params = _cur.execute.call_args.args
+        self.assertIn('b2_backup_key', sql)
+        self.assertIn('col/file.jpg', params)
+
+    def test_db_insert_image_defaults_backup_key_to_none(self):
+        _app._db_insert_image('col', 'file.jpg', 'https://res.cloudinary.com/x/col/file')
+        _, params = _cur.execute.call_args.args
+        self.assertIsNone(params[-1])
+
+    def test_db_soft_delete_image_updates_not_deletes(self):
+        _app._db_soft_delete_image('col', 'file.jpg')
+        sql, params = _cur.execute.call_args.args
+        self.assertIn('UPDATE images', sql)
+        self.assertIn('deleted_at', sql)
+        self.assertNotIn('DELETE FROM images', sql)
+
+    def test_load_tags_excludes_soft_deleted(self):
+        _app._load_tags()
+        sql = _cur.execute.call_args.args[0]
+        self.assertIn('deleted_at IS NULL', sql)
+
+    def test_find_image_collection_returns_collection(self):
+        _cur.fetchone.return_value = ('mycoll',)
+        self.assertEqual(_app._find_image_collection('abc.jpg'), 'mycoll')
+
+    def test_find_image_collection_returns_none_when_missing(self):
+        _cur.fetchone.return_value = None
+        self.assertIsNone(_app._find_image_collection('missing.jpg'))
+
+    def test_cloudinary_upload_uses_image_resource_type_and_given_public_id(self):
+        _cloudinary.uploader.upload.return_value = {'secure_url': 'https://res.cloudinary.com/x/col/abc'}
+        url = _app._cloudinary_upload(b'filedata', 'col/abc')
+        _, kwargs = _cloudinary.uploader.upload.call_args
+        self.assertEqual(kwargs.get('resource_type'), 'image')
+        self.assertEqual(kwargs.get('public_id'), 'col/abc')
+        self.assertEqual(url, 'https://res.cloudinary.com/x/col/abc')
+
+    def test_cloudinary_delete_calls_destroy_with_image_resource_type(self):
+        _app._cloudinary_delete('col/abc')
+        _cloudinary.uploader.destroy.assert_called_with('col/abc', resource_type='image')
+
+    def test_cloudinary_rename_returns_new_secure_url(self):
+        _cloudinary.uploader.rename.return_value = {'secure_url': 'https://res.cloudinary.com/x/newcol/abc'}
+        url = _app._cloudinary_rename('col/abc', 'newcol/abc')
+        _cloudinary.uploader.rename.assert_called_with('col/abc', 'newcol/abc', resource_type='image')
+        self.assertEqual(url, 'https://res.cloudinary.com/x/newcol/abc')
 
 
 if __name__ == '__main__':

@@ -24,7 +24,11 @@ import re
 import string
 import time as _time
 from functools import wraps
+import io
 import boto3
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
 import psycopg2
 import psycopg2.pool
 import psycopg2.extras
@@ -136,6 +140,51 @@ def _b2_move_object(old_key: str, new_key: str):
     )
     _s3.delete_object(Bucket=B2_BUCKET, Key=old_key)
     return new_key
+
+# ── Cloudinary (primary image storage) ──────────────────────────────────────────
+# Images are served exclusively from Cloudinary as their original bytes (no
+# f_auto/q_auto transforms — this app has pixel-zoom minigames that need exact
+# fidelity to the uploaded file). B2 is kept as a synchronous, best-effort backup
+# copy only — it is never read from for images again once uploaded.
+
+CLOUDINARY_CLOUD_NAME = os.environ.get('CLOUDINARY_CLOUD_NAME', '')
+CLOUDINARY_API_KEY = os.environ.get('CLOUDINARY_API_KEY', '')
+CLOUDINARY_API_SECRET = os.environ.get('CLOUDINARY_API_SECRET', '')
+
+cloudinary.config(
+    cloud_name=CLOUDINARY_CLOUD_NAME,
+    api_key=CLOUDINARY_API_KEY,
+    api_secret=CLOUDINARY_API_SECRET,
+    secure=True,
+)
+
+def _cloudinary_upload(fileobj, public_id: str):
+    """Upload a file-like object to Cloudinary as-is (no transformation). Returns secure_url."""
+    result = cloudinary.uploader.upload(
+        fileobj,
+        public_id=public_id,
+        resource_type='image',
+        overwrite=False,
+        unique_filename=False,
+        use_filename=False,
+    )
+    return result['secure_url']
+
+def _cloudinary_delete(public_id: str):
+    """Hard-delete a Cloudinary image asset by public_id."""
+    cloudinary.uploader.destroy(public_id, resource_type='image')
+
+def _cloudinary_rename(old_public_id: str, new_public_id: str):
+    """Rename (move) a Cloudinary image asset in place. Returns the new secure_url.
+    Raises on failure — callers must not silently swallow this, since (unlike B2 keys)
+    the resulting URL is stored and rendered directly with no re-signing step to fall
+    back on."""
+    result = cloudinary.uploader.rename(old_public_id, new_public_id, resource_type='image')
+    return result['secure_url']
+
+def _cloudinary_delete_prefix(prefix: str):
+    """Delete every Cloudinary image asset under a folder prefix (used for whole-collection delete)."""
+    cloudinary.api.delete_resources_by_prefix(prefix, resource_type='image')
 
 # ── Auth setup ────────────────────────────────────────────────────────────────
 
@@ -252,6 +301,21 @@ def init_db():
         cur.execute("""
             ALTER TABLE images
             ADD COLUMN IF NOT EXISTS ai_quote TEXT
+        """)
+        # B2 backup key for the dual-write Cloudinary/B2 image storage scheme —
+        # Cloudinary is the live/served copy (images.url), B2 is a write-only backup
+        # never read from directly. NULL if the best-effort backup upload failed.
+        cur.execute("""
+            ALTER TABLE images
+            ADD COLUMN IF NOT EXISTS b2_backup_key TEXT
+        """)
+        # Soft-delete marker: NULL = active image, non-null = deleted (and shows up
+        # in the /admin/orphaned-images backup-recovery page). The Cloudinary asset
+        # is actually deleted at delete time; the B2 backup is kept until an admin
+        # purges it from that page.
+        cur.execute("""
+            ALTER TABLE images
+            ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ
         """)
         # Generic admin-editable key/value settings (currently just the AI quote
         # system prompt, kept here rather than a dedicated column so future settings
@@ -391,7 +455,7 @@ def _load_tags():
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT collection_name, filename, url, tags, locked, body_parts FROM images"
+            "SELECT collection_name, filename, url, tags, locked, body_parts FROM images WHERE deleted_at IS NULL"
         )
         result = {}
         for coll, fname, url, tags, locked, body_parts in cur.fetchall():
@@ -432,23 +496,27 @@ def _save_tags(tags: dict):
     finally:
         _release_db(conn)
 
-def _db_insert_image(collection: str, filename: str, url: str, user_id: int = None):
+def _db_insert_image(collection: str, filename: str, url: str, user_id: int = None, b2_backup_key: str = None):
     """Insert a new image row, ensuring its collection exists first."""
     _ensure_collection(collection)
     conn = _get_db()
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO images (collection_name, filename, url, tags, locked, uploaded_by)
-            VALUES (%s, %s, %s, '{}', FALSE, %s)
+            INSERT INTO images (collection_name, filename, url, tags, locked, uploaded_by, b2_backup_key)
+            VALUES (%s, %s, %s, '{}', FALSE, %s, %s)
             ON CONFLICT (collection_name, filename) DO UPDATE
-                SET url = EXCLUDED.url, uploaded_by = COALESCE(EXCLUDED.uploaded_by, images.uploaded_by)
-        """, (collection, filename, url, user_id))
+                SET url = EXCLUDED.url,
+                    uploaded_by = COALESCE(EXCLUDED.uploaded_by, images.uploaded_by),
+                    b2_backup_key = EXCLUDED.b2_backup_key
+        """, (collection, filename, url, user_id, b2_backup_key))
         conn.commit()
     finally:
         _release_db(conn)
 
 def _db_delete_image(collection: str, filename: str):
+    """Hard-delete an image row. Only used by the orphaned-images purge action —
+    normal image deletion goes through _db_soft_delete_image() instead."""
     conn = _get_db()
     try:
         cur = conn.cursor()
@@ -460,12 +528,43 @@ def _db_delete_image(collection: str, filename: str):
     finally:
         _release_db(conn)
 
+def _db_soft_delete_image(collection: str, filename: str):
+    """Mark an image row deleted without removing it — the Cloudinary asset is
+    deleted separately by the caller, but the B2 backup (and this row, for
+    admin visibility) is kept until purged from /admin/orphaned-images."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE images SET deleted_at = NOW() WHERE collection_name = %s AND filename = %s",
+            (collection, filename)
+        )
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _find_image_collection(filename: str):
+    """Look up which collection an image belongs to by its (UUID) filename alone —
+    used by the legacy collection-less /delete-image/<filename> route. Returns
+    None if no active image with that filename exists."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT collection_name FROM images WHERE filename = %s AND deleted_at IS NULL LIMIT 1",
+            (filename,)
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        _release_db(conn)
+
 def _image_exists_in_tags(safe_name: str, filename: str):
     conn = _get_db()
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT 1 FROM images WHERE collection_name = %s AND filename = %s",
+            "SELECT 1 FROM images WHERE collection_name = %s AND filename = %s AND deleted_at IS NULL",
             (safe_name, filename)
         )
         return cur.fetchone() is not None
@@ -771,7 +870,7 @@ def _get_images_by_model_ids(model_ids: list, match_all: bool = False):
                 SELECT i.collection_name, i.filename, i.url, i.tags, i.body_parts
                 FROM images i
                 JOIN image_models im ON im.image_id = i.id
-                WHERE im.model_id = ANY(%s)
+                WHERE im.model_id = ANY(%s) AND i.deleted_at IS NULL
                 GROUP BY i.id
                 HAVING COUNT(DISTINCT im.model_id) = %s
             """, (model_ids, len(set(model_ids))))
@@ -780,7 +879,7 @@ def _get_images_by_model_ids(model_ids: list, match_all: bool = False):
                 SELECT DISTINCT i.collection_name, i.filename, i.url, i.tags, i.body_parts
                 FROM images i
                 JOIN image_models im ON im.image_id = i.id
-                WHERE im.model_id = ANY(%s)
+                WHERE im.model_id = ANY(%s) AND i.deleted_at IS NULL
             """, (model_ids,))
         return cur.fetchall()
     finally:
@@ -1259,7 +1358,7 @@ def _get_collection_image_urls(collection: str):
     urls = []
     for key, value in tags_data.items():
         if key.startswith(prefix) and isinstance(value, dict) and value.get('url'):
-            urls.append(_b2_sign_url(value['url']))
+            urls.append(value['url'])
     return urls
 
 @app.route('/')
@@ -1315,7 +1414,7 @@ def collection_view(collection_name):
         if not isinstance(value, dict) or not value.get('url'):
             continue
         images.append(filename)
-        image_urls[filename] = _b2_sign_url(value['url'])
+        image_urls[filename] = value['url']
         raw_tags = value.get('tags', [])
         if isinstance(raw_tags, list):
             image_tags[filename] = [str(t) for t in raw_tags if isinstance(t, (str, int, float))]
@@ -1340,22 +1439,35 @@ def upload_file(collection=None):
     if file and allowed_file(file.filename):
         collection = _safe_collection_name(collection or '')
         ext = os.path.splitext(secure_filename(file.filename))[1].lower()
-        filename = str(uuid.uuid4()) + ext
-        key = _get_image_key(collection, filename)
+        img_uuid = str(uuid.uuid4())
+        filename = img_uuid + ext
+        key = _get_image_key(collection, filename)  # B2 backup key
+        public_id = f"{collection}/{img_uuid}" if collection else img_uuid  # Cloudinary, no extension
+
+        buf = io.BytesIO(file.stream.read())  # read once, reused for both uploads
 
         try:
-            _b2_upload_fileobj(file.stream, key, file.mimetype)
+            buf.seek(0)
+            cloudinary_url = _cloudinary_upload(buf, public_id)
         except Exception as e:
             return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
+        b2_backup_key = None
+        try:
+            buf.seek(0)
+            _b2_upload_fileobj(buf, key, file.mimetype)
+            b2_backup_key = key
+        except Exception as e:
+            app.logger.warning(f'B2 backup upload failed for {key}: {e}')
+
         if collection:
             user_id = current_user.id if current_user.is_authenticated else None
-            _db_insert_image(collection, filename, key, user_id=user_id)
+            _db_insert_image(collection, filename, cloudinary_url, user_id=user_id, b2_backup_key=b2_backup_key)
 
         return jsonify({
             'success': True,
             'filename': filename,
-            'url': _b2_sign_url(key),
+            'url': cloudinary_url,
             'tags': []
         })
 
@@ -1817,21 +1929,38 @@ def get_high_scores(collection):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+def _soft_delete_image_by_collection_and_filename(collection, filename):
+    """Shared by both delete-image routes: delete the live Cloudinary asset
+    (best-effort) and soft-delete the DB row. The B2 backup is left untouched
+    until an admin purges it from /admin/orphaned-images."""
+    uuid_part = filename.rsplit('.', 1)[0]
+    public_id = f"{collection}/{uuid_part}" if collection else uuid_part
+    try:
+        _cloudinary_delete(public_id)
+    except Exception as e:
+        app.logger.warning(f'Cloudinary delete failed for {public_id}: {e}')
+    _db_soft_delete_image(collection, filename)
+
+
 @app.route('/delete-image/<filename>', methods=['DELETE'])
+@admin_required
 def delete_image(filename):
     try:
-        _b2_delete_object(_get_image_key('', filename))
+        collection = _find_image_collection(filename)
+        if collection is None:
+            return jsonify({'error': 'Image not found'}), 404
+        _soft_delete_image_by_collection_and_filename(collection, filename)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/delete-image/<collection>/<filename>', methods=['DELETE'])
+@admin_required
 def delete_image_in_collection(collection, filename):
     collection = _safe_collection_name(collection)
     try:
-        _b2_delete_object(_get_image_key(collection, filename))
-        _db_delete_image(collection, filename)
+        _soft_delete_image_by_collection_and_filename(collection, filename)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1960,7 +2089,7 @@ def api_images_all():
     """Return a JSON list of all image URLs."""
     tags_data = _load_tags()
     result = [
-        _b2_sign_url(v['url']) for v in tags_data.values()
+        v['url'] for v in tags_data.values()
         if isinstance(v, dict) and v.get('url')
     ]
     return jsonify({'images': result})
@@ -2031,12 +2160,22 @@ def api_rename_collection():
         # Create new collection record first
         _ensure_collection(safe_new)
 
-        # Move each B2 object to the new prefix and update its DB row
+        # Rename each image's Cloudinary asset and update its DB row. The B2 backup
+        # key is deliberately left unchanged (still under the old collection prefix)
+        # — B2 is never listed by folder for images, only looked up by the stored
+        # b2_backup_key column, so it doesn't need to move.
+        #
+        # collection_name is always moved to safe_new (the old collection row gets
+        # deleted below, which would CASCADE-delete any row still pointing at it).
+        # url is only updated if the Cloudinary rename actually succeeded — if it
+        # failed, the old url is left as-is, which still resolves correctly since
+        # the asset never moved; it's just left under the old collection's folder
+        # in Cloudinary until a manual retry.
         conn = _get_db()
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT filename, url FROM images WHERE collection_name = %s",
+                "SELECT filename, url FROM images WHERE collection_name = %s AND deleted_at IS NULL",
                 (safe_old,)
             )
             rows = cur.fetchall()
@@ -2044,14 +2183,14 @@ def api_rename_collection():
             _release_db(conn)
 
         for filename, old_url in rows:
+            uuid_part = filename.rsplit('.', 1)[0]
+            old_public_id = f"{safe_old}/{uuid_part}"
+            new_public_id = f"{safe_new}/{uuid_part}"
             new_url = old_url
             try:
-                new_url = _b2_move_object(
-                    _get_image_key(safe_old, filename),
-                    _get_image_key(safe_new, filename)
-                )
-            except Exception:
-                pass
+                new_url = _cloudinary_rename(old_public_id, new_public_id)
+            except Exception as e:
+                app.logger.warning(f'Cloudinary rename failed for {old_public_id}: {e}')
 
             conn = _get_db()
             try:
@@ -2064,6 +2203,22 @@ def api_rename_collection():
                 conn.commit()
             finally:
                 _release_db(conn)
+
+        # Carry over any already soft-deleted image rows too — their Cloudinary
+        # asset is already gone (nothing to rename), but they still need to move
+        # off the old collection_name so they aren't cascade-deleted when the old
+        # collections row is dropped below (which would wipe their orphan-page
+        # visibility as a side effect of an otherwise-safe rename).
+        conn = _get_db()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE images SET collection_name = %s WHERE collection_name = %s AND deleted_at IS NOT NULL",
+                (safe_new, safe_old)
+            )
+            conn.commit()
+        finally:
+            _release_db(conn)
 
         # Move each video object to the new prefix and update its DB row
         conn = _get_db()
@@ -2142,13 +2297,24 @@ def api_delete_collection():
         return jsonify({'success': False, 'error': 'Collection not found'}), 404
 
     try:
-        # Delete all B2 objects under this collection's folder (images and videos together)
+        # Delete all live Cloudinary image assets under this collection's folder
+        try:
+            _cloudinary_delete_prefix(f"{safe_name}/")
+        except Exception:
+            pass
+
+        # Delete all B2 objects under this collection's folder — video assets plus
+        # any orphaned image backups (Cloudinary is the only live copy for images,
+        # so this is purely backup cleanup on the image side)
         try:
             _b2_delete_prefix(f"{safe_name}/")
         except Exception:
             pass
 
-        # DELETE FROM collections CASCADE-deletes all images/videos rows automatically
+        # DELETE FROM collections CASCADE-deletes all images/videos rows automatically,
+        # including any already soft-deleted image rows — collection delete is always
+        # a full, irreversible purge (unlike individual image delete, it does not go
+        # through the soft-delete/orphan-recovery flow).
         conn = _get_db()
         try:
             cur = conn.cursor()
@@ -2184,7 +2350,7 @@ def api_collection_images(collection_name):
         normalized = _normalize_tags_entry(value)
         images.append({
             'filename':   filename,
-            'url':        _b2_sign_url(value['url']),
+            'url':        value['url'],
             'tags':       normalized['tags'],
             'body_parts': normalized.get('body_parts', {}),
             'locked':     normalized.get('locked', False),
@@ -2295,7 +2461,7 @@ def tagger_view(collection_name):
         filename = key[len(prefix):]
         images.append({
             'filename':   filename,
-            'url':        _b2_sign_url(value['url']),
+            'url':        value['url'],
             'tags':       value.get('tags', []),
             'body_parts': value.get('body_parts', {}),
             'model_ids':  [m['id'] for m in image_models.get(filename, [])],
@@ -2465,7 +2631,7 @@ def api_images_by_model():
     images = [{
         'collection':  coll,
         'filename':    fname,
-        'url':         _b2_sign_url(url),
+        'url':         url,
         'tags':        list(tags) if tags else [],
         'body_parts':  dict(body_parts) if body_parts else {},
     } for coll, fname, url, tags, body_parts in rows]
@@ -2496,7 +2662,7 @@ def api_collections():
         if '/' not in key or not isinstance(value, dict) or not value.get('url'):
             continue
         coll_name = key.split('/')[0]
-        result.setdefault(coll_name, []).append(_b2_sign_url(value['url']))
+        result.setdefault(coll_name, []).append(value['url'])
 
     # Include empty collections with no images yet
     for coll_name in _load_collections():
@@ -2509,13 +2675,7 @@ def api_collections():
 def api_all_tags():
     """Return all image tags."""
     tags_data = _load_tags()
-    # Sign URLs in a copy for the response — _load_tags()'s own return value must
-    # keep raw keys, since update_image_tags() round-trips it through _save_tags().
-    signed = {
-        k: {**v, 'url': _b2_sign_url(v['url'])} if isinstance(v, dict) and v.get('url') else v
-        for k, v in tags_data.items()
-    }
-    return jsonify({'tags': signed})
+    return jsonify({'tags': tags_data})
 
 
 @app.route('/api/tags/<collection>/<filename>')
@@ -2615,7 +2775,7 @@ def search_by_tag():
         image_tags = [t.lower() for t in tag_info.get('tags', [])]
         if search_tag in image_tags and tag_info.get('url'):
             matching_images.append({
-                'url': _b2_sign_url(tag_info['url']),
+                'url': tag_info['url'],
                 'tags': tag_info.get('tags', []),
                 'key': image_key
             })
@@ -2692,6 +2852,7 @@ def _get_all_image_extras():
             FROM images i
             LEFT JOIN image_models im ON im.image_id = i.id
             LEFT JOIN models m ON m.id = im.model_id
+            WHERE i.deleted_at IS NULL
             GROUP BY i.id
         """)
         result = {}
@@ -2737,7 +2898,7 @@ def api_images_by_tags():
         matching_images.append({
             'filename':    filename,
             'collection':  collection,
-            'url':         _b2_sign_url(tags_info['url']),
+            'url':         tags_info['url'],
             'tags':        tags,
             'body_parts':  image_extras.get('body_parts', {}),
             'models':      image_extras.get('models', []),
@@ -2752,7 +2913,7 @@ def api_body_parts_with_counts():
     conn = _get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT body_parts FROM images WHERE body_parts IS NOT NULL AND body_parts != '{}'::jsonb")
+        cur.execute("SELECT body_parts FROM images WHERE body_parts IS NOT NULL AND body_parts != '{}'::jsonb AND deleted_at IS NULL")
         rows = cur.fetchall()
     finally:
         _release_db(conn)
@@ -2820,7 +2981,7 @@ def api_images_by_body_parts():
         matching_images.append({
             'filename':   filename,
             'collection': collection,
-            'url':        _b2_sign_url(tags_info['url']),
+            'url':        tags_info['url'],
             'tags':       tags_info.get('tags', []),
             'body_parts': image_body_parts,
             'models':     image_extras.get('models', []),
@@ -3600,14 +3761,14 @@ def admin_dashboard():
         total_admins = cur.fetchone()['n']
         cur.execute("SELECT COUNT(*) AS n FROM users WHERE last_seen > NOW() - INTERVAL '5 minutes'")
         online_now = cur.fetchone()['n']
-        cur.execute("SELECT COUNT(*) AS n FROM images")
+        cur.execute("SELECT COUNT(*) AS n FROM images WHERE deleted_at IS NULL")
         total_images = cur.fetchone()['n']
         cur.execute("SELECT COUNT(*) AS n FROM scores")
         total_scores = cur.fetchone()['n']
         cur.execute("""
             SELECT u.id, u.email, u.username, u.is_admin, u.is_permanent_admin,
                    u.avatar_url, u.created_at, u.last_seen,
-                   (SELECT COUNT(*) FROM images i WHERE i.uploaded_by = u.id)  AS image_count,
+                   (SELECT COUNT(*) FROM images i WHERE i.uploaded_by = u.id AND i.deleted_at IS NULL)  AS image_count,
                    (SELECT COUNT(*) FROM scores s WHERE s.user_id     = u.id)  AS score_count,
                    (u.last_seen > NOW() - INTERVAL '5 minutes')                AS is_online
             FROM users u ORDER BY u.last_seen DESC NULLS LAST
@@ -3636,10 +3797,9 @@ def admin_user_detail(user_id):
                        ORDER BY logged_in_at DESC LIMIT 30""", (user_id,))
         sessions = [dict(r) for r in cur.fetchall()]
         cur.execute("""SELECT collection_name, filename, url, created_at
-                       FROM images WHERE uploaded_by=%s ORDER BY created_at DESC LIMIT 50""", (user_id,))
+                       FROM images WHERE uploaded_by=%s AND deleted_at IS NULL
+                       ORDER BY created_at DESC LIMIT 50""", (user_id,))
         uploads = [dict(r) for r in cur.fetchall()]
-        for upload in uploads:
-            upload['url'] = _b2_sign_url(upload['url'])
         cur.execute("""SELECT collection_name, game_type, data, created_at
                        FROM scores WHERE user_id=%s ORDER BY created_at DESC LIMIT 50""", (user_id,))
         scores = [dict(r) for r in cur.fetchall()]
@@ -3812,6 +3972,65 @@ def api_set_video_item_access(collection_name, video_id):
 
     return jsonify({'success': True, 'granted': grant})
 
+# ── Admin: orphaned image backups ──────────────────────────────────────────────
+# Soft-deleted images keep their row (deleted_at set) and their B2 backup key so
+# an admin can review what was deleted and, if needed, recover it from B2 before
+# permanently purging the backup copy.
+
+@app.route('/admin/orphaned-images')
+def admin_orphaned_images():
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT i.id, i.collection_name, i.filename, i.tags, i.b2_backup_key,
+                   i.deleted_at, u.username AS uploader_username, u.email AS uploader_email
+            FROM images i
+            LEFT JOIN users u ON u.id = i.uploaded_by
+            WHERE i.deleted_at IS NOT NULL
+            ORDER BY i.deleted_at DESC
+        """)
+        orphans = [dict(r) for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+    return render_template('admin-orphaned-images.html', orphans=orphans)
+
+@app.route('/api/admin/orphaned-images/<int:image_id>/purge', methods=['POST'])
+@admin_required
+def api_purge_orphaned_image(image_id):
+    """Permanently delete an orphaned image's B2 backup and its DB row."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT b2_backup_key, deleted_at FROM images WHERE id = %s", (image_id,))
+        row = cur.fetchone()
+    finally:
+        _release_db(conn)
+
+    if not row:
+        return jsonify({'success': False, 'error': 'Image not found'}), 404
+    if row[1] is None:
+        return jsonify({'success': False, 'error': 'Image is not soft-deleted'}), 400
+
+    b2_backup_key = row[0]
+    if b2_backup_key:
+        try:
+            _b2_delete_object(b2_backup_key)
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'B2 purge failed: {str(e)}'}), 500
+
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM images WHERE id = %s", (image_id,))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+    return jsonify({'success': True})
+
 # ── Versus Zoom Reveal: live 2-player room/match state machine ────────────────
 # Each player sees a different zoomed-in crop of one of two images and races to
 # guess which of the two (shown blurred, same order for both players) it came
@@ -3841,7 +4060,7 @@ def _vz_collection_images(collection):
     images = []
     for key, value in tags_data.items():
         if key.startswith(prefix) and isinstance(value, dict) and value.get('url'):
-            images.append({'filename': key[len(prefix):], 'url': _b2_sign_url(value['url'])})
+            images.append({'filename': key[len(prefix):], 'url': value['url']})
     return images
 
 
@@ -4347,7 +4566,7 @@ def _cc_collection_images(collection, keyword_map):
             tags = [str(t) for t in raw_tags if isinstance(t, (str, int, float))]
             options = _cc_categorize_tags(tags, keyword_map)
         if len(options) >= 2:
-            eligible.append({'filename': key[len(prefix):], 'url': _b2_sign_url(value['url']), 'options': options})
+            eligible.append({'filename': key[len(prefix):], 'url': value['url'], 'options': options})
     return eligible
 
 

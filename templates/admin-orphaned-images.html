@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Orphaned Image Backups — Admin</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script>
+    (function(){var t=null;try{t=localStorage.getItem('imgur.theme');}catch(e){}
+    if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}})();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    .adm-wrap{max-width:1200px;margin:0 auto;padding:2rem 1.5rem;}
+    .back-link{color:var(--muted-text);text-decoration:none;font-size:.88rem;
+      display:inline-flex;align-items:center;gap:.4rem;margin-bottom:1.2rem;}
+    .back-link:hover{color:var(--primary-color);}
+    .adm-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:1rem;}
+    .adm-header h1{font-size:1.5rem;font-weight:700;}
+    .adm-header h1 i{color:var(--primary-color);margin-right:.5rem;}
+
+    .tbl-wrap{overflow-x:auto;background:var(--surface-color);border-radius:1rem;
+      border:1px solid rgba(164,6,110,.1);box-shadow:0 2px 10px var(--shadow-color);}
+    table{width:100%;border-collapse:collapse;font-size:.87rem;}
+    th{padding:.7rem 1rem;text-align:left;font-size:.74rem;text-transform:uppercase;
+      letter-spacing:.06em;color:var(--muted-text);border-bottom:1px solid rgba(164,6,110,.1);}
+    td{padding:.65rem 1rem;border-bottom:1px solid rgba(164,6,110,.05);vertical-align:middle;}
+    tr:last-child td{border-bottom:none;}
+    .user-cell{display:flex;align-items:center;gap:.6rem;}
+    .av{width:28px;height:28px;border-radius:50%;object-fit:cover;
+        background:linear-gradient(135deg,var(--primary-color),var(--secondary-color));
+        display:inline-flex;align-items:center;justify-content:center;
+        color:#fff;font-size:.75rem;font-weight:700;flex-shrink:0;}
+    .tag-pill{display:inline-block;background:rgba(164,6,110,.08);color:var(--muted-text);
+      border-radius:999px;padding:.15rem .55rem;font-size:.74rem;margin:.1rem .2rem .1rem 0;}
+    .vc-btn{padding:.35rem .7rem;border-radius:.5rem;font-size:.76rem;font-weight:700;
+      border:1.5px solid;cursor:pointer;background:transparent;text-align:center;}
+    .vc-btn.del{color:#ef4444;border-color:#ef4444;}
+    .vc-btn.del:hover{background:#ef4444;color:#fff;}
+    .vc-btn:disabled{opacity:.5;cursor:not-allowed;}
+    .empty{text-align:center;padding:2rem;color:var(--muted-text);}
+    .no-backup{color:var(--muted-text);font-style:italic;font-size:.8rem;}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-container">
+      <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+      <div class="navbar-menu">
+        <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+        <a href="/admin" class="navbar-link"><i class="fas fa-shield-alt"></i> Admin</a>
+        <a href="/admin/videos" class="navbar-link"><i class="fas fa-video"></i> Videos</a>
+        <a href="/admin/orphaned-images" class="navbar-link active"><i class="fas fa-trash-restore"></i> Orphaned Images</a>
+        <a href="/logout" class="navbar-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="adm-wrap">
+    <a href="/admin" class="back-link"><i class="fas fa-arrow-left"></i> Back to Admin</a>
+    <div class="adm-header">
+      <h1><i class="fas fa-trash-restore"></i> Orphaned Image Backups ({{ orphans|length }})</h1>
+    </div>
+    <p style="color:var(--muted-text);font-size:.85rem;margin-bottom:1.2rem;">
+      Images deleted from a gallery still keep a backup copy in Backblaze B2 until purged here.
+      Purging permanently deletes the B2 backup and removes this record.
+    </p>
+
+    {% if orphans %}
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Collection</th>
+            <th>Filename</th>
+            <th>Uploader</th>
+            <th>Tags</th>
+            <th>Deleted At</th>
+            <th>Backup</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="orphansBody">
+          {% for o in orphans %}
+          <tr data-image-id="{{ o.id }}">
+            <td>{{ o.collection_name }}</td>
+            <td>{{ o.filename }}</td>
+            <td>
+              {% if o.uploader_username %}
+              <div class="user-cell">
+                <div class="av">{{ o.uploader_username[0]|upper }}</div>
+                <div>
+                  <div style="font-weight:600;">{{ o.uploader_username }}</div>
+                  <div style="font-size:.76rem;color:var(--muted-text);">{{ o.uploader_email }}</div>
+                </div>
+              </div>
+              {% else %}
+              <span class="no-backup">Unknown</span>
+              {% endif %}
+            </td>
+            <td>
+              {% for tag in o.tags %}<span class="tag-pill">{{ tag }}</span>{% endfor %}
+            </td>
+            <td>{{ o.deleted_at }}</td>
+            <td>
+              {% if o.b2_backup_key %}{{ o.b2_backup_key }}
+              {% else %}<span class="no-backup">No backup</span>{% endif %}
+            </td>
+            <td><button class="vc-btn del" onclick="purgeImage({{ o.id }}, this)"><i class="fas fa-trash"></i> Purge</button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <p class="empty"><i class="fas fa-check-circle"></i><br>No orphaned image backups.</p>
+    {% endif %}
+  </div>
+
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script>
+    async function purgeImage(imageId, btn){
+      if (!confirm('Permanently delete this image\'s B2 backup? This cannot be undone.')) return;
+      btn.disabled = true;
+      try {
+        const r = await fetch(`/api/admin/orphaned-images/${imageId}/purge`, { method: 'POST' });
+        const d = await r.json();
+        if (d.success) {
+          document.querySelector(`tr[data-image-id="${imageId}"]`).remove();
+        } else {
+          alert(d.error || 'Failed');
+          btn.disabled = false;
+        }
+      } catch {
+        alert('Network error');
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
