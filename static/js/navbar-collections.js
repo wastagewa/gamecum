@@ -100,13 +100,6 @@ window.__navAvatarError = function(imgEl) {
                         ${adminItem}
                         <a href="/logout" class="navbar-dropdown-item"><i class="fas fa-sign-out-alt"></i> Logout</a>
                     </div>`;
-            } else if (d.is_guest) {
-                el.style.cssText = 'display:flex;align-items:center;gap:.5rem;';
-                el.innerHTML = `
-                    <span class="navbar-link" style="cursor:default;font-size:.85rem;color:var(--muted-text);">
-                        <i class="fas fa-user-secret"></i> ${d.username}
-                    </span>
-                    <a href="/logout" class="navbar-link" title="Sign In"><i class="fas fa-sign-in-alt"></i></a>`;
             } else {
                 el.style.cssText = 'display:flex;align-items:center;';
                 el.innerHTML = `<a href="/login" class="navbar-link"><i class="fas fa-sign-in-alt"></i> Sign In</a>`;

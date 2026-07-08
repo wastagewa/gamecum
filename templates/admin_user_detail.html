@@ -78,6 +78,23 @@
       background:white;transition:.2s;border-radius:50%;}
     input:checked + .slider{background:var(--primary-color);}
     input:checked + .slider:before{transform:translateX(18px);}
+
+    /* Content Blocks accordion */
+    .acc-item{background:var(--surface-color);border-radius:.8rem;border:1px solid rgba(164,6,110,.1);
+      margin-bottom:.6rem;overflow:hidden;}
+    .acc-header{display:flex;align-items:center;justify-content:space-between;padding:.8rem 1.1rem;
+      cursor:pointer;font-size:.9rem;font-weight:600;}
+    .acc-header:hover{background:rgba(164,6,110,.03);}
+    .acc-header .chevron{transition:transform .2s;color:var(--muted-text);}
+    .acc-item.open .acc-header .chevron{transform:rotate(180deg);}
+    .acc-count{font-size:.76rem;font-weight:700;color:var(--primary-color);
+      background:rgba(164,6,110,.08);border-radius:999px;padding:.15rem .6rem;margin-left:.6rem;}
+    .acc-body{display:none;padding:.4rem 1.1rem 1rem;}
+    .acc-item.open .acc-body{display:block;}
+    .acc-pair-row{display:flex;align-items:center;justify-content:space-between;
+      padding:.5rem 0;border-bottom:1px solid rgba(164,6,110,.05);}
+    .acc-pair-row:last-child{border-bottom:none;}
+    .acc-pair-count{color:var(--muted-text);font-size:.78rem;margin-left:.4rem;}
   </style>
 </head>
 <body>
@@ -143,6 +160,7 @@
       <button class="tab" onclick="switchTab('imgs')"><i class="fas fa-images"></i> Uploads ({{ uploads|length }})</button>
       <button class="tab" onclick="switchTab('scrs')"><i class="fas fa-trophy"></i> Scores ({{ scores|length }})</button>
       <button class="tab" onclick="switchTab('vids')"><i class="fas fa-video"></i> Video Access ({{ video_collections|length }})</button>
+      <button class="tab" onclick="switchTab('blocks')"><i class="fas fa-ban"></i> Content Blocks</button>
     </div>
 
     <!-- Sessions pane -->
@@ -256,6 +274,30 @@
         <p class="empty"><i class="fas fa-video"></i><br>No video collections exist yet.</p>
       {% endif %}
     </div>
+
+    <!-- Content Blocks pane -->
+    <div class="pane" id="pane-blocks">
+      <p style="color:var(--muted-text);font-size:.85rem;margin-bottom:1rem;">
+        Images are visible to everyone by default. Blocking a body-part/rating pair here
+        hides every image with that exact pair, in that collection, from this user only.
+      </p>
+      {% if all_collections %}
+        {% for c in all_collections %}
+        <div class="acc-item" data-collection="{{ c }}">
+          <div class="acc-header" onclick="toggleAccordion(this)">
+            <span><i class="fas fa-folder" style="color:var(--primary-color);"></i> {{ c }}</span>
+            <span style="display:flex;align-items:center;">
+              <span class="acc-count" style="display:none;"></span>
+              <i class="fas fa-chevron-down chevron"></i>
+            </span>
+          </div>
+          <div class="acc-body"><p class="empty" style="padding:1rem;">Loading…</p></div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p class="empty"><i class="fas fa-folder-open"></i><br>No collections exist yet.</p>
+      {% endif %}
+    </div>
   </div>
 
   <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
@@ -283,6 +325,69 @@
         }catch{ alert('Network error'); cb.checked=!cb.checked; }
       });
     });
+
+    /* ── Content Blocks accordion ── */
+    const loadedBlockPanels = new Set();
+
+    function renderBlockPairs(item, pairs){
+      const body = item.querySelector('.acc-body');
+      const countBadge = item.querySelector('.acc-count');
+      const blockedCount = pairs.filter(p => p.blocked).length;
+      if (blockedCount > 0){
+        countBadge.textContent = `${blockedCount} blocked`;
+        countBadge.style.display = 'inline-block';
+      }
+      if (!pairs.length){
+        body.innerHTML = '<p class="empty" style="padding:1rem;">No tagged images in this collection yet.</p>';
+        return;
+      }
+      body.innerHTML = pairs.map(p => `
+        <div class="acc-pair-row" data-part="${p.part}" data-rating="${p.rating}">
+          <span>${p.label}<span class="acc-pair-count">${p.count} image${p.count === 1 ? '' : 's'}</span></span>
+          <label class="switch">
+            <input type="checkbox" class="block-toggle" ${p.blocked ? 'checked' : ''}>
+            <span class="slider"></span>
+          </label>
+        </div>`).join('');
+
+      body.querySelectorAll('.block-toggle').forEach(cb => {
+        cb.addEventListener('change', async () => {
+          const row = cb.closest('.acc-pair-row');
+          try{
+            const r = await fetch(`/api/admin/user/${TARGET_USER_ID}/content-blocks`, {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                collection: item.dataset.collection,
+                body_part: row.dataset.part,
+                rating: row.dataset.rating,
+                grant: cb.checked,
+              })
+            });
+            const d = await r.json();
+            if(!d.success){ alert(d.error||'Failed'); cb.checked=!cb.checked; return; }
+            const nowBlocked = body.querySelectorAll('.block-toggle:checked').length;
+            countBadge.textContent = `${nowBlocked} blocked`;
+            countBadge.style.display = nowBlocked > 0 ? 'inline-block' : 'none';
+          }catch{ alert('Network error'); cb.checked=!cb.checked; }
+        });
+      });
+    }
+
+    async function toggleAccordion(header){
+      const item = header.closest('.acc-item');
+      item.classList.toggle('open');
+      if (!item.classList.contains('open') || loadedBlockPanels.has(item)) return;
+      loadedBlockPanels.add(item);
+      const collection = item.dataset.collection;
+      try{
+        const r = await fetch(`/api/admin/user/${TARGET_USER_ID}/content-blocks/${collection}`);
+        const d = await r.json();
+        if (d.success) renderBlockPairs(item, d.pairs);
+        else item.querySelector('.acc-body').innerHTML = `<p class="empty" style="padding:1rem;">${d.error || 'Failed to load'}</p>`;
+      }catch{
+        item.querySelector('.acc-body').innerHTML = '<p class="empty" style="padding:1rem;">Network error</p>';
+      }
+    }
   </script>
 </body>
 </html>

@@ -152,6 +152,23 @@ body {
     pointer-events: none;
 }
 
+/* Restricted (content-blocked) overlay — the image beneath is already blurred
+   server-side (see the /img/ proxy route), this is purely a visual hint. */
+.restricted-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-weight: 700;
+    font-size: 0.95rem;
+    z-index: 2;
+    pointer-events: none;
+}
+
 /* Delete button overlay on gallery item */
 .item-delete {
     position: absolute;

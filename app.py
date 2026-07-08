@@ -13,7 +13,7 @@ if ON_RENDER:
     from psycogreen.gevent import patch_psycopg
     patch_psycopg()
 
-from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for, session
+from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for, session, Response
 from flask_socketio import SocketIO, emit, join_room as sio_join_room
 import json
 from werkzeug.utils import secure_filename
@@ -32,7 +32,8 @@ import cloudinary.api
 import psycopg2
 import psycopg2.pool
 import psycopg2.extras
-from flask_login import LoginManager, UserMixin, login_user, logout_user, current_user
+from PIL import Image, ImageFilter
+from flask_login import LoginManager, UserMixin, login_user, logout_user, current_user, login_required
 from authlib.integrations.flask_client import OAuth
 
 # Load .env file if present (python-dotenv)
@@ -400,6 +401,25 @@ def init_db():
         """)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_image_models_model_id ON image_models (model_id)
+        """)
+        # Per-user, per-collection blocks on a specific body_part:rating pair — the
+        # opposite of video access (images are visible by default; a block hides one
+        # exact tag pair from one specific user). See _effective_blocked_pairs().
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS image_tag_blocks (
+                id              SERIAL PRIMARY KEY,
+                user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                collection_name VARCHAR(255) NOT NULL REFERENCES collections(name) ON DELETE CASCADE,
+                body_part       VARCHAR(50) NOT NULL,
+                rating          VARCHAR(10) NOT NULL,
+                blocked_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                created_at      TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE(user_id, collection_name, body_part, rating)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_image_tag_blocks_collection
+                ON image_tag_blocks (collection_name, body_part, rating)
         """)
         cur.close()
         print("DB tables ready.")
@@ -1186,6 +1206,125 @@ def _revoke_video_item_access(video_id: int, user_id: int):
     finally:
         _release_db(conn)
 
+# ── Image tag blocks (per-user, per-collection content blocking) ──────────────
+# Opposite model from video access: images are visible by default, and a block
+# hides one exact body_part:rating pair from one specific user in one collection.
+
+def _user_blocked_pairs(user_id: int, collection: str):
+    """{(body_part, rating), ...} this user is blocked from in this collection."""
+    if not user_id:
+        return set()
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT body_part, rating FROM image_tag_blocks WHERE user_id = %s AND collection_name = %s",
+            (user_id, collection)
+        )
+        return {(row[0], row[1]) for row in cur.fetchall()}
+    finally:
+        _release_db(conn)
+
+def _effective_blocked_pairs(user, collection: str):
+    """Blocked pairs for this viewer — admins/unauthenticated always get an empty set."""
+    if not user or not getattr(user, 'is_authenticated', False) or getattr(user, 'is_admin', False):
+        return set()
+    return _user_blocked_pairs(user.id, collection)
+
+def _user_blocked_pairs_by_collection(user_id: int):
+    """{collection_name: {(body_part, rating), ...}} for every collection this user has blocks in."""
+    if not user_id:
+        return {}
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT collection_name, body_part, rating FROM image_tag_blocks WHERE user_id = %s", (user_id,))
+        result = {}
+        for coll, part, rating in cur.fetchall():
+            result.setdefault(coll, set()).add((part, rating))
+        return result
+    finally:
+        _release_db(conn)
+
+def _effective_blocked_pairs_by_collection(user):
+    """Same as _user_blocked_pairs_by_collection, but safe for anonymous/admin viewers
+    (mirrors _effective_blocked_pairs' bypass, for callers spanning all collections)."""
+    if not user or not getattr(user, 'is_authenticated', False) or getattr(user, 'is_admin', False):
+        return {}
+    return _user_blocked_pairs_by_collection(user.id)
+
+def _image_visible_to_user(body_parts: dict, blocked_pairs: set):
+    """False if this image has any body_part:rating pair the viewer is blocked from."""
+    if not blocked_pairs or not body_parts:
+        return True
+    return not any((part, rating) in blocked_pairs for part, rating in body_parts.items())
+
+def _union_blocked_pairs(user_ids, collection: str):
+    """Union of blocked pairs across several users in one collection — used by the
+    multiplayer games to make sure NEITHER player in a room is shown an image either
+    of them is blocked from."""
+    union = set()
+    for uid in user_ids:
+        if uid:
+            union |= _user_blocked_pairs(uid, collection)
+    return union
+
+def _globally_sensitive_pairs(collection: str):
+    """{(body_part, rating), ...} with an active block for ANYONE in this collection —
+    used only to decide which images route through the blurred image proxy (§ image_proxy),
+    not for per-viewer visibility."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT DISTINCT body_part, rating FROM image_tag_blocks WHERE collection_name = %s",
+            (collection,)
+        )
+        return {(row[0], row[1]) for row in cur.fetchall()}
+    finally:
+        _release_db(conn)
+
+def _grant_content_block(collection: str, body_part: str, rating: str, user_id: int, granted_by: int):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO image_tag_blocks (collection_name, body_part, rating, user_id, blocked_by)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, collection_name, body_part, rating) DO NOTHING
+        """, (collection, body_part, rating, user_id, granted_by))
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _revoke_content_block(collection: str, body_part: str, rating: str, user_id: int):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM image_tag_blocks WHERE collection_name = %s AND body_part = %s AND rating = %s AND user_id = %s",
+            (collection, body_part, rating, user_id)
+        )
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _collection_body_part_pairs_with_counts(collection: str):
+    """[(body_part, rating, count), ...] for every pair actually present in this collection's images."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT kv.key, kv.value, COUNT(*)
+            FROM images i, jsonb_each_text(i.body_parts) AS kv
+            WHERE i.collection_name = %s AND i.deleted_at IS NULL
+            GROUP BY kv.key, kv.value
+            ORDER BY kv.key, kv.value
+        """, (collection,))
+        return cur.fetchall()
+    finally:
+        _release_db(conn)
+
 def _normalize_tags_entry(entry):
     """Normalize a tags entry dict — kept for callers that use _load_tags() output."""
     if isinstance(entry, list):
@@ -1267,15 +1406,6 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
-def auth_or_guest(f):
-    """For page routes — redirect to /login if neither logged in nor a guest session."""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not current_user.is_authenticated and not session.get('is_guest'):
-            return redirect(url_for('login_page'))
-        return f(*args, **kwargs)
-    return decorated
-
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
 def _seed_admin():
@@ -1352,17 +1482,85 @@ def allowed_video_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_VIDEO_EXTENSIONS
 
 def _get_collection_image_urls(collection: str):
-    """Return signed, directly-usable image URLs for a collection."""
+    """Return signed, directly-usable image URLs for a collection, excluding
+    anything the current viewer is blocked from (see _effective_blocked_pairs)."""
     tags_data = _load_tags()
+    blocked = _effective_blocked_pairs(current_user, collection)
     prefix = f"{collection}/"
     urls = []
     for key, value in tags_data.items():
         if key.startswith(prefix) and isinstance(value, dict) and value.get('url'):
-            urls.append(value['url'])
+            if _image_visible_to_user(value.get('body_parts', {}), blocked):
+                urls.append(value['url'])
     return urls
 
+# ── Secure blurred image proxy ──────────────────────────────────────────────────
+# Cloudinary delivery is public/unsigned, so a CSS blur or a Cloudinary transform
+# URL can both be trivially undone by editing the URL — this route is the only
+# way to guarantee a blocked viewer's browser never receives the original bytes.
+# Only images whose tags are "globally sensitive" (blocked for SOMEONE, not
+# necessarily this viewer) are routed through here at all — see collection_view().
+
+_blur_cache = {}  # f"{collection}/{filename}" -> (bytes, content_type) — not per-viewer,
+                  # the blurred bytes are identical regardless of who's blocked.
+
+def _blur_image_bytes(raw_bytes: bytes):
+    """Downsample-then-blur-then-upsample: guarantees no recoverable detail and is
+    cheap regardless of source resolution (blurring a 32px image is near-instant)."""
+    img = Image.open(io.BytesIO(raw_bytes)).convert('RGB')
+    original_size = img.size
+    img.thumbnail((32, 32), Image.BILINEAR)
+    img = img.filter(ImageFilter.GaussianBlur(radius=4))
+    img = img.resize(original_size, Image.BILINEAR)
+    out = io.BytesIO()
+    img.save(out, format='JPEG', quality=80)
+    return out.getvalue()
+
+@app.route('/img/<collection>/<filename>')
+@login_required
+def image_proxy(collection, filename):
+    safe_name = _safe_collection_name(collection)
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT url, body_parts FROM images WHERE collection_name = %s AND filename = %s AND deleted_at IS NULL",
+            (safe_name, filename)
+        )
+        row = cur.fetchone()
+    finally:
+        _release_db(conn)
+
+    if not row:
+        return "Image not found", 404
+    image_url, body_parts = row
+    body_parts = dict(body_parts) if body_parts else {}
+
+    blocked = _effective_blocked_pairs(current_user, safe_name)
+    if _image_visible_to_user(body_parts, blocked):
+        # Not blocked for this viewer — nothing to protect, send them straight to
+        # the real asset rather than paying a server round-trip for no reason.
+        return redirect(image_url)
+
+    cache_key = _get_image_key(safe_name, filename)
+    cached = _blur_cache.get(cache_key)
+    if cached is None:
+        if not _HTTP_AVAILABLE:
+            return "Image temporarily unavailable", 503
+        try:
+            resp = _http.get(image_url, timeout=15)
+            resp.raise_for_status()
+            blurred = _blur_image_bytes(resp.content)
+        except Exception:
+            return "Image temporarily unavailable", 503
+        cached = (blurred, 'image/jpeg')
+        _blur_cache[cache_key] = cached
+
+    blurred_bytes, content_type = cached
+    return Response(blurred_bytes, mimetype=content_type, headers={'Cache-Control': 'private, max-age=300'})
+
 @app.route('/')
-@auth_or_guest
+@login_required
 def index():
     # Render a home page that lists collections and image counts, plus top scores.
     scores_data = _load_scores()
@@ -1373,13 +1571,16 @@ def index():
         else:
             leaderboards[coll] = []
 
-    # Count images per collection from tags.json
+    # Count images per collection from tags.json, excluding whatever this
+    # viewer is blocked from so the count matches what they'll actually see.
     tags_data = _load_tags()
+    blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
     collections = {}
-    for key in tags_data:
-        if '/' in key and isinstance(tags_data[key], dict) and tags_data[key].get('url'):
+    for key, value in tags_data.items():
+        if '/' in key and isinstance(value, dict) and value.get('url'):
             coll_name = key.split('/')[0]
-            collections[coll_name] = collections.get(coll_name, 0) + 1
+            if _image_visible_to_user(value.get('body_parts', {}), blocked_by_collection.get(coll_name, set())):
+                collections[coll_name] = collections.get(coll_name, 0) + 1
 
     # Include empty collections
     for coll_name in _load_collections():
@@ -1398,13 +1599,20 @@ def _safe_collection_name(name: str):
 
 
 @app.route('/collection/<collection_name>')
-@auth_or_guest
+@login_required
 def collection_view(collection_name):
     collection = _safe_collection_name(collection_name)
     tags_data = _load_tags()
     images = []      # list of filenames (used as keys for tags/delete operations)
-    image_urls = {}  # filename -> signed B2 URL
+    image_urls = {}  # filename -> displayable URL (direct Cloudinary, or /img/ proxy for sensitive tags)
     image_tags = {}
+    image_blocked = {}  # filename -> True if THIS viewer specifically is blocked (drives the lock overlay)
+
+    # Images with a tag blocked for anyone (not just this viewer) are routed through
+    # the blurred proxy so the URL shape never reveals which images are "sensitive"
+    # for a specific person — the proxy itself decides sharp-vs-blurred per viewer.
+    sensitive_pairs = _globally_sensitive_pairs(collection)
+    blocked = _effective_blocked_pairs(current_user, collection)
 
     prefix = f"{collection}/"
     for key, value in tags_data.items():
@@ -1414,7 +1622,13 @@ def collection_view(collection_name):
         if not isinstance(value, dict) or not value.get('url'):
             continue
         images.append(filename)
-        image_urls[filename] = value['url']
+        body_parts = value.get('body_parts', {}) or {}
+        is_globally_sensitive = any((k, v) in sensitive_pairs for k, v in body_parts.items())
+        if is_globally_sensitive:
+            image_urls[filename] = url_for('image_proxy', collection=collection, filename=filename)
+        else:
+            image_urls[filename] = value['url']
+        image_blocked[filename] = not _image_visible_to_user(body_parts, blocked)
         raw_tags = value.get('tags', [])
         if isinstance(raw_tags, list):
             image_tags[filename] = [str(t) for t in raw_tags if isinstance(t, (str, int, float))]
@@ -1424,7 +1638,8 @@ def collection_view(collection_name):
     videos = _visible_videos_for_user(current_user, collection) if _user_can_view_any_video_in_collection(current_user, collection) else None
 
     return render_template('index.html', images=images, collection=collection,
-                           image_tags=image_tags, image_urls=image_urls, videos=videos)
+                           image_tags=image_tags, image_urls=image_urls, videos=videos,
+                           image_blocked=image_blocked)
 
 @app.route('/upload', methods=['POST'])
 @app.route('/upload/<collection>', methods=['POST'])
@@ -1682,7 +1897,7 @@ def api_get_ai_quote_prompt(collection_name, filename):
 @app.route('/api/images/<collection_name>/<filename>/ai-quote', methods=['POST'])
 def api_save_ai_quote(collection_name, filename):
     """Cache a client-generated quote for an image (used for first-generation and regenerate)."""
-    if not current_user.is_authenticated and not session.get('is_guest'):
+    if not current_user.is_authenticated:
         return jsonify({'success': False, 'error': 'Authentication required'}), 401
 
     safe_name = _safe_collection_name(collection_name)
@@ -1777,11 +1992,9 @@ def _calculate_score(time_val: int, wrong_val: int, pairs: int, match_size: int)
 
 @app.route('/api/submit-score', methods=['POST'])
 def submit_score():
-    """Accept a finished game score — guests get a response but scores are not saved."""
-    # Guests do not have scores persisted
+    """Accept a finished game score."""
     if not current_user.is_authenticated:
-        return jsonify({'success': True, 'updated': False, 'score': 0,
-                        'leaderboard': [], 'guest': True})
+        return jsonify({'success': False, 'error': 'Authentication required'}), 401
     try:
         data = request.get_json() or {}
         collection = _safe_collection_name(str(data.get('collection') or ''))
@@ -1976,6 +2189,7 @@ def game():
 
 
 @app.route('/collection/<collection_name>/game')
+@login_required
 def collection_game(collection_name):
     collection = _safe_collection_name(collection_name)
     image_urls = _get_collection_image_urls(collection)
@@ -1989,6 +2203,7 @@ def puzzle():
 
 
 @app.route('/collection/<collection_name>/puzzle')
+@login_required
 def collection_puzzle(collection_name):
     """Render the puzzle slider game for a specific collection."""
     collection = _safe_collection_name(collection_name)
@@ -1997,6 +2212,7 @@ def collection_puzzle(collection_name):
 
 
 @app.route('/collection/<collection_name>/sequence')
+@login_required
 def collection_sequence(collection_name):
     """Render the sequence memory game for a specific collection."""
     collection = _safe_collection_name(collection_name)
@@ -2005,6 +2221,7 @@ def collection_sequence(collection_name):
 
 
 @app.route('/collection/<collection_name>/flashcards')
+@login_required
 def collection_flashcards(collection_name):
     """Render the flashcards memory game for a specific collection."""
     collection = _safe_collection_name(collection_name)
@@ -2013,6 +2230,7 @@ def collection_flashcards(collection_name):
 
 
 @app.route('/collection/<collection_name>/hunt')
+@login_required
 def collection_hunt(collection_name):
     """Simple Image Hunt game: show target image, player must find it in a grid."""
     collection = _safe_collection_name(collection_name)
@@ -2021,6 +2239,7 @@ def collection_hunt(collection_name):
 
 
 @app.route('/collection/<collection_name>/zoom')
+@login_required
 def collection_zoom(collection_name):
     """Zoom Challenge game: show zoomed-in portion of image, identify which full image it is."""
     collection = _safe_collection_name(collection_name)
@@ -2029,6 +2248,7 @@ def collection_zoom(collection_name):
 
 
 @app.route('/collection/<collection_name>/whack')
+@login_required
 def collection_whack(collection_name):
     """Whack-a-Mole game: click images as they appear on screen."""
     collection = _safe_collection_name(collection_name)
@@ -2037,6 +2257,7 @@ def collection_whack(collection_name):
 
 
 @app.route('/collection/<collection_name>/recall')
+@login_required
 def collection_recall(collection_name):
     """Recall Grid game: memorize image positions and select the original spot."""
     collection = _safe_collection_name(collection_name)
@@ -2045,6 +2266,7 @@ def collection_recall(collection_name):
 
 
 @app.route('/collection/<collection_name>/missing')
+@login_required
 def collection_missing(collection_name):
     """Missing Piece game: identify which image disappeared from the shown grid."""
     collection = _safe_collection_name(collection_name)
@@ -2053,6 +2275,7 @@ def collection_missing(collection_name):
 
 
 @app.route('/collection/<collection_name>/trail')
+@login_required
 def collection_trail(collection_name):
     """Trail Trace game: follow a route through a memorized image grid."""
     collection = _safe_collection_name(collection_name)
@@ -2061,6 +2284,7 @@ def collection_trail(collection_name):
 
 
 @app.route('/collection/<collection_name>/remix')
+@login_required
 def collection_remix(collection_name):
     """Remix Match game: identify which stylized remix belongs to the target image."""
     collection = _safe_collection_name(collection_name)
@@ -2075,6 +2299,7 @@ def tag_match():
 
 
 @app.route('/collection/<collection_name>/tag-match')
+@login_required
 def collection_tag_match(collection_name):
     """Render the Tag Match memory game for a specific collection."""
     collection = _safe_collection_name(collection_name)
@@ -2338,6 +2563,7 @@ def api_collection_images(collection_name):
 
     tags_data = _load_tags()
     image_models = _get_collection_image_model_map(safe_name)
+    blocked = _effective_blocked_pairs(current_user, safe_name)
     images = []
     prefix = f"{safe_name}/"
 
@@ -2348,6 +2574,8 @@ def api_collection_images(collection_name):
         if not isinstance(value, dict) or not value.get('url'):
             continue
         normalized = _normalize_tags_entry(value)
+        if not _image_visible_to_user(normalized.get('body_parts', {}), blocked):
+            continue
         images.append({
             'filename':   filename,
             'url':        value['url'],
@@ -2628,13 +2856,15 @@ def api_images_by_model():
         return jsonify({'success': False, 'error': 'model_id must be numeric'}), 400
 
     rows = _get_images_by_model_ids(model_ids, match_all)
+    blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
     images = [{
         'collection':  coll,
         'filename':    fname,
         'url':         url,
         'tags':        list(tags) if tags else [],
         'body_parts':  dict(body_parts) if body_parts else {},
-    } for coll, fname, url, tags, body_parts in rows]
+    } for coll, fname, url, tags, body_parts in rows
+      if _image_visible_to_user(dict(body_parts) if body_parts else {}, blocked_by_collection.get(coll, set()))]
 
     return jsonify({'success': True, 'images': images, 'count': len(images)})
 
@@ -2767,13 +2997,17 @@ def search_by_tag():
         return jsonify({'error': 'Tag parameter required'}), 400
     
     tags_data = _load_tags()
+    blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
     matching_images = []
-    
+
     for image_key, tag_info in tags_data.items():
         if not isinstance(tag_info, dict):
             continue
         image_tags = [t.lower() for t in tag_info.get('tags', [])]
         if search_tag in image_tags and tag_info.get('url'):
+            collection = image_key.split('/')[0]
+            if not _image_visible_to_user(tag_info.get('body_parts', {}), blocked_by_collection.get(collection, set())):
+                continue
             matching_images.append({
                 'url': tag_info['url'],
                 'tags': tag_info.get('tags', []),
@@ -2877,6 +3111,7 @@ def api_images_by_tags():
 
     tags_data = _load_tags()
     extras = _get_all_image_extras()
+    blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
     matching_images = []
 
     # Iterate through all tagged images
@@ -2895,6 +3130,8 @@ def api_images_by_tags():
             continue
 
         image_extras = extras.get(image_key, {})
+        if not _image_visible_to_user(image_extras.get('body_parts', {}), blocked_by_collection.get(collection, set())):
+            continue
         matching_images.append({
             'filename':    filename,
             'collection':  collection,
@@ -2959,6 +3196,7 @@ def api_images_by_body_parts():
 
     tags_data = _load_tags()
     extras = _get_all_image_extras()
+    blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
     matching_images = []
 
     for image_key, tags_info in tags_data.items():
@@ -2977,6 +3215,8 @@ def api_images_by_body_parts():
         matched = all(f in image_pairs for f in filters) if match_all else any(f in image_pairs for f in filters)
         if not matched:
             continue
+        if not _image_visible_to_user(image_body_parts, blocked_by_collection.get(collection, set())):
+            continue
 
         matching_images.append({
             'filename':   filename,
@@ -2991,6 +3231,7 @@ def api_images_by_body_parts():
 
 
 @app.route('/collection/<collection_name>/spotlight')
+@login_required
 def collection_spotlight(collection_name):
     """Spotlight: drifting peephole reveals image; identify it before fully exposed."""
     collection = _safe_collection_name(collection_name)
@@ -2998,6 +3239,7 @@ def collection_spotlight(collection_name):
 
 
 @app.route('/collection/<collection_name>/flashmemory')
+@login_required
 def collection_flashmemory(collection_name):
     """Flash Memory: image flashes briefly, then pick it from a lineup."""
     collection = _safe_collection_name(collection_name)
@@ -3005,6 +3247,7 @@ def collection_flashmemory(collection_name):
 
 
 @app.route('/collection/<collection_name>/whoisthat')
+@login_required
 def collection_whoisthat(collection_name):
     """Who's That?: tags shown, no image — find which one in the lineup matches."""
     collection = _safe_collection_name(collection_name)
@@ -3012,6 +3255,7 @@ def collection_whoisthat(collection_name):
 
 
 @app.route('/collection/<collection_name>/oddoneout')
+@login_required
 def collection_oddoneout(collection_name):
     """Odd One Out: find the image that doesn't share a tag with the other three."""
     collection = _safe_collection_name(collection_name)
@@ -3019,6 +3263,7 @@ def collection_oddoneout(collection_name):
 
 
 @app.route('/collection/<collection_name>/speedsort')
+@login_required
 def collection_speedsort(collection_name):
     """Speed Sort: decide whether each image has the target tag before time runs out."""
     collection = _safe_collection_name(collection_name)
@@ -3026,6 +3271,7 @@ def collection_speedsort(collection_name):
 
 
 @app.route('/collection/<collection_name>/snap')
+@login_required
 def collection_snap(collection_name):
     """Snap Match: decide if two images share a tag as fast as possible."""
     collection = _safe_collection_name(collection_name)
@@ -3033,6 +3279,7 @@ def collection_snap(collection_name):
 
 
 @app.route('/collection/<collection_name>/bracket')
+@login_required
 def collection_bracket(collection_name):
     """Hot Bracket: vote between two images; track win-rates; declare a champion."""
     collection = _safe_collection_name(collection_name)
@@ -3040,6 +3287,7 @@ def collection_bracket(collection_name):
 
 
 @app.route('/collection/<collection_name>/scratch')
+@login_required
 def collection_scratch(collection_name):
     """Striptease Scratch Card: scratch away tiles to reveal a hidden image, then identify it."""
     collection = _safe_collection_name(collection_name)
@@ -3047,6 +3295,7 @@ def collection_scratch(collection_name):
 
 
 @app.route('/collection/<collection_name>/behindblur')
+@login_required
 def collection_behindblur(collection_name):
     """Behind the Blur: image clears over time — identify it before it's crystal clear."""
     collection = _safe_collection_name(collection_name)
@@ -3054,6 +3303,7 @@ def collection_behindblur(collection_name):
 
 
 @app.route('/collection/<collection_name>/silhouette')
+@login_required
 def collection_silhouette(collection_name):
     """Silhouette Strike: image reveals from black silhouette to full colour — name it fast."""
     collection = _safe_collection_name(collection_name)
@@ -3061,6 +3311,7 @@ def collection_silhouette(collection_name):
 
 
 @app.route('/collection/<collection_name>/towerdefense')
+@login_required
 def collection_towerdefense(collection_name):
     """Tower Defense Viewer: images march across a conveyor — save your favourites before they scroll away."""
     collection = _safe_collection_name(collection_name)
@@ -3068,6 +3319,7 @@ def collection_towerdefense(collection_name):
 
 
 @app.route('/collection/<collection_name>/shootinggallery')
+@login_required
 def collection_shootinggallery(collection_name):
     """3D Shooting Gallery: shoot target images on a fairground range, avoid decoys."""
     collection = _safe_collection_name(collection_name)
@@ -3075,6 +3327,7 @@ def collection_shootinggallery(collection_name):
 
 
 @app.route('/collection/<collection_name>/orbitingvault')
+@login_required
 def collection_orbitingvault(collection_name):
     """Orbiting Vault: framed images orbit on a rotating ring — click the one matching the target before it swings out of view."""
     collection = _safe_collection_name(collection_name)
@@ -3082,6 +3335,7 @@ def collection_orbitingvault(collection_name):
 
 
 @app.route('/collection/<collection_name>/cargobay')
+@login_required
 def collection_cargobay(collection_name):
     """Zero-Gravity Cargo Bay: tractor-beam the drifting crate matching the target before it's lost to the airlock."""
     collection = _safe_collection_name(collection_name)
@@ -3089,6 +3343,7 @@ def collection_cargobay(collection_name):
 
 
 @app.route('/collection/<collection_name>/timeloop')
+@login_required
 def collection_timeloop(collection_name):
     """Time-Loop Detective: scrub a looping noir room's timeline to catch the target photo in the right frame at the right moment."""
     collection = _safe_collection_name(collection_name)
@@ -3096,6 +3351,7 @@ def collection_timeloop(collection_name):
 
 
 @app.route('/collection/<collection_name>/heistdrone')
+@login_required
 def collection_heistdrone(collection_name):
     """Gallery Heist Drone: free-fly a drone through a multi-room mansion, dodge sweeping spotlights, and scan the target painting in each room."""
     collection = _safe_collection_name(collection_name)
@@ -3103,6 +3359,7 @@ def collection_heistdrone(collection_name):
 
 
 @app.route('/collection/<collection_name>/versuszoom')
+@login_required
 def collection_versuszoom(collection_name):
     """Versus Zoom Reveal: a live 2-player game — each player sees a different zoomed-in snippet and races to guess which of two blurred full images it came from."""
     collection = _safe_collection_name(collection_name)
@@ -3110,6 +3367,7 @@ def collection_versuszoom(collection_name):
 
 
 @app.route('/collection/<collection_name>/memorymatch')
+@login_required
 def collection_memorymatch(collection_name):
     """Memory Match Duel: live 2-player turn-based Concentration on a shared board — find more pairs than your opponent to win."""
     collection = _safe_collection_name(collection_name)
@@ -3117,6 +3375,7 @@ def collection_memorymatch(collection_name):
 
 
 @app.route('/collection/<collection_name>/compatcheck')
+@login_required
 def collection_compatcheck(collection_name):
     """Compatibility Check: a live 2-player game where each round both players privately pick which tagged body part attracted them most, then see if they matched."""
     collection = _safe_collection_name(collection_name)
@@ -3124,6 +3383,7 @@ def collection_compatcheck(collection_name):
 
 
 @app.route('/collection/<collection_name>/bubbleburst')
+@login_required
 def collection_bubbleburst(collection_name):
     """Bubble Burst: pop rising bubbles that contain the target image before they escape."""
     collection = _safe_collection_name(collection_name)
@@ -3131,6 +3391,7 @@ def collection_bubbleburst(collection_name):
 
 
 @app.route('/collection/<collection_name>/breakout')
+@login_required
 def collection_breakout(collection_name):
     """Image Pong (Breakout): break tiles to reveal a hidden image, guess it fast for max score."""
     collection = _safe_collection_name(collection_name)
@@ -3138,6 +3399,7 @@ def collection_breakout(collection_name):
 
 
 @app.route('/collection/<collection_name>/heatmap')
+@login_required
 def collection_heatmap(collection_name):
     """Heat Map: paint on each image to show what draws your eye."""
     collection = _safe_collection_name(collection_name)
@@ -3145,6 +3407,7 @@ def collection_heatmap(collection_name):
 
 
 @app.route('/collection/<collection_name>/gallerywalk')
+@login_required
 def collection_gallerywalk(collection_name):
     """Gallery Walk: stroll through a virtual art gallery of your collection."""
     collection = _safe_collection_name(collection_name)
@@ -3507,6 +3770,7 @@ def api_quote_chat_token():
 
 
 @app.route('/collection/<collection_name>/chat')
+@login_required
 def collection_chat(collection_name):
     """Render the AI chat game for a specific collection."""
     collection = _safe_collection_name(collection_name)
@@ -3592,7 +3856,7 @@ def api_chat_send():
 
 @app.route('/login')
 def login_page():
-    if current_user.is_authenticated or session.get('is_guest'):
+    if current_user.is_authenticated:
         return redirect(url_for('index'))
     return render_template('login.html')
 
@@ -3601,8 +3865,6 @@ def logout():
     if current_user.is_authenticated:
         _record_logout(current_user.id)
         logout_user()
-    session.pop('guest_username', None)
-    session.pop('is_guest', None)
     return redirect(url_for('login_page'))
 
 @app.route('/api/auth/login', methods=['POST'])
@@ -3656,14 +3918,6 @@ def api_register():
     _record_login(user.id)
     return jsonify({'success': True})
 
-@app.route('/api/auth/guest', methods=['POST'])
-def api_guest():
-    data = request.get_json() or {}
-    name = str(data.get('username', 'Guest')).strip()[:30] or 'Guest'
-    session['guest_username'] = name
-    session['is_guest'] = True
-    return jsonify({'success': True})
-
 @app.route('/api/auth/me')
 def api_auth_me():
     if current_user.is_authenticated:
@@ -3675,10 +3929,7 @@ def api_auth_me():
             'is_admin':   current_user.is_admin,
             'avatar_url': current_user.avatar_url,
         })
-    if session.get('is_guest'):
-        return jsonify({'authenticated': False, 'is_guest': True,
-                        'username': session.get('guest_username', 'Guest')})
-    return jsonify({'authenticated': False, 'is_guest': False})
+    return jsonify({'authenticated': False})
 
 @app.route('/api/heartbeat', methods=['POST'])
 def api_heartbeat():
@@ -3812,9 +4063,11 @@ def admin_user_detail(user_id):
         _release_db(conn)
 
     video_collections = sorted(_video_capable_collections().keys())
+    all_collections = _load_collections()
     return render_template('admin_user_detail.html',
         target_user=target, sessions=sessions, uploads=uploads, scores=scores,
-        video_collections=video_collections, granted_collections=granted_collections)
+        video_collections=video_collections, granted_collections=granted_collections,
+        all_collections=all_collections)
 
 @app.route('/api/admin/user/<int:user_id>/set-admin', methods=['POST'])
 @admin_required
@@ -3969,6 +4222,50 @@ def api_set_video_item_access(collection_name, video_id):
         _grant_video_item_access(video_id, user_id, current_user.id)
     else:
         _revoke_video_item_access(video_id, user_id)
+
+    return jsonify({'success': True, 'granted': grant})
+
+# ── Admin: per-user image content blocks ────────────────────────────────────────
+
+@app.route('/api/admin/user/<int:user_id>/content-blocks/<collection_name>')
+@admin_required
+def api_get_content_blocks(user_id, collection_name):
+    """The (body_part, rating) pairs actually present in this collection, with
+    counts and whether this user is currently blocked from each — lazy-loaded
+    by the Content Blocks accordion on the admin user-detail page."""
+    safe_name = _safe_collection_name(collection_name)
+    if not _collection_exists(safe_name):
+        return jsonify({'success': False, 'error': 'Collection not found'}), 404
+
+    pairs = _collection_body_part_pairs_with_counts(safe_name)
+    blocked = _user_blocked_pairs(user_id, safe_name)
+    result = [{
+        'part': part,
+        'rating': rating,
+        'label': f"{part.title()} ({_BODY_PART_RATING_LABELS.get(rating, rating)})",
+        'count': count,
+        'blocked': (part, rating) in blocked,
+    } for part, rating, count in pairs]
+
+    return jsonify({'success': True, 'pairs': result})
+
+@app.route('/api/admin/user/<int:user_id>/content-blocks', methods=['POST'])
+@admin_required
+def api_set_content_block(user_id):
+    """Block or unblock this user from one body_part:rating pair in one collection."""
+    data = request.get_json() or {}
+    collection = _safe_collection_name(str(data.get('collection') or ''))
+    body_part = str(data.get('body_part') or '')
+    rating = str(data.get('rating') or '')
+    grant = bool(data.get('grant'))
+
+    if not collection or not _collection_exists(collection) or not body_part or not rating:
+        return jsonify({'success': False, 'error': 'Invalid collection, body_part, or rating'}), 400
+
+    if grant:
+        _grant_content_block(collection, body_part, rating, user_id, current_user.id)
+    else:
+        _revoke_content_block(collection, body_part, rating, user_id)
 
     return jsonify({'success': True, 'granted': grant})
 
@@ -4235,12 +4532,17 @@ def _vz_gen_code():
             return code
 
 
-def _vz_collection_images(collection):
+def _vz_collection_images(collection, blocked=None):
+    """blocked: optional set of (body_part, rating) pairs to exclude (union of every
+    player currently in the room — see vz_join/mm_join/cc_join for why this is
+    re-run at join time rather than only once at create time)."""
     tags_data = _load_tags()
     prefix = f"{collection}/"
     images = []
     for key, value in tags_data.items():
         if key.startswith(prefix) and isinstance(value, dict) and value.get('url'):
+            if blocked and not _image_visible_to_user(value.get('body_parts', {}), blocked):
+                continue
             images.append({'filename': key[len(prefix):], 'url': value['url']})
     return images
 
@@ -4349,11 +4651,15 @@ def _vz_finish_after_delay(code):
 
 @socketio.on('vz_create')
 def vz_create(data):
+    if not current_user.is_authenticated:
+        emit('vz_error', {'message': 'Please sign in to play.'})
+        return
     data = data or {}
     collection = _safe_collection_name(str(data.get('collection') or ''))
     username = str(data.get('username') or 'Player 1').strip()[:20] or 'Player 1'
     opponent_name = str(data.get('opponentUsername') or 'Player 2').strip()[:20] or 'Player 2'
-    images = _vz_collection_images(collection)
+    creator_id = current_user.id if current_user.is_authenticated else None
+    images = _vz_collection_images(collection, _effective_blocked_pairs(current_user, collection))
     if len(images) < 4:
         emit('vz_error', {'message': 'This collection needs at least 4 images to play.'})
         return
@@ -4364,6 +4670,7 @@ def vz_create(data):
         'pool': images,
         'used': set(),
         'players': {request.sid: username},
+        'user_ids': {request.sid: creator_id},
         'scores': {request.sid: 0},
         'pending_opponent_name': opponent_name,
         'round': 0,
@@ -4376,6 +4683,9 @@ def vz_create(data):
 
 @socketio.on('vz_join')
 def vz_join(data):
+    if not current_user.is_authenticated:
+        emit('vz_error', {'message': 'Please sign in to play.'})
+        return
     data = data or {}
     code = str(data.get('code') or '').strip().upper()
     room = _vz_rooms.get(code)
@@ -4388,9 +4698,22 @@ def vz_join(data):
 
     username = room.get('pending_opponent_name') or 'Player 2'
     room['players'][request.sid] = username
+    room['user_ids'][request.sid] = current_user.id if current_user.is_authenticated else None
     room['scores'][request.sid] = 0
     _vz_sid_room[request.sid] = code
     sio_join_room(code)
+
+    # Rebuild the pool now that both players are known — a player's content
+    # blocks must never be shown to them (or their opponent) once gameplay starts.
+    # No image has been revealed to anyone yet, so this is safe to do here.
+    combined_blocked = _union_blocked_pairs(room['user_ids'].values(), room['collection'])
+    room['pool'] = _vz_collection_images(room['collection'], combined_blocked)
+    if len(room['pool']) < 4:
+        socketio.emit('vz_error', {'message': 'Not enough images available for both players. Room closed.'}, room=code)
+        for sid in list(room['players'].keys()):
+            _vz_sid_room.pop(sid, None)
+        _vz_rooms.pop(code, None)
+        return
 
     emit('vz_joined', {'code': code, 'username': username})
     socketio.emit('vz_opponent_joined', {'players': room['players']}, room=code)
@@ -4454,10 +4777,12 @@ def _mm_gen_code():
             return code
 
 
-def _mm_build_board(collection, num_images):
+def _mm_build_board(collection, num_images, blocked=None):
     """num_images is the count of *unique* images the host picked — the
-    board itself has twice that many cards (each image appears as a pair)."""
-    images = _vz_collection_images(collection)
+    board itself has twice that many cards (each image appears as a pair).
+    blocked: optional union of blocked pairs — see mm_join, which rebuilds this
+    authoritatively once both players are known, before any card is revealed."""
+    images = _vz_collection_images(collection, blocked)
     if len(images) < num_images:
         return None, len(images)
     chosen = random.sample(images, num_images)
@@ -4468,6 +4793,9 @@ def _mm_build_board(collection, num_images):
 
 @socketio.on('mm_create')
 def mm_create(data):
+    if not current_user.is_authenticated:
+        emit('mm_error', {'message': 'Please sign in to play.'})
+        return
     data = data or {}
     collection = _safe_collection_name(str(data.get('collection') or ''))
     username = str(data.get('username') or 'Player 1').strip()[:20] or 'Player 1'
@@ -4492,7 +4820,8 @@ def mm_create(data):
     if fit_mode not in ('fit', 'stretch'):
         fit_mode = 'fit'
 
-    board, available = _mm_build_board(collection, num_images)
+    creator_id = current_user.id if current_user.is_authenticated else None
+    board, available = _mm_build_board(collection, num_images, _effective_blocked_pairs(current_user, collection))
     if board is None:
         emit('mm_error', {'message': f'This collection only has {available} images available — pick {available} or fewer.'})
         return
@@ -4500,13 +4829,15 @@ def mm_create(data):
     code = _mm_gen_code()
     _mm_rooms[code] = {
         'collection': collection,
-        'board': board,
+        'board': board,          # rebuilt authoritatively in mm_join, before any card is revealed
+        'num_images': num_images,
         'card_width': card_width,
         'card_height': card_height,
         'fit_mode': fit_mode,
         'matched_by': {},   # index -> sid
         'flipped': [],      # indices currently face-up and unresolved (max 2)
         'players': {request.sid: username},
+        'user_ids': {request.sid: creator_id},
         'scores': {request.sid: 0},
         'pending_opponent_name': opponent_name,
         'current_turn': None,
@@ -4519,6 +4850,9 @@ def mm_create(data):
 
 @socketio.on('mm_join')
 def mm_join(data):
+    if not current_user.is_authenticated:
+        emit('mm_error', {'message': 'Please sign in to play.'})
+        return
     data = data or {}
     code = str(data.get('code') or '').strip().upper()
     room = _mm_rooms.get(code)
@@ -4531,9 +4865,22 @@ def mm_join(data):
 
     username = room.get('pending_opponent_name') or 'Player 2'
     room['players'][request.sid] = username
+    room['user_ids'][request.sid] = current_user.id if current_user.is_authenticated else None
     room['scores'][request.sid] = 0
     _mm_sid_room[request.sid] = code
     sio_join_room(code)
+
+    # Rebuild the board now that both players are known — no card has been
+    # revealed to anyone yet (mm_game_start below only sends a card count).
+    combined_blocked = _union_blocked_pairs(room['user_ids'].values(), room['collection'])
+    board, available = _mm_build_board(room['collection'], room['num_images'], combined_blocked)
+    if board is None:
+        socketio.emit('mm_error', {'message': f'Not enough images available for both players ({available} available). Room closed.'}, room=code)
+        for sid in list(room['players'].keys()):
+            _mm_sid_room.pop(sid, None)
+        _mm_rooms.pop(code, None)
+        return
+    room['board'] = board
 
     sids = list(room['players'].keys())
     room['current_turn'] = random.choice(sids)
@@ -4726,9 +5073,11 @@ def _cc_gen_code():
             return code
 
 
-def _cc_collection_images(collection, keyword_map):
+def _cc_collection_images(collection, keyword_map, blocked=None):
     """Images with at least 2 of the keyword_map's categories present —
-    fewer than 2 would make the round a forced, uninformative "match"."""
+    fewer than 2 would make the round a forced, uninformative "match".
+    blocked: optional union of blocked pairs — see cc_join, which rebuilds this
+    authoritatively once both players are known, before any image is revealed."""
     tags_data = _load_tags()
     prefix = f"{collection}/"
     eligible = []
@@ -4736,6 +5085,8 @@ def _cc_collection_images(collection, keyword_map):
         if not key.startswith(prefix) or not isinstance(value, dict) or not value.get('url'):
             continue
         body_parts = value.get('body_parts', {})
+        if blocked and not _image_visible_to_user(body_parts, blocked):
+            continue
         if body_parts:
             # New structured format: body_parts dict keys are the categories
             options = {part: part for part in body_parts if part in keyword_map}
@@ -4837,13 +5188,17 @@ def _cc_finish_after_delay(code):
 
 @socketio.on('cc_create')
 def cc_create(data):
+    if not current_user.is_authenticated:
+        emit('cc_error', {'message': 'Please sign in to play.'})
+        return
     data = data or {}
     collection = _safe_collection_name(str(data.get('collection') or ''))
     username = str(data.get('username') or 'Player 1').strip()[:20] or 'Player 1'
     opponent_name = str(data.get('opponentUsername') or 'Player 2').strip()[:20] or 'Player 2'
 
+    creator_id = current_user.id if current_user.is_authenticated else None
     keyword_map = _cc_keyword_map_for_collection(collection)
-    images = _cc_collection_images(collection, keyword_map)
+    images = _cc_collection_images(collection, keyword_map, _effective_blocked_pairs(current_user, collection))
 
     try:
         num_rounds = int(data.get('numRounds'))
@@ -4868,9 +5223,11 @@ def cc_create(data):
     _cc_rooms[code] = {
         'collection': collection,
         'categories': list(keyword_map.keys()),
-        'pool': random.sample(images, num_rounds),
+        'keyword_map': keyword_map,
+        'pool': random.sample(images, num_rounds),  # rebuilt authoritatively in cc_join
         'round_seconds': round_seconds,
         'players': {request.sid: username},
+        'user_ids': {request.sid: creator_id},
         'pending_opponent_name': opponent_name,
         'round': 0,
         'total_rounds': num_rounds,
@@ -4887,6 +5244,9 @@ def cc_create(data):
 
 @socketio.on('cc_join')
 def cc_join(data):
+    if not current_user.is_authenticated:
+        emit('cc_error', {'message': 'Please sign in to play.'})
+        return
     data = data or {}
     code = str(data.get('code') or '').strip().upper()
     room = _cc_rooms.get(code)
@@ -4899,8 +5259,21 @@ def cc_join(data):
 
     username = room.get('pending_opponent_name') or 'Player 2'
     room['players'][request.sid] = username
+    room['user_ids'][request.sid] = current_user.id if current_user.is_authenticated else None
     _cc_sid_room[request.sid] = code
     sio_join_room(code)
+
+    # Rebuild the round pool now that both players are known — no image has
+    # been revealed to anyone yet (the first cc_round emit happens below).
+    combined_blocked = _union_blocked_pairs(room['user_ids'].values(), room['collection'])
+    images = _cc_collection_images(room['collection'], room['keyword_map'], combined_blocked)
+    if len(images) < room['total_rounds']:
+        socketio.emit('cc_error', {'message': f'Not enough images available for both players ({len(images)} available). Room closed.'}, room=code)
+        for sid in list(room['players'].keys()):
+            _cc_sid_room.pop(sid, None)
+        _cc_rooms.pop(code, None)
+        return
+    room['pool'] = random.sample(images, room['total_rounds'])
 
     emit('cc_joined', {'code': code, 'username': username})
     socketio.emit('cc_opponent_joined', {'players': room['players']}, room=code)

@@ -3,7 +3,7 @@ Unit tests for body-part tagging logic and related helpers.
 All DB / cloud dependencies are stubbed so no real services are needed.
 Run: python -m pytest tests.py -v   (or: python tests.py)
 """
-import sys, os, types, unittest
+import sys, os, io, types, unittest
 from unittest.mock import MagicMock, patch
 
 # ── Set env vars before importing app ─────────────────────────────────────────
@@ -545,6 +545,222 @@ class TestAiQuoteBatchRoutes(unittest.TestCase):
         self.assertIn('collection_name = %s', sql)
         self.assertIn('deleted_at IS NULL', sql)
         self.assertEqual(params, ('GayReal',))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-user image tag blocking: pure-logic helpers, enforcement, the blurred
+# proxy, guest-login removal, and the admin Content Blocks API.
+# ─────────────────────────────────────────────────────────────────────────────
+class TestContentBlockHelpers(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        _cur.fetchall.side_effect = None
+
+    def test_visible_when_no_blocks(self):
+        self.assertTrue(_app._image_visible_to_user({'face': 'n'}, set()))
+
+    def test_hidden_when_matching_pair_blocked(self):
+        self.assertFalse(_app._image_visible_to_user({'face': 'n'}, {('face', 'n')}))
+
+    def test_or_logic_across_multiple_blocks(self):
+        blocked = {('face', 'n'), ('penis', 'n')}
+        self.assertFalse(_app._image_visible_to_user({'boobs': 'c', 'penis': 'n'}, blocked))
+        self.assertTrue(_app._image_visible_to_user({'boobs': 'c', 'legs': 'sn'}, blocked))
+
+    def test_visible_when_image_has_no_body_parts(self):
+        self.assertTrue(_app._image_visible_to_user({}, {('face', 'n')}))
+
+    def test_effective_blocked_pairs_admin_bypass(self):
+        admin = MagicMock(is_authenticated=True, is_admin=True, id=1)
+        self.assertEqual(_app._effective_blocked_pairs(admin, 'col'), set())
+        _cur.execute.assert_not_called()
+
+    def test_effective_blocked_pairs_unauthenticated_bypass(self):
+        anon = MagicMock(is_authenticated=False)
+        self.assertEqual(_app._effective_blocked_pairs(anon, 'col'), set())
+        _cur.execute.assert_not_called()
+
+    def test_effective_blocked_pairs_queries_for_regular_user(self):
+        user = MagicMock(is_authenticated=True, is_admin=False, id=5)
+        _cur.fetchall.return_value = [('face', 'n'), ('penis', 'n')]
+        result = _app._effective_blocked_pairs(user, 'col')
+        self.assertEqual(result, {('face', 'n'), ('penis', 'n')})
+
+    def test_union_blocked_pairs_combines_multiple_users(self):
+        _cur.fetchall.side_effect = [[('face', 'n')], [('penis', 'n')]]
+        result = _app._union_blocked_pairs([1, 2], 'col')
+        self.assertEqual(result, {('face', 'n'), ('penis', 'n')})
+
+    def test_union_blocked_pairs_skips_falsy_user_ids(self):
+        _cur.fetchall.return_value = [('face', 'n')]
+        result = _app._union_blocked_pairs([None, 1], 'col')
+        self.assertEqual(result, {('face', 'n')})
+
+
+class TestContentBlockFiltering(unittest.TestCase):
+    """api_collection_images is the single highest-leverage enforcement point —
+    ~20+ minigames all fetch through this one endpoint."""
+
+    def setUp(self):
+        self.client = _app.app.test_client()
+
+    @patch.object(_app, '_effective_blocked_pairs')
+    @patch.object(_app, '_get_collection_image_model_map', return_value={})
+    @patch.object(_app, '_collection_exists', return_value=True)
+    @patch.object(_app, '_load_tags')
+    @patch.object(_app, 'current_user')
+    def test_blocked_image_excluded(self, mock_user, mock_load_tags, mock_exists, mock_map, mock_blocked):
+        mock_user.is_authenticated = True
+        mock_user.is_admin = False
+        mock_load_tags.return_value = {
+            'col/blocked.jpg': {'url': 'https://res.cloudinary.com/x/col/blocked.jpg', 'tags': [], 'body_parts': {'face': 'n'}},
+            'col/safe.jpg':    {'url': 'https://res.cloudinary.com/x/col/safe.jpg',    'tags': [], 'body_parts': {'face': 'c'}},
+        }
+        mock_blocked.return_value = {('face', 'n')}
+        resp = self.client.get('/api/collections/col/images')
+        filenames = [img['filename'] for img in resp.get_json()['images']]
+        self.assertIn('safe.jpg', filenames)
+        self.assertNotIn('blocked.jpg', filenames)
+
+    @patch.object(_app, '_get_collection_image_model_map', return_value={})
+    @patch.object(_app, '_collection_exists', return_value=True)
+    @patch.object(_app, '_load_tags')
+    @patch.object(_app, 'current_user')
+    def test_admin_sees_everything(self, mock_user, mock_load_tags, mock_exists, mock_map):
+        mock_user.is_authenticated = True
+        mock_user.is_admin = True
+        mock_load_tags.return_value = {
+            'col/a.jpg': {'url': 'https://res.cloudinary.com/x/col/a.jpg', 'tags': [], 'body_parts': {'face': 'n'}},
+        }
+        resp = self.client.get('/api/collections/col/images')
+        self.assertEqual(len(resp.get_json()['images']), 1)
+
+
+class TestImageProxy(unittest.TestCase):
+
+    def setUp(self):
+        _app._blur_cache.clear()
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        self.client = _app.app.test_client()
+
+    @patch.object(_app, '_effective_blocked_pairs', return_value=set())
+    @patch.object(_app, 'current_user')
+    def test_unblocked_redirects_without_fetching(self, mock_user, mock_blocked):
+        mock_user.is_authenticated = True
+        mock_user.is_admin = False
+        _cur.fetchone.return_value = ('https://res.cloudinary.com/x/col/a.jpg', {'face': 'c'})
+        resp = self.client.get('/img/col/a.jpg', follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp.headers['Location'], 'https://res.cloudinary.com/x/col/a.jpg')
+
+    @patch.object(_app, '_http')
+    @patch.object(_app, '_effective_blocked_pairs', return_value={('face', 'n')})
+    @patch.object(_app, 'current_user')
+    def test_blocked_blurs_and_caches_second_request(self, mock_user, mock_blocked, mock_http):
+        mock_user.is_authenticated = True
+        mock_user.is_admin = False
+        _cur.fetchone.return_value = ('https://res.cloudinary.com/x/col/a.jpg', {'face': 'n'})
+
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new('RGB', (10, 10), color='red').save(buf, format='JPEG')
+        mock_http.get.return_value = MagicMock(content=buf.getvalue())
+
+        resp = self.client.get('/img/col/a.jpg')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.mimetype, 'image/jpeg')
+        self.assertEqual(mock_http.get.call_count, 1)
+
+        resp2 = self.client.get('/img/col/a.jpg')
+        self.assertEqual(resp2.status_code, 200)
+        self.assertEqual(mock_http.get.call_count, 1)  # cached — no second fetch
+
+    def test_missing_image_404s(self):
+        _cur.fetchone.return_value = None
+        resp = self.client.get('/img/col/nosuch.jpg')
+        self.assertEqual(resp.status_code, 404)
+
+
+class TestGuestRemoval(unittest.TestCase):
+
+    def setUp(self):
+        self.client = _app.app.test_client()
+
+    def test_guest_route_removed(self):
+        resp = self.client.post('/api/auth/guest')
+        self.assertEqual(resp.status_code, 404)
+
+    @patch.object(_app, 'current_user')
+    def test_auth_me_unauthenticated_has_no_guest_key(self, mock_user):
+        mock_user.is_authenticated = False
+        resp = self.client.get('/api/auth/me')
+        data = resp.get_json()
+        self.assertFalse(data['authenticated'])
+        self.assertNotIn('is_guest', data)
+
+    @patch.object(_app, 'current_user')
+    def test_submit_score_requires_auth(self, mock_user):
+        mock_user.is_authenticated = False
+        resp = self.client.post('/api/submit-score', json={'collection': 'col'})
+        self.assertEqual(resp.status_code, 401)
+
+
+class TestAdminContentBlocksApi(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        _cur.fetchall.side_effect = None
+        self.client = _app.app.test_client()
+
+    @patch.object(_app, '_collection_exists', return_value=True)
+    def test_grant_content_block(self, mock_exists):
+        resp = self.client.post('/api/admin/user/1/content-blocks', json={
+            'collection': 'col', 'body_part': 'face', 'rating': 'n', 'grant': True
+        })
+        data = resp.get_json()
+        self.assertTrue(data['success'])
+        self.assertTrue(data['granted'])
+        sql = _cur.execute.call_args.args[0]
+        self.assertIn('INSERT INTO image_tag_blocks', sql)
+
+    @patch.object(_app, '_collection_exists', return_value=True)
+    def test_revoke_content_block(self, mock_exists):
+        resp = self.client.post('/api/admin/user/1/content-blocks', json={
+            'collection': 'col', 'body_part': 'face', 'rating': 'n', 'grant': False
+        })
+        data = resp.get_json()
+        self.assertTrue(data['success'])
+        self.assertFalse(data['granted'])
+        sql = _cur.execute.call_args.args[0]
+        self.assertIn('DELETE FROM image_tag_blocks', sql)
+
+    @patch.object(_app, '_collection_exists', return_value=False)
+    def test_grant_rejects_unknown_collection(self, mock_exists):
+        resp = self.client.post('/api/admin/user/1/content-blocks', json={
+            'collection': 'nosuch', 'body_part': 'face', 'rating': 'n', 'grant': True
+        })
+        self.assertEqual(resp.status_code, 400)
+
+    @patch.object(_app, '_collection_exists', return_value=False)
+    def test_get_pairs_404s_for_unknown_collection(self, mock_exists):
+        resp = self.client.get('/api/admin/user/1/content-blocks/nosuch')
+        self.assertEqual(resp.status_code, 404)
+
+    @patch.object(_app, '_user_blocked_pairs', return_value={('face', 'n')})
+    @patch.object(_app, '_collection_body_part_pairs_with_counts', return_value=[('face', 'n', 3), ('boobs', 'c', 5)])
+    @patch.object(_app, '_collection_exists', return_value=True)
+    def test_get_pairs_reports_blocked_flag(self, mock_exists, mock_pairs, mock_blocked):
+        resp = self.client.get('/api/admin/user/1/content-blocks/col')
+        pairs = resp.get_json()['pairs']
+        by_part = {(p['part'], p['rating']): p['blocked'] for p in pairs}
+        self.assertTrue(by_part[('face', 'n')])
+        self.assertFalse(by_part[('boobs', 'c')])
 
 
 if __name__ == '__main__':

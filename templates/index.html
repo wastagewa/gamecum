@@ -181,6 +181,9 @@
             <img src="{{ image_urls[image] if image_urls is defined and image in image_urls else '' }}"
                  alt="Gallery Image"
                  class="gallery-image">
+            {% if image_blocked is defined and image_blocked.get(image) %}
+            <div class="restricted-overlay"><i class="fas fa-lock"></i> Restricted</div>
+            {% endif %}
             {% if image_tags and image in image_tags and image_tags[image] %}
             <div class="image-tags" data-all-tags="{{ image_tags[image]|join(',') }}">
                 {% for tag in image_tags[image][:4] %}
