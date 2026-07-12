@@ -87,6 +87,14 @@ if B2_ENDPOINT and not B2_ENDPOINT.startswith(('http://', 'https://')):
     B2_ENDPOINT = f'https://{B2_ENDPOINT}'
 B2_URL_EXPIRY_SECONDS = int(os.environ.get('B2_URL_EXPIRY_SECONDS', 21600))  # 6 hours
 
+# Optional: a Cloudflare Worker (see cloudflare-worker/) that sits in front of the
+# B2 bucket, authenticating with its own read-only key and letting Cloudflare's edge
+# cache responses (Bandwidth Alliance = free B2<->Cloudflare transfer). When set,
+# _b2_sign_url() returns a plain, stable Worker URL instead of a presigned B2 URL —
+# no signing needed since the Worker does its own auth, and a stable URL is what
+# actually lets the browser (and Cloudflare's edge) cache the response at all.
+B2_WORKER_URL = os.environ.get('B2_WORKER_URL', '').rstrip('/')
+
 # B2 endpoints encode their region (e.g. s3.eu-central-003.backblazeb2.com) — the
 # presigned-URL signature must be scoped to that same region or B2 rejects it with
 # a signature mismatch, even though the URL looks well-formed. Derive it from the
@@ -105,13 +113,43 @@ _s3 = boto3.client(
     region_name=B2_REGION or 'us-east-1',
 )
 
+_b2_url_cache = {}          # key -> (url, expires_at_epoch_seconds)
+_B2_URL_REFRESH_BUFFER = 300  # regenerate if less than 5 minutes of validity remain
+
 def _b2_sign_url(key: str, expires_in: int = B2_URL_EXPIRY_SECONDS):
-    """Generate a time-limited URL for a private B2 object. Pass-through falsy keys unchanged."""
+    """Return a browser-usable URL for a private B2 object. Pass-through falsy keys unchanged.
+
+    If B2_WORKER_URL is configured, this is just a stable string concatenation — the
+    Worker authenticates to B2 itself, so there's nothing to sign and nothing to expire,
+    which also means Cloudflare's edge (and the browser) can actually cache the response
+    across requests/viewers instead of every fetch being a unique, one-time URL.
+
+    Otherwise falls back to generating a presigned B2 URL directly (pre-Worker behavior).
+    Reuses the same signed URL across calls until it's close to expiring, instead of
+    minting a brand-new signature (and therefore a brand-new URL) on every single page
+    render — a fresh URL every time defeats browser caching regardless of Cache-Control,
+    since the browser sees a different resource on every request.
+    """
     if not key:
         return key
-    return _s3.generate_presigned_url(
-        'get_object', Params={'Bucket': B2_BUCKET, 'Key': key}, ExpiresIn=expires_in
+    if B2_WORKER_URL:
+        return f'{B2_WORKER_URL}/{key}'
+    now = _time.time()
+    cached = _b2_url_cache.get(key)
+    if cached and cached[1] - now > _B2_URL_REFRESH_BUFFER:
+        return cached[0]
+    cache_max_age = max(expires_in - _B2_URL_REFRESH_BUFFER, 60)
+    url = _s3.generate_presigned_url(
+        'get_object',
+        Params={
+            'Bucket': B2_BUCKET,
+            'Key': key,
+            'ResponseCacheControl': f'private, max-age={cache_max_age}',
+        },
+        ExpiresIn=expires_in,
     )
+    _b2_url_cache[key] = (url, now + expires_in)
+    return url
 
 def _b2_upload_fileobj(fileobj, key: str, content_type: str = None):
     """Upload a file-like object to the B2 bucket, return its storage key (not a URL)."""

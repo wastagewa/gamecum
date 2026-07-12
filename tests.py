@@ -347,6 +347,65 @@ class TestCcCollectionImages(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# B2 signed-URL caching — reuse the same signature across calls instead of
+# minting a fresh one (and therefore a different URL) on every render, so the
+# browser can actually cache the response.
+# ─────────────────────────────────────────────────────────────────────────────
+class TestB2UrlCaching(unittest.TestCase):
+
+    def setUp(self):
+        _app._b2_url_cache.clear()
+
+    def test_worker_url_used_when_configured(self):
+        with patch.object(_app, 'B2_WORKER_URL', 'https://worker.example.workers.dev'), \
+             patch.object(_app._s3, 'generate_presigned_url') as mock_sign:
+            url = _app._b2_sign_url('col/file.mp4')
+        self.assertEqual(url, 'https://worker.example.workers.dev/col/file.mp4')
+        mock_sign.assert_not_called()  # no signing needed — the Worker authenticates itself
+
+    def test_worker_url_passthrough_falsy_key(self):
+        with patch.object(_app, 'B2_WORKER_URL', 'https://worker.example.workers.dev'):
+            self.assertEqual(_app._b2_sign_url(''), '')
+
+    def test_reuses_cached_url_within_validity_window(self):
+        with patch.object(_app._s3, 'generate_presigned_url', return_value='https://b2.example/signed?sig=abc') as mock_sign:
+            url1 = _app._b2_sign_url('col/file.mp4')
+            url2 = _app._b2_sign_url('col/file.mp4')
+        self.assertEqual(url1, url2)
+        mock_sign.assert_called_once()
+
+    def test_regenerates_when_close_to_expiry(self):
+        with patch.object(_app._s3, 'generate_presigned_url', return_value='https://b2.example/signed?sig=abc'):
+            _app._b2_sign_url('col/file.mp4', expires_in=100)
+        url, _ = _app._b2_url_cache['col/file.mp4']
+        # Simulate the cached entry being almost expired (within the refresh buffer)
+        _app._b2_url_cache['col/file.mp4'] = (url, _app._time.time() + 10)
+        with patch.object(_app._s3, 'generate_presigned_url', return_value='https://b2.example/signed?sig=def') as mock_sign:
+            new_url = _app._b2_sign_url('col/file.mp4', expires_in=100)
+        mock_sign.assert_called_once()
+        self.assertEqual(new_url, 'https://b2.example/signed?sig=def')
+
+    def test_passes_response_cache_control_param(self):
+        with patch.object(_app._s3, 'generate_presigned_url', return_value='https://b2.example/signed') as mock_sign:
+            _app._b2_sign_url('col/file2.mp4', expires_in=3600)
+        _, kwargs = mock_sign.call_args
+        self.assertIn('ResponseCacheControl', kwargs['Params'])
+
+    def test_falsy_key_passthrough(self):
+        self.assertEqual(_app._b2_sign_url(''), '')
+        self.assertIsNone(_app._b2_sign_url(None))
+
+    def test_different_keys_cached_independently(self):
+        with patch.object(_app._s3, 'generate_presigned_url', side_effect=[
+            'https://b2.example/a', 'https://b2.example/b',
+        ]) as mock_sign:
+            url_a = _app._b2_sign_url('col/a.mp4')
+            url_b = _app._b2_sign_url('col/b.mp4')
+        self.assertNotEqual(url_a, url_b)
+        self.assertEqual(mock_sign.call_count, 2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 8. Image storage: Cloudinary primary + B2 backup, soft-delete
 # ─────────────────────────────────────────────────────────────────────────────
 class TestImageStorageHelpers(unittest.TestCase):

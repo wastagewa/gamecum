@@ -2,14 +2,7 @@ Flask>=2.3.0
 Werkzeug>=2.3.0
 python-dotenv>=1.0.0
 requests>=2.31.0
-torch>=2.0.0
-torchvision>=0.15.0
 Pillow>=10.0.0
-onnxruntime>=1.17.0
-transformers>=4.37.0
-accelerate>=0.25.0
-sentencepiece>=0.1.99
-protobuf>=3.20.0
 gunicorn==26.0.0
 boto3>=1.34.0
 cloudinary>=1.36.0

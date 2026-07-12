@@ -1,0 +1,56 @@
+name = "gamecum-b2-proxy"
+# Check doppler from blackblaze
+workers_dev = true
+compatibility_date = "2023-09-04"
+
+main = "index.js"
+
+# Don't put your application key in this file!
+# You should set it as a secret in the Cloudflare dashboard or at the command line:
+# echo "<your b2 application key>" | wrangler secret put B2_APPLICATION_KEY
+[vars]
+# Copy this file to wrangler.toml (gitignored) and fill in your real values —
+# same values already used by the Flask app's B2_KEY_ID / B2_ENDPOINT_URL /
+# B2_BUCKET env vars. Endpoint here should NOT include "https://", just the bare host.
+B2_APPLICATION_KEY_ID = "xxxxxxxxxxxxxxxxxxxxxxxxxx"
+B2_ENDPOINT = "s3.us-west-004.backblazeb2.com"
+# Set BUCKET_NAME to:
+#   "A Backblaze B2 bucket name" - direct all requests to the specified bucket
+#   "$path" - use the initial segment in the incoming URL path as the bucket name
+#           e.g. https://images.example.com/bucket-name/path/to/object.png
+#   "$host" - use the initial subdomain in the hostname as the bucket name
+#           e.g. https://bucket-name.images.example.com/path/to/object.png
+BUCKET_NAME = "xxxxxx"
+# Bucket is private — do not allow anonymous directory listing.
+ALLOW_LIST_BUCKET = "false"
+# Not using rclone.
+RCLONE_DOWNLOAD = "false"
+# If set, these headers will be included in the signed upstream request
+# alongside the minimal set of headers required for an AWS v4 signature:
+# "authorization", "x-amz-content-sha256" and "x-amz-date".
+#
+# Note that, if "x-amz-content-sha256" is not included in ALLOWED_HEADERS, then
+# any value supplied in the incoming request is discarded and
+# "x-amz-content-sha256" will be set to "UNSIGNED-PAYLOAD".
+#
+# If you set ALLOWED_HEADERS, it is your responsibility to ensure that the
+# list of headers that you specify supports the functionality that your client
+# apps use, for example, "range". The list below is a suggested starting point.
+#
+# Note that HTTP headers are not case-sensitive. "host" will match "host",
+# "Host" and "HOST".
+#ALLOWED_HEADERS = [
+#    "content-type",
+#    "date",
+#    "host",
+#    "if-match",
+#    "if-modified-since",
+#    "if-none-match",
+#    "if-unmodified-since",
+#    "range",
+#    "x-amz-content-sha256",
+#    "x-amz-date",
+#    "x-amz-server-side-encryption-customer-algorithm",
+#    "x-amz-server-side-encryption-customer-key",
+#    "x-amz-server-side-encryption-customer-key-md5"
+#]

@@ -1,0 +1,18 @@
+/target
+/dist
+**/*.rs.bk
+Cargo.lock
+bin/
+pkg/
+wasm-pack.log
+worker/
+node_modules/
+.cargo-ok
+.env
+.idea/
+.dev.vars
+.wrangler/
+# wrangler.toml holds your real B2 endpoint/bucket/key-id — not secret on its own,
+# but kept untracked for consistency with how the Flask app treats .env. Commit
+# wrangler.toml.example instead (placeholders), same pattern as .env.example.
+wrangler.toml
