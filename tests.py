@@ -338,12 +338,13 @@ class TestCcCollectionImages(unittest.TestCase):
         self.assertEqual(len(result), 2)
 
     @patch.object(_app, '_load_tags')
-    def test_url_passed_through_unchanged(self, mock_load):
+    def test_url_resolved_to_fetchable_form(self, mock_load):
         mock_load.return_value = self._fake_tags_data([
             ({'boobs': 'n', 'butt': 'sn'}, []),
         ])
-        result = _app._cc_collection_images('col', self.KM)
-        self.assertEqual(result[0]['url'], 'col/0.jpg')
+        with patch.object(_app, 'B2_WORKER_URL', 'https://worker.example.workers.dev'):
+            result = _app._cc_collection_images('col', self.KM)
+        self.assertEqual(result[0]['url'], 'https://worker.example.workers.dev/col/0.jpg')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -406,7 +407,8 @@ class TestB2UrlCaching(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. Image storage: Cloudinary primary + B2 backup, soft-delete
+# 8. Image storage: B2-primary (Cloudinary helpers below are legacy, still used
+#    to read out any not-yet-migrated rows during the B2 cutover)
 # ─────────────────────────────────────────────────────────────────────────────
 class TestImageStorageHelpers(unittest.TestCase):
 
@@ -465,6 +467,93 @@ class TestImageStorageHelpers(unittest.TestCase):
         url = _app._cloudinary_rename('col/abc', 'newcol/abc')
         _cloudinary.uploader.rename.assert_called_with('col/abc', 'newcol/abc', resource_type='image')
         self.assertEqual(url, 'https://res.cloudinary.com/x/newcol/abc')
+
+    @patch.object(_app, '_cloudinary_delete')
+    def test_soft_delete_image_does_not_touch_cloudinary(self, mock_delete):
+        _app._soft_delete_image_by_collection_and_filename('col', 'file.jpg')
+        mock_delete.assert_not_called()
+        sql, params = _cur.execute.call_args.args
+        self.assertIn('UPDATE images', sql)
+        self.assertIn('deleted_at', sql)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8b. _resolve_image_url — bridges legacy Cloudinary rows and migrated B2 rows
+# ─────────────────────────────────────────────────────────────────────────────
+class TestResolveImageUrl(unittest.TestCase):
+
+    def test_falsy_passthrough(self):
+        self.assertEqual(_app._resolve_image_url(''), '')
+        self.assertIsNone(_app._resolve_image_url(None))
+
+    def test_legacy_http_url_passed_through_unchanged(self):
+        url = 'https://res.cloudinary.com/x/col/abc.jpg'
+        self.assertEqual(_app._resolve_image_url(url), url)
+
+    def test_bare_key_resolved_via_b2_sign_url(self):
+        with patch.object(_app, 'B2_WORKER_URL', 'https://worker.example.workers.dev'):
+            result = _app._resolve_image_url('col/abc.jpg')
+        self.assertEqual(result, 'https://worker.example.workers.dev/col/abc.jpg')
+
+
+class TestLoadTagsResolved(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+
+    def test_resolves_bare_key_url_leaves_raw_load_tags_untouched(self):
+        _cur.fetchall.return_value = [
+            ('col', 'a.jpg', 'col/a.jpg', [], False, {}),
+        ]
+        with patch.object(_app, 'B2_WORKER_URL', 'https://worker.example.workers.dev'):
+            resolved = _app._load_tags_resolved()
+        self.assertEqual(resolved['col/a.jpg']['url'], 'https://worker.example.workers.dev/col/a.jpg')
+
+        # raw _load_tags() must still return the bare key unresolved — it's
+        # read-modify-written straight back to the DB by update_image_tags()
+        raw = _app._load_tags()
+        self.assertEqual(raw['col/a.jpg']['url'], 'col/a.jpg')
+
+    def test_leaves_legacy_http_url_unchanged(self):
+        _cur.fetchall.return_value = [
+            ('col', 'a.jpg', 'https://res.cloudinary.com/x/col/a.jpg', [], False, {}),
+        ]
+        resolved = _app._load_tags_resolved()
+        self.assertEqual(resolved['col/a.jpg']['url'], 'https://res.cloudinary.com/x/col/a.jpg')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8c. Upload route — B2-primary, no Cloudinary write
+# ─────────────────────────────────────────────────────────────────────────────
+class TestImageUploadRoute(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        _cloudinary.reset_mock()
+        self.client = _app.app.test_client()
+
+    @patch.object(_app, 'B2_WORKER_URL', 'https://worker.example.workers.dev')
+    @patch.object(_app, '_b2_upload_fileobj')
+    def test_upload_writes_to_b2_not_cloudinary(self, mock_b2_upload):
+        mock_b2_upload.side_effect = lambda fileobj, key, content_type=None: key
+        data = {'file': (io.BytesIO(b'fake-image-bytes'), 'test.jpg')}
+        resp = self.client.post('/upload/col', data=data, content_type='multipart/form-data')
+
+        self.assertEqual(resp.status_code, 200)
+        mock_b2_upload.assert_called_once()
+        _cloudinary.uploader.upload.assert_not_called()
+
+        insert_call = next(
+            c for c in _cur.execute.call_args_list if 'INSERT INTO images' in c.args[0]
+        )
+        _, params = insert_call.args
+        stored_url = params[2]  # (collection_name, filename, url, ...)
+        self.assertTrue(stored_url.startswith('col/'))
+        self.assertNotIn('cloudinary', stored_url)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

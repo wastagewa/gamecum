@@ -43,11 +43,23 @@ function filterHeaders(headers, env) {
 }
 
 function createHeadResponse(response) {
-    return new Response(null, {
+    const r = new Response(null, {
         headers: response.headers,
         status: response.status,
         statusText: response.statusText
     });
+    r.headers.set('Access-Control-Allow-Origin', '*');
+    return r;
+}
+
+// Canvas-based minigames load images with crossOrigin="anonymous" and read
+// pixels back via canvas.toDataURL()/getImageData() — that only works if the
+// response carries Access-Control-Allow-Origin, so add it to every response
+// this Worker returns (GET/HEAD-only endpoint, safe to allow any origin).
+function withCors(response) {
+    const r = new Response(response.body, response);
+    r.headers.set('Access-Control-Allow-Origin', '*');
+    return r;
 }
 
 function isListBucketRequest(env, path) {
@@ -190,7 +202,7 @@ export default {
 
             // Return whatever response we have rather than an error response
             // This response cannot be aborted, otherwise it will raise an exception
-            return response;
+            return withCors(response);
         }
 
         // Send the signed request to B2
@@ -202,7 +214,8 @@ export default {
             return createHeadResponse(response);
         }
 
-        // Return the upstream response unchanged
-        return fetchPromise;
+        // Return the upstream response, with CORS added so canvas-based
+        // minigames can read pixel data back out of images loaded from here.
+        return withCors(await fetchPromise);
     },
 };
