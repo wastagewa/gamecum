@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Restricted Collections — Admin</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script>
+    (function(){var t=null;try{t=localStorage.getItem('imgur.theme');}catch(e){}
+    if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}})();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <!-- Socket.IO client — must match the flask-socketio server's protocol version -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    .wrap{max-width:1100px;margin:0 auto;padding:2rem 1.5rem;}
+    .adm-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:1rem;}
+    .adm-header h1{font-size:1.6rem;font-weight:700;}
+    .adm-header h1 i{color:var(--primary-color);margin-right:.5rem;}
+
+    /* Tabs */
+    .tabs{display:flex;gap:.3rem;border-bottom:2px solid rgba(164,6,110,.1);margin-bottom:1.5rem;}
+    .tab{padding:.6rem 1.2rem;border:none;background:transparent;color:var(--muted-text);
+      cursor:pointer;font-size:.9rem;font-weight:600;border-bottom:2px solid transparent;
+      margin-bottom:-2px;transition:all .2s;}
+    .tab.on{color:var(--primary-color);border-bottom-color:var(--primary-color);}
+    .pane{display:none;} .pane.on{display:block;}
+
+    .tbl-wrap{overflow-x:auto;background:var(--surface-color);border-radius:1rem;
+      border:1px solid rgba(164,6,110,.1);box-shadow:0 2px 10px var(--shadow-color);}
+    table{width:100%;border-collapse:collapse;font-size:.87rem;}
+    th{padding:.75rem 1rem;text-align:left;font-size:.74rem;text-transform:uppercase;
+      letter-spacing:.06em;color:var(--muted-text);border-bottom:1px solid rgba(164,6,110,.1);}
+    td{padding:.75rem 1rem;border-bottom:1px solid rgba(164,6,110,.05);vertical-align:middle;}
+    tr:last-child td{border-bottom:none;}
+    tr:hover td{background:rgba(164,6,110,.03);}
+    .empty{text-align:center;padding:2.5rem;color:var(--muted-text);}
+
+    .action-btn{padding:.3rem .75rem;border-radius:.5rem;border:1.5px solid;
+      font-size:.78rem;font-weight:700;cursor:pointer;transition:all .18s;
+      display:inline-flex;align-items:center;gap:.3rem;margin-right:.4rem;}
+    .action-btn.approve{color:#22c55e;border-color:#22c55e;background:transparent;}
+    .action-btn.approve:hover{background:#22c55e;color:#fff;}
+    .action-btn.deny, .action-btn.revoke{color:#ef4444;border-color:#ef4444;background:transparent;}
+    .action-btn.deny:hover, .action-btn.revoke:hover{background:#ef4444;color:#fff;}
+
+    /* Patterns list */
+    .pattern-row{display:flex;align-items:center;justify-content:space-between;
+      padding:.6rem 1rem;border-bottom:1px solid rgba(164,6,110,.05);}
+    .pattern-row:last-child{border-bottom:none;}
+    .pattern-form{display:flex;gap:.6rem;margin-bottom:1.2rem;}
+    .pattern-form input{flex:1;padding:.6rem .9rem;border-radius:.6rem;
+      border:1.5px solid rgba(164,6,110,.15);background:var(--surface-color);
+      color:var(--text-color);font-size:.9rem;outline:none;}
+    .pattern-form input:focus{border-color:var(--primary-color);}
+    .pattern-form button{padding:.6rem 1.2rem;border-radius:.6rem;border:none;
+      background:var(--primary-color);color:#fff;font-weight:700;cursor:pointer;}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-container">
+      <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+      <div class="navbar-menu">
+        <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+        <a href="/admin" class="navbar-link"><i class="fas fa-shield-alt"></i> Admin</a>
+        <a href="/admin/videos" class="navbar-link"><i class="fas fa-video"></i> Videos</a>
+        <a href="/admin/ai-quotes" class="navbar-link"><i class="fas fa-quote-right"></i> AI Quotes</a>
+        <a href="/admin/restricted-collections" class="navbar-link active"><i class="fas fa-user-lock"></i> Restricted</a>
+        <div class="navbar-dropdown">
+          <button type="button" class="navbar-link navbar-dropdown-toggle"><i class="fas fa-heartbeat"></i> Image Health <i class="fas fa-caret-down"></i></button>
+          <div class="navbar-dropdown-menu">
+            <a href="/admin/untagged-images" class="navbar-dropdown-item"><i class="fas fa-tags"></i> Untagged Images</a>
+            <a href="/admin/unknown-subject-images" class="navbar-dropdown-item"><i class="fas fa-user-slash"></i> Unknown Subject</a>
+            <a href="/admin/orphaned-images" class="navbar-dropdown-item"><i class="fas fa-trash-restore"></i> Orphaned Images</a>
+            <a href="/admin/missing-backup-images" class="navbar-dropdown-item"><i class="fas fa-cloud-upload-alt"></i> Missing B2 Backup</a>
+          </div>
+        </div>
+        <a href="/logout" class="navbar-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap">
+    <div class="adm-header">
+      <h1><i class="fas fa-user-lock"></i> Restricted Collections</h1>
+    </div>
+    <p style="color:var(--muted-text);font-size:.85rem;margin-bottom:1.2rem;">
+      Any collection whose name contains one of these patterns is completely hidden — images,
+      videos, and minigames — from EVERYONE, including other admins, until they request access,
+      a different admin approves it, and they accept within the 10-minute window that opens
+      2 hours later.
+    </p>
+
+    <div class="tabs">
+      <button class="tab on" onclick="switchTab('patterns')"><i class="fas fa-filter"></i> Patterns</button>
+      <button class="tab" onclick="switchTab('pending')"><i class="fas fa-clock"></i> Pending <span id="pendingCount"></span></button>
+      <button class="tab" onclick="switchTab('waiting')"><i class="fas fa-hourglass-half"></i> Awaiting Accept</button>
+      <button class="tab" onclick="switchTab('active')"><i class="fas fa-unlock"></i> Active Grants</button>
+    </div>
+
+    <!-- Patterns pane -->
+    <div class="pane on" id="pane-patterns">
+      <div class="pattern-form">
+        <input type="text" id="newPatternInput" placeholder="e.g. private, staff-only">
+        <button onclick="addPattern()"><i class="fas fa-plus"></i> Add</button>
+      </div>
+      <div class="tbl-wrap" id="patternsList"><p class="empty">Loading…</p></div>
+    </div>
+
+    <!-- Pending pane -->
+    <div class="pane" id="pane-pending">
+      <div class="tbl-wrap" id="pendingList"><p class="empty">Loading…</p></div>
+    </div>
+
+    <!-- Awaiting-accept pane -->
+    <div class="pane" id="pane-waiting">
+      <div class="tbl-wrap" id="waitingList"><p class="empty">Loading…</p></div>
+    </div>
+
+    <!-- Active grants pane -->
+    <div class="pane" id="pane-active">
+      <div class="tbl-wrap" id="activeList"><p class="empty">Loading…</p></div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script>
+    function switchTab(id){
+      document.querySelectorAll('.tab').forEach(b=>{
+        b.classList.toggle('on', b.getAttribute('onclick').includes("'"+id+"'"));
+      });
+      document.querySelectorAll('.pane').forEach(p=>{
+        p.classList.toggle('on', p.id === 'pane-'+id);
+      });
+      if (id === 'pending') loadPending();
+      if (id === 'waiting') loadList('approved', 'waitingList', renderWaitingRow);
+      if (id === 'active') loadList('accepted', 'activeList', renderActiveRow);
+    }
+
+    function fmtDate(iso){
+      if (!iso) return '—';
+      return new Date(iso).toLocaleString();
+    }
+
+    async function loadPatterns(){
+      const box = document.getElementById('patternsList');
+      try{
+        const r = await fetch('/api/admin/restricted-patterns');
+        const d = await r.json();
+        if (!d.success || !d.patterns.length){
+          box.innerHTML = '<p class="empty">No restricted patterns configured yet.</p>';
+          return;
+        }
+        box.innerHTML = d.patterns.map(p => `
+          <div class="pattern-row">
+            <span><i class="fas fa-filter" style="color:var(--primary-color);"></i> ${p.pattern}</span>
+            <button class="action-btn deny" onclick="deletePattern(${p.id})"><i class="fas fa-trash"></i> Remove</button>
+          </div>`).join('');
+      }catch{ box.innerHTML = '<p class="empty">Network error</p>'; }
+    }
+
+    async function addPattern(){
+      const input = document.getElementById('newPatternInput');
+      const pattern = input.value.trim();
+      if (!pattern) return;
+      try{
+        const r = await fetch('/api/admin/restricted-patterns', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({pattern})
+        });
+        const d = await r.json();
+        if (!d.success){ alert(d.error || 'Failed'); return; }
+        input.value = '';
+        loadPatterns();
+      }catch{ alert('Network error'); }
+    }
+
+    async function deletePattern(id){
+      if (!confirm('Remove this pattern? Collections matching it will become visible to everyone again.')) return;
+      try{
+        const r = await fetch(`/api/admin/restricted-patterns/${id}`, {method: 'DELETE'});
+        const d = await r.json();
+        if (!d.success){ alert(d.error || 'Failed'); return; }
+        loadPatterns();
+      }catch{ alert('Network error'); }
+    }
+
+    function renderPendingRow(row){
+      return `
+        <tr data-id="${row.id}">
+          <td>${row.requester_username}<br><span style="color:var(--muted-text);font-size:.78rem;">${row.requester_email}</span></td>
+          <td><i class="fas fa-folder" style="color:var(--primary-color);"></i> ${row.collection_name}</td>
+          <td style="white-space:nowrap;color:var(--muted-text);">${fmtDate(row.requested_at)}</td>
+          <td>
+            <button class="action-btn approve" onclick="actOn(${row.id}, 'approve')"><i class="fas fa-check"></i> Approve</button>
+            <button class="action-btn deny" onclick="actOn(${row.id}, 'deny')"><i class="fas fa-times"></i> Deny</button>
+          </td>
+        </tr>`;
+    }
+
+    function renderWaitingRow(row){
+      return `
+        <tr>
+          <td>${row.requester_username}</td>
+          <td><i class="fas fa-folder" style="color:var(--primary-color);"></i> ${row.collection_name}</td>
+          <td style="white-space:nowrap;color:var(--muted-text);">${fmtDate(row.accept_window_start)} – ${fmtDate(row.accept_window_end)}</td>
+        </tr>`;
+    }
+
+    function renderActiveRow(row){
+      return `
+        <tr data-id="${row.id}">
+          <td>${row.requester_username}</td>
+          <td><i class="fas fa-folder" style="color:var(--primary-color);"></i> ${row.collection_name}</td>
+          <td>
+            <button class="action-btn revoke" onclick="actOn(${row.id}, 'revoke')"><i class="fas fa-ban"></i> Revoke</button>
+          </td>
+        </tr>`;
+    }
+
+    async function loadPending(){
+      const box = document.getElementById('pendingList');
+      try{
+        const r = await fetch('/api/admin/restricted-access?status=pending');
+        const d = await r.json();
+        document.getElementById('pendingCount').textContent = d.requests && d.requests.length ? `(${d.requests.length})` : '';
+        if (!d.success || !d.requests.length){
+          box.innerHTML = '<p class="empty">No pending requests.</p>';
+          return;
+        }
+        box.innerHTML = `<table><thead><tr><th>Requester</th><th>Collection</th><th>Requested</th><th>Action</th></tr></thead>
+          <tbody>${d.requests.map(renderPendingRow).join('')}</tbody></table>`;
+      }catch{ box.innerHTML = '<p class="empty">Network error</p>'; }
+    }
+
+    async function loadList(status, boxId, renderFn){
+      const box = document.getElementById(boxId);
+      try{
+        const r = await fetch(`/api/admin/restricted-access?status=${status}`);
+        const d = await r.json();
+        if (!d.success || !d.requests.length){
+          box.innerHTML = '<p class="empty">Nothing here yet.</p>';
+          return;
+        }
+        box.innerHTML = `<table><thead><tr><th>User</th><th>Collection</th><th></th></tr></thead>
+          <tbody>${d.requests.map(renderFn).join('')}</tbody></table>`;
+      }catch{ box.innerHTML = '<p class="empty">Network error</p>'; }
+    }
+
+    async function actOn(id, action){
+      try{
+        const r = await fetch(`/api/admin/restricted-access/${id}/${action}`, {method: 'POST'});
+        const d = await r.json();
+        if (!d.success){ alert(d.error || 'Failed'); return; }
+        loadPending();
+        loadList('approved', 'waitingList', renderWaitingRow);
+        loadList('accepted', 'activeList', renderActiveRow);
+      }catch{ alert('Network error'); }
+    }
+
+    loadPatterns();
+    loadPending();
+
+    // Live update when a new request comes in, wherever this page is open.
+    if (window.io) {
+      const socket = io();
+      socket.on('access_request_created', () => loadPending());
+    }
+  </script>
+</body>
+</html>

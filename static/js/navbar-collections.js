@@ -113,6 +113,38 @@ window.__navAvatarError = function(imgEl) {
             // Start heartbeat for authenticated users
             if (d.authenticated) {
                 setInterval(() => fetch('/api/heartbeat', {method:'POST'}), 120000);
+                // Piggyback the restricted-access accept-window reminder on the same
+                // interval — most pages in this app never open a Socket.IO connection,
+                // so this poll (plus an immediate check on load) is the delivery path
+                // that actually reaches someone browsing normally, not just the live
+                // push a connected admin page might also receive.
+                checkRestrictedAccessReminders();
+                setInterval(checkRestrictedAccessReminders, 120000);
+            }
+        } catch (e) { /* silent */ }
+    }
+
+    const _shownAccessReminders = new Set();
+
+    function showAccessReadyToast(collection) {
+        if (_shownAccessReminders.has(collection)) return;
+        _shownAccessReminders.add(collection);
+        const toast = document.createElement('div');
+        toast.style.cssText = 'position:fixed;bottom:20px;right:20px;background:var(--primary-color);'
+            + 'color:#fff;padding:.9rem 1.3rem;border-radius:.8rem;box-shadow:0 4px 20px rgba(0,0,0,.25);'
+            + 'z-index:9999;font-size:.88rem;max-width:320px;cursor:pointer;';
+        toast.innerHTML = `<i class="fas fa-unlock"></i> You can now accept access to <strong>${collection}</strong> — click here (window closes in 10 min)`;
+        toast.addEventListener('click', () => { location.href = `/restricted/${collection}`; });
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 30000);
+    }
+
+    async function checkRestrictedAccessReminders() {
+        try {
+            const res = await fetch('/api/restricted-access/my-status');
+            const d = await res.json();
+            if (d.success && Array.isArray(d.ready)) {
+                d.ready.forEach(showAccessReadyToast);
             }
         } catch (e) { /* silent */ }
     }

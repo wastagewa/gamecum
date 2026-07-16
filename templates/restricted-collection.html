@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Restricted — {{ collection }}</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <script>
+    (function(){var t=null;try{t=localStorage.getItem('imgur.theme');}catch(e){}
+    if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+    if(t==='dark'){document.documentElement.setAttribute('data-theme','dark');}})();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <style>
+    .wrap{max-width:600px;margin:4rem auto;padding:0 1.5rem;text-align:center;}
+    .lock-icon{font-size:3rem;color:var(--primary-color);margin-bottom:1rem;}
+    h1{font-size:1.5rem;font-weight:700;margin-bottom:.5rem;}
+    .coll-name{color:var(--primary-color);}
+    p.desc{color:var(--muted-text);margin-bottom:2rem;}
+    .card{background:var(--surface-color);border-radius:1.2rem;padding:2rem;
+      border:1px solid rgba(164,6,110,.1);box-shadow:0 2px 14px var(--shadow-color);}
+    .status-badge{display:inline-block;padding:.35rem 1rem;border-radius:999px;
+      font-size:.85rem;font-weight:700;margin-bottom:1rem;}
+    .status-pending{background:rgba(234,179,8,.15);color:#eab308;}
+    .status-waiting{background:rgba(59,130,246,.15);color:#3b82f6;}
+    .status-ready{background:rgba(34,197,94,.15);color:#22c55e;}
+    .status-denied, .status-expired{background:rgba(239,68,68,.15);color:#ef4444;}
+    .btn{padding:.8rem 1.8rem;border-radius:.7rem;border:none;background:var(--primary-color);
+      color:#fff;font-weight:700;font-size:.95rem;cursor:pointer;margin-top:.5rem;}
+    .btn:hover{opacity:.9;}
+    .btn:disabled{opacity:.5;cursor:not-allowed;}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-container">
+      <a href="/" class="navbar-brand"><i class="fas fa-images"></i><span>ImgurMemory</span></a>
+      <div class="navbar-menu">
+        <a href="/" class="navbar-link"><i class="fas fa-home"></i> Home</a>
+        <div class="navbar-dropdown">
+          <button class="navbar-link navbar-dropdown-toggle"><i class="fas fa-folder-open"></i> View Collections <i class="fas fa-caret-down"></i></button>
+          <div class="navbar-dropdown-menu" id="collectionsDropdown"></div>
+        </div>
+        <button id="themeToggle" class="navbar-theme-toggle" type="button"><i class="fas fa-moon"></i></button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="lock-icon"><i class="fas fa-user-lock"></i></div>
+      <h1>Restricted collection: <span class="coll-name">{{ collection }}</span></h1>
+      <p class="desc">This collection requires approved access before you can view anything in it.</p>
+
+      {% if not row or row.status in ('denied', 'expired', 'revoked') %}
+        {% if row and row.status == 'denied' %}
+          <div class="status-badge status-denied"><i class="fas fa-times-circle"></i> Request denied</div>
+          <p class="desc">You can request access again.</p>
+        {% elif row and row.status == 'expired' %}
+          <div class="status-badge status-expired"><i class="fas fa-hourglass-end"></i> Accept window expired</div>
+          <p class="desc">You didn't accept within the 10-minute window. Request again to restart the process.</p>
+        {% elif row and row.status == 'revoked' %}
+          <div class="status-badge status-denied"><i class="fas fa-ban"></i> Access revoked</div>
+          <p class="desc">Your access to this collection was revoked. You can request again.</p>
+        {% endif %}
+        <button class="btn" id="requestBtn"><i class="fas fa-paper-plane"></i> Request Access</button>
+
+      {% elif row.status == 'pending' %}
+        <div class="status-badge status-pending"><i class="fas fa-clock"></i> Waiting for admin approval</div>
+        <p class="desc">A different admin needs to approve this request — check back later.</p>
+
+      {% elif row.status == 'approved' %}
+        <div id="approvedState" data-window-start="{{ row.accept_window_start.isoformat() }}" data-window-end="{{ row.accept_window_end.isoformat() }}">
+          <!-- filled in by JS below, since whether we're before/inside/after the window is a live clock comparison -->
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script>
+    const COLLECTION = {{ collection|tojson }};
+
+    document.getElementById('requestBtn')?.addEventListener('click', async () => {
+      try{
+        const r = await fetch(`/api/restricted-access/${COLLECTION}/request`, {method: 'POST'});
+        const d = await r.json();
+        if (!d.success){ alert(d.error || 'Failed'); return; }
+        location.reload();
+      }catch{ alert('Network error'); }
+    });
+
+    const approvedEl = document.getElementById('approvedState');
+    if (approvedEl) {
+      const start = new Date(approvedEl.dataset.windowStart);
+      const end = new Date(approvedEl.dataset.windowEnd);
+      const now = new Date();
+      if (now < start) {
+        approvedEl.innerHTML = `
+          <div class="status-badge status-waiting"><i class="fas fa-hourglass-half"></i> Approved — cooling down</div>
+          <p class="desc">You'll be able to accept access starting at ${start.toLocaleString()}.
+          The window stays open for 10 minutes, until ${end.toLocaleString()}.</p>`;
+      } else if (now >= start && now <= end) {
+        approvedEl.innerHTML = `
+          <div class="status-badge status-ready"><i class="fas fa-check-circle"></i> Ready to accept</div>
+          <p class="desc">Accept before ${end.toLocaleString()} or you'll need to request again.</p>
+          <button class="btn" id="acceptBtn"><i class="fas fa-unlock"></i> Accept Access</button>`;
+        document.getElementById('acceptBtn').addEventListener('click', async () => {
+          try{
+            const r = await fetch(`/api/restricted-access/${COLLECTION}/accept`, {method: 'POST'});
+            const d = await r.json();
+            if (!d.success){ alert(d.error || 'Failed'); return; }
+            location.href = `/collection/${COLLECTION}`;
+          }catch{ alert('Network error'); }
+        });
+      } else {
+        approvedEl.innerHTML = `
+          <div class="status-badge status-expired"><i class="fas fa-hourglass-end"></i> Accept window expired</div>
+          <p class="desc">You didn't accept in time. Request again to restart the process.</p>
+          <button class="btn" id="requestBtn2"><i class="fas fa-paper-plane"></i> Request Access</button>`;
+        document.getElementById('requestBtn2').addEventListener('click', async () => {
+          try{
+            const r = await fetch(`/api/restricted-access/${COLLECTION}/request`, {method: 'POST'});
+            const d = await r.json();
+            if (!d.success){ alert(d.error || 'Failed'); return; }
+            location.reload();
+          }catch{ alert('Network error'); }
+        });
+      }
+    }
+  </script>
+</body>
+</html>

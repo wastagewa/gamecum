@@ -793,6 +793,7 @@ class TestImageProxy(unittest.TestCase):
         _app._blur_cache.clear()
         _cur.reset_mock()
         _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []  # _restricted_collection_blocked() queries patterns via fetchall
         self.client = _app.app.test_client()
 
     @patch.object(_app, '_effective_blocked_pairs', return_value=set())
@@ -909,6 +910,224 @@ class TestAdminContentBlocksApi(unittest.TestCase):
         by_part = {(p['part'], p['rating']): p['blocked'] for p in pairs}
         self.assertTrue(by_part[('face', 'n')])
         self.assertFalse(by_part[('boobs', 'c')])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Restricted-collection hard wall: patterns, access gate, state machine, reconciler
+# ─────────────────────────────────────────────────────────────────────────────
+class TestIsCollectionRestricted(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+
+    def test_no_patterns_never_restricted(self):
+        _cur.fetchall.return_value = []
+        self.assertFalse(_app._is_collection_restricted('anything'))
+
+    def test_matches_case_insensitively(self):
+        _cur.fetchall.return_value = [('Secret',)]
+        self.assertTrue(_app._is_collection_restricted('my-secret-vault'))
+        self.assertTrue(_app._is_collection_restricted('MY-SECRET-VAULT'))
+
+    def test_no_match_when_pattern_absent(self):
+        _cur.fetchall.return_value = [('secret',)]
+        self.assertFalse(_app._is_collection_restricted('Real'))
+
+    def test_falsy_collection_name(self):
+        self.assertFalse(_app._is_collection_restricted(''))
+
+
+class TestRestrictedCollectionBlocked(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+
+    @patch.object(_app, '_is_collection_restricted', return_value=False)
+    def test_not_restricted_never_blocked(self, mock_restricted):
+        user = MagicMock(is_authenticated=True, is_admin=False, id=1)
+        self.assertFalse(_app._restricted_collection_blocked(user, 'Real'))
+
+    @patch.object(_app, '_is_collection_restricted', return_value=True)
+    def test_anonymous_always_blocked(self, mock_restricted):
+        anon = MagicMock(is_authenticated=False)
+        self.assertTrue(_app._restricted_collection_blocked(anon, 'secret'))
+
+    @patch.object(_app, '_user_has_restricted_collection_access', return_value=False)
+    @patch.object(_app, '_is_collection_restricted', return_value=True)
+    def test_admin_without_grant_is_blocked_no_bypass(self, mock_restricted, mock_access):
+        """Deliberately different from video access — admins get no free pass here."""
+        admin = MagicMock(is_authenticated=True, is_admin=True, id=1)
+        self.assertTrue(_app._restricted_collection_blocked(admin, 'secret'))
+
+    @patch.object(_app, '_user_has_restricted_collection_access', return_value=True)
+    @patch.object(_app, '_is_collection_restricted', return_value=True)
+    def test_accepted_access_not_blocked(self, mock_restricted, mock_access):
+        user = MagicMock(is_authenticated=True, is_admin=False, id=1)
+        self.assertFalse(_app._restricted_collection_blocked(user, 'secret'))
+
+
+class TestRestrictedCollectionsDeniedForUser(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+
+    def test_no_patterns_returns_empty_set(self):
+        _cur.fetchall.return_value = []
+        user = MagicMock(is_authenticated=True, id=5)
+        self.assertEqual(_app._restricted_collections_denied_for_user(user), set())
+
+    @patch.object(_app, '_load_collections', return_value=['secret-vault', 'Real', 'private-stash'])
+    def test_anonymous_denied_all_restricted(self, mock_collections):
+        _cur.fetchall.return_value = [('secret',), ('private',)]
+        anon = MagicMock(is_authenticated=False)
+        result = _app._restricted_collections_denied_for_user(anon)
+        self.assertEqual(result, {'secret-vault', 'private-stash'})
+
+    @patch.object(_app, '_load_collections', return_value=['secret-vault', 'Real', 'private-stash'])
+    def test_user_with_accepted_access_excludes_that_collection(self, mock_collections):
+        _cur.fetchall.side_effect = [
+            [('secret',), ('private',)],   # _load_restricted_patterns()
+            [('secret-vault',)],           # this user's accepted collections
+        ]
+        user = MagicMock(is_authenticated=True, id=5)
+        result = _app._restricted_collections_denied_for_user(user)
+        self.assertEqual(result, {'private-stash'})
+
+
+class TestRestrictedAccessStateMachine(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        _cur.rowcount = 1
+
+    def test_request_creates_pending(self):
+        self.assertTrue(_app._request_restricted_access('col', 1))
+        sql = _cur.execute.call_args.args[0]
+        self.assertIn('INSERT INTO restricted_collection_access', sql)
+
+    def test_request_no_ops_when_already_active(self):
+        _cur.rowcount = 0
+        self.assertFalse(_app._request_restricted_access('col', 1))
+
+    def test_approve_updates_pending_row(self):
+        self.assertTrue(_app._approve_restricted_access(42, admin_id=2))
+        sql, params = _cur.execute.call_args.args
+        self.assertIn("status = 'approved'", sql)
+        self.assertIn("user_id != %s", sql)
+        self.assertEqual(params, (2, 42, 2))
+
+    def test_approve_fails_when_not_pending_or_self(self):
+        _cur.rowcount = 0
+        self.assertFalse(_app._approve_restricted_access(42, admin_id=2))
+
+    def test_deny_updates_pending_row(self):
+        self.assertTrue(_app._deny_restricted_access(42, admin_id=2))
+        sql = _cur.execute.call_args.args[0]
+        self.assertIn("status = 'denied'", sql)
+
+    def test_accept_succeeds_inside_window(self):
+        self.assertTrue(_app._accept_restricted_access(42, user_id=1))
+        sql = _cur.execute.call_args.args[0]
+        self.assertIn("status = 'accepted'", sql)
+        self.assertIn('BETWEEN accept_window_start AND accept_window_end', sql)
+
+    def test_accept_fails_outside_window(self):
+        _cur.rowcount = 0
+        self.assertFalse(_app._accept_restricted_access(42, user_id=1))
+
+    def test_revoke_updates_accepted_row(self):
+        self.assertTrue(_app._revoke_restricted_access(42, revoked_by=1))
+        sql = _cur.execute.call_args.args[0]
+        self.assertIn("status = 'revoked'", sql)
+
+    def test_revoke_fails_when_nothing_active(self):
+        _cur.rowcount = 0
+        self.assertFalse(_app._revoke_restricted_access(42, revoked_by=1))
+
+
+class TestRestrictedAccessReconciler(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+
+    def test_expire_lapsed_updates_approved_past_window(self):
+        _app._expire_lapsed_restricted_access()
+        sql = _cur.execute.call_args.args[0]
+        self.assertIn("status = 'expired'", sql)
+        self.assertIn("status = 'approved'", sql)
+        self.assertIn('accept_window_end <= NOW()', sql)
+
+    @patch.object(_app.socketio, 'emit')
+    def test_sends_reminder_once_per_due_request(self, mock_emit):
+        _cur.fetchall.return_value = [(42, 7, 'secret-vault')]
+        _app._send_due_restricted_access_reminders()
+        mock_emit.assert_called_once_with(
+            'access_window_open', {'id': 42, 'collection': 'secret-vault'}, room='user_7'
+        )
+        update_sql = _cur.execute.call_args.args[0]
+        self.assertIn('reminder_sent = TRUE', update_sql)
+
+    @patch.object(_app.socketio, 'emit')
+    def test_no_due_requests_no_emit(self, mock_emit):
+        _cur.fetchall.return_value = []
+        _app._send_due_restricted_access_reminders()
+        mock_emit.assert_not_called()
+
+
+class TestRestrictedCollectionEnforcement(unittest.TestCase):
+    """Spot-check the wiring at a couple of the ~15 call sites — the exhaustive
+    per-endpoint behavior is already covered by TestRestrictedCollectionBlocked."""
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        self.client = _app.app.test_client()
+
+    @patch.object(_app, '_restricted_collection_blocked', return_value=True)
+    @patch.object(_app, 'current_user')
+    def test_collection_view_redirects_when_blocked(self, mock_user, mock_blocked):
+        mock_user.is_authenticated = True
+        mock_user.is_admin = False
+        resp = self.client.get('/collection/secret', follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/restricted/secret', resp.headers['Location'])
+
+    @patch.object(_app, '_restricted_collection_blocked', return_value=True)
+    @patch.object(_app, '_collection_exists', return_value=True)
+    @patch.object(_app, 'current_user')
+    def test_api_collection_images_403s_when_blocked(self, mock_user, mock_exists, mock_blocked):
+        mock_user.is_authenticated = True
+        mock_user.is_admin = False
+        resp = self.client.get('/api/collections/secret/images')
+        self.assertEqual(resp.status_code, 403)
+        self.assertTrue(resp.get_json()['restricted'])
+
+    @patch.object(_app, '_restricted_collections_denied_for_user', return_value={'secret'})
+    @patch.object(_app, '_effective_blocked_pairs_by_collection', return_value={})
+    @patch.object(_app, '_load_tags_resolved')
+    @patch.object(_app, 'current_user')
+    def test_search_by_tag_excludes_restricted_collection(self, mock_user, mock_load, mock_blocked_by_coll, mock_denied):
+        mock_user.is_authenticated = True
+        mock_user.is_admin = False
+        mock_load.return_value = {
+            'secret/a.jpg': {'url': 'u1', 'tags': ['face'], 'body_parts': {}},
+            'Real/b.jpg':   {'url': 'u2', 'tags': ['face'], 'body_parts': {}},
+        }
+        resp = self.client.get('/api/search-by-tag?tag=face')
+        keys = [img['key'] for img in resp.get_json()['images']]
+        self.assertNotIn('secret/a.jpg', keys)
+        self.assertIn('Real/b.jpg', keys)
 
 
 if __name__ == '__main__':

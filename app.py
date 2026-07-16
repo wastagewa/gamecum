@@ -468,6 +468,44 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_image_tag_blocks_collection
                 ON image_tag_blocks (collection_name, body_part, rating)
         """)
+        # Whole-collection hard wall: any collection whose name contains one of
+        # these admin-managed substrings is blocked for EVERYONE (no admin bypass)
+        # until they go through the request/approve/wait/accept flow below. This is
+        # independent of image_tag_blocks (per-tag) and video_collection_access
+        # (per-video) — it gates whether you get anywhere near a collection at all.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS restricted_collection_patterns (
+                id          SERIAL PRIMARY KEY,
+                pattern     VARCHAR(255) NOT NULL UNIQUE,
+                added_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                created_at  TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS restricted_collection_access (
+                id                   SERIAL PRIMARY KEY,
+                collection_name      VARCHAR(255) NOT NULL
+                    REFERENCES collections(name) ON DELETE CASCADE,
+                user_id              INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                status               VARCHAR(20) NOT NULL DEFAULT 'pending',
+                requested_at         TIMESTAMPTZ DEFAULT NOW(),
+                approved_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                approved_at          TIMESTAMPTZ,
+                accept_window_start  TIMESTAMPTZ,
+                accept_window_end    TIMESTAMPTZ,
+                accepted_at          TIMESTAMPTZ,
+                denied_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                denied_at            TIMESTAMPTZ,
+                revoked_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                revoked_at           TIMESTAMPTZ,
+                reminder_sent        BOOLEAN DEFAULT FALSE,
+                UNIQUE(collection_name, user_id)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_rca_status
+                ON restricted_collection_access (status)
+        """)
         cur.close()
         print("DB tables ready.")
     except Exception as e:
@@ -1387,6 +1425,255 @@ def _collection_body_part_pairs_with_counts(collection: str):
     finally:
         _release_db(conn)
 
+# ── Whole-collection restricted access (hard wall, no admin bypass) ─────────────
+# A collection whose name contains one of these admin-managed substrings is
+# blocked for EVERYONE — images, videos, and minigames — until the viewer holds
+# a status='accepted' row here. Independent of image_tag_blocks (per-tag) and
+# video_collection_access (per-video); this gate runs before either of those.
+
+def _load_restricted_patterns():
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT pattern FROM restricted_collection_patterns")
+        return [r[0] for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+
+def _load_restricted_patterns_with_ids():
+    """[(id, pattern), ...] ordered for display — the admin CRUD list needs the id to delete."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, pattern FROM restricted_collection_patterns ORDER BY pattern")
+        return cur.fetchall()
+    finally:
+        _release_db(conn)
+
+def _is_collection_restricted(collection: str) -> bool:
+    if not collection:
+        return False
+    patterns = _load_restricted_patterns()
+    name_lower = collection.lower()
+    return any(p.lower() in name_lower for p in patterns)
+
+def _user_has_restricted_collection_access(user_id: int, collection: str) -> bool:
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM restricted_collection_access WHERE collection_name = %s AND user_id = %s AND status = 'accepted'",
+            (collection, user_id)
+        )
+        return cur.fetchone() is not None
+    finally:
+        _release_db(conn)
+
+def _restricted_collection_blocked(user, collection: str) -> bool:
+    """True if this collection is restricted and the viewer lacks accepted access.
+    Deliberately NO admin bypass (unlike _user_can_view_any_video_in_collection) —
+    admins must go through the same request flow as anyone else."""
+    if not _is_collection_restricted(collection):
+        return False
+    if not user or not getattr(user, 'is_authenticated', False):
+        return True
+    return not _user_has_restricted_collection_access(user.id, collection)
+
+def _restricted_collections_denied_for_user(user) -> set:
+    """Restricted collections this viewer cannot currently see — for the
+    cross-collection browse endpoints that iterate images from every collection
+    rather than one at a time."""
+    patterns = _load_restricted_patterns()
+    if not patterns:
+        return set()
+    patterns_lower = [p.lower() for p in patterns]
+    restricted = {c for c in _load_collections() if any(p in c.lower() for p in patterns_lower)}
+    if not restricted:
+        return set()
+    if not user or not getattr(user, 'is_authenticated', False):
+        return restricted
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT collection_name FROM restricted_collection_access WHERE user_id = %s AND status = 'accepted'",
+            (user.id,)
+        )
+        accessible = {r[0] for r in cur.fetchall()}
+    finally:
+        _release_db(conn)
+    return restricted - accessible
+
+def _get_restricted_access_row(collection: str, user_id: int):
+    """The current request/grant row for this (collection, user), or None."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            "SELECT * FROM restricted_collection_access WHERE collection_name = %s AND user_id = %s",
+            (collection, user_id)
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        _release_db(conn)
+
+def _get_restricted_access_row_by_id(request_id: int):
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM restricted_collection_access WHERE id = %s", (request_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        _release_db(conn)
+
+def _list_restricted_access(status: str):
+    """Rows in a given status, joined with requester identity, for the admin dashboard."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT rca.id, rca.collection_name, rca.status, rca.requested_at,
+                   rca.approved_at, rca.accept_window_start, rca.accept_window_end,
+                   u.id AS requester_id, u.username AS requester_username, u.email AS requester_email
+            FROM restricted_collection_access rca
+            JOIN users u ON u.id = rca.user_id
+            WHERE rca.status = %s
+            ORDER BY rca.requested_at DESC
+        """, (status,))
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+
+def _request_restricted_access(collection: str, user_id: int) -> bool:
+    """Create a pending request, or reset a terminal-status row back to pending.
+    Returns False (no-op) if a request is already pending/approved/accepted."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO restricted_collection_access (collection_name, user_id, status, requested_at)
+            VALUES (%s, %s, 'pending', NOW())
+            ON CONFLICT (collection_name, user_id) DO UPDATE SET
+                status = 'pending', requested_at = NOW(), approved_by = NULL, approved_at = NULL,
+                accept_window_start = NULL, accept_window_end = NULL, accepted_at = NULL,
+                denied_by = NULL, denied_at = NULL, revoked_by = NULL, revoked_at = NULL,
+                reminder_sent = FALSE
+            WHERE restricted_collection_access.status IN ('denied', 'expired', 'revoked')
+        """, (collection, user_id))
+        created = cur.rowcount > 0
+        conn.commit()
+        return created
+    finally:
+        _release_db(conn)
+
+def _approve_restricted_access(request_id: int, admin_id: int) -> bool:
+    """Only affects a pending row, and never lets an admin approve their own request."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE restricted_collection_access
+            SET status = 'approved', approved_by = %s, approved_at = NOW(),
+                accept_window_start = NOW() + INTERVAL '2 hours',
+                accept_window_end   = NOW() + INTERVAL '2 hours 10 minutes',
+                reminder_sent = FALSE
+            WHERE id = %s AND status = 'pending' AND user_id != %s
+        """, (admin_id, request_id, admin_id))
+        ok = cur.rowcount > 0
+        conn.commit()
+        return ok
+    finally:
+        _release_db(conn)
+
+def _deny_restricted_access(request_id: int, admin_id: int) -> bool:
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE restricted_collection_access
+            SET status = 'denied', denied_by = %s, denied_at = NOW()
+            WHERE id = %s AND status = 'pending'
+        """, (admin_id, request_id))
+        ok = cur.rowcount > 0
+        conn.commit()
+        return ok
+    finally:
+        _release_db(conn)
+
+def _accept_restricted_access(request_id: int, user_id: int) -> bool:
+    """Only succeeds for the requester themselves, inside the accept window."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE restricted_collection_access
+            SET status = 'accepted', accepted_at = NOW()
+            WHERE id = %s AND user_id = %s AND status = 'approved'
+              AND NOW() BETWEEN accept_window_start AND accept_window_end
+        """, (request_id, user_id))
+        ok = cur.rowcount > 0
+        conn.commit()
+        return ok
+    finally:
+        _release_db(conn)
+
+def _revoke_restricted_access(request_id: int, revoked_by: int) -> bool:
+    """Used both for self-revoke (revoked_by == the holder) and any-admin-revoke."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE restricted_collection_access
+            SET status = 'revoked', revoked_by = %s, revoked_at = NOW()
+            WHERE id = %s AND status = 'accepted'
+        """, (revoked_by, request_id))
+        ok = cur.rowcount > 0
+        conn.commit()
+        return ok
+    finally:
+        _release_db(conn)
+
+def _expire_lapsed_restricted_access():
+    """Auto-expire approvals whose 10-minute accept window has closed unused."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE restricted_collection_access
+            SET status = 'expired'
+            WHERE status = 'approved' AND accept_window_end <= NOW()
+        """)
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+def _send_due_restricted_access_reminders():
+    """Push a one-time reminder the instant an approved request's accept window
+    opens — reminder_sent guards against firing more than once per request."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, user_id, collection_name FROM restricted_collection_access
+            WHERE status = 'approved' AND accept_window_start <= NOW() AND accept_window_end > NOW()
+              AND reminder_sent = FALSE
+        """)
+        due = cur.fetchall()
+        for request_id, user_id, collection_name in due:
+            socketio.emit('access_window_open', {
+                'id': request_id, 'collection': collection_name,
+            }, room=f'user_{user_id}')
+            cur.execute(
+                "UPDATE restricted_collection_access SET reminder_sent = TRUE WHERE id = %s",
+                (request_id,)
+            )
+        conn.commit()
+    finally:
+        _release_db(conn)
+
+
 def _normalize_tags_entry(entry):
     """Normalize a tags entry dict — kept for callers that use _load_tags() output."""
     if isinstance(entry, list):
@@ -1582,6 +1869,8 @@ def _blur_image_bytes(raw_bytes: bytes):
 @login_required
 def image_proxy(collection, filename):
     safe_name = _safe_collection_name(collection)
+    if _restricted_collection_blocked(current_user, safe_name):
+        return "Restricted", 403
     conn = _get_db()
     try:
         cur = conn.cursor()
@@ -1621,6 +1910,80 @@ def image_proxy(collection, filename):
 
     blurred_bytes, content_type = cached
     return Response(blurred_bytes, mimetype=content_type, headers={'Cache-Control': 'private, max-age=300'})
+
+# ── Restricted-collection access requests (requester-facing) ────────────────────
+
+@app.route('/restricted/<collection_name>')
+@login_required
+def restricted_collection_page(collection_name):
+    """Landing page every hard-walled route redirects to — shows whichever
+    state applies (no request / pending / waiting / ready-to-accept / expired
+    / denied) with the matching call to action."""
+    collection = _safe_collection_name(collection_name)
+    if not _is_collection_restricted(collection):
+        return redirect(url_for('collection_view', collection_name=collection))
+    row = _get_restricted_access_row(collection, current_user.id)
+    return render_template('restricted-collection.html', collection=collection, row=row)
+
+@app.route('/api/restricted-access/<collection_name>/request', methods=['POST'])
+@login_required
+def api_request_restricted_access(collection_name):
+    collection = _safe_collection_name(collection_name)
+    if not _is_collection_restricted(collection):
+        return jsonify({'success': False, 'error': 'Collection is not restricted'}), 400
+    created = _request_restricted_access(collection, current_user.id)
+    if not created:
+        return jsonify({'success': False, 'error': 'A request is already in progress'}), 400
+    socketio.emit('access_request_created', {
+        'collection': collection, 'requester': current_user.username,
+    }, room='admin_notifications')
+    return jsonify({'success': True})
+
+@app.route('/api/restricted-access/<collection_name>/accept', methods=['POST'])
+@login_required
+def api_accept_restricted_access(collection_name):
+    collection = _safe_collection_name(collection_name)
+    row = _get_restricted_access_row(collection, current_user.id)
+    if not row:
+        return jsonify({'success': False, 'error': 'No request found'}), 404
+    ok = _accept_restricted_access(row['id'], current_user.id)
+    if not ok:
+        return jsonify({'success': False, 'error': 'Accept window is not open'}), 400
+    return jsonify({'success': True})
+
+@app.route('/api/restricted-access/<collection_name>/release', methods=['POST'])
+@login_required
+def api_release_restricted_access(collection_name):
+    """Give back your own access — same underlying revoke as the admin action,
+    just always targeting your own row."""
+    collection = _safe_collection_name(collection_name)
+    row = _get_restricted_access_row(collection, current_user.id)
+    if not row:
+        return jsonify({'success': False, 'error': 'No active access to release'}), 404
+    ok = _revoke_restricted_access(row['id'], current_user.id)
+    if not ok:
+        return jsonify({'success': False, 'error': 'No active access to release'}), 400
+    return jsonify({'success': True})
+
+@app.route('/api/restricted-access/my-status')
+@login_required
+def api_my_restricted_access_status():
+    """Polled periodically by navbar-collections.js (piggybacking its existing
+    heartbeat interval) as a reliable fallback to the Socket.IO reminder push —
+    most pages in this app never open a socket connection at all, so this is
+    the delivery path that actually reaches a user browsing normally."""
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT collection_name FROM restricted_collection_access
+            WHERE user_id = %s AND status = 'approved'
+              AND NOW() BETWEEN accept_window_start AND accept_window_end
+        """, (current_user.id,))
+        ready = [r[0] for r in cur.fetchall()]
+    finally:
+        _release_db(conn)
+    return jsonify({'success': True, 'ready': ready})
 
 @app.route('/')
 @login_required
@@ -1665,6 +2028,8 @@ def _safe_collection_name(name: str):
 @login_required
 def collection_view(collection_name):
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     tags_data = _load_tags_resolved()
     images = []      # list of filenames (used as keys for tags/delete operations)
     image_urls = {}  # filename -> displayable URL (direct Cloudinary, or /img/ proxy for sensitive tags)
@@ -1699,10 +2064,14 @@ def collection_view(collection_name):
             image_tags[filename] = []
 
     videos = _visible_videos_for_user(current_user, collection) if _user_can_view_any_video_in_collection(current_user, collection) else None
+    has_restricted_access = (
+        _is_collection_restricted(collection)
+        and _user_has_restricted_collection_access(current_user.id, collection)
+    )
 
     return render_template('index.html', images=images, collection=collection,
                            image_tags=image_tags, image_urls=image_urls, videos=videos,
-                           image_blocked=image_blocked)
+                           image_blocked=image_blocked, has_restricted_access=has_restricted_access)
 
 @app.route('/upload', methods=['POST'])
 @app.route('/upload/<collection>', methods=['POST'])
@@ -2236,6 +2605,8 @@ def game():
 @login_required
 def collection_game(collection_name):
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     image_urls = _get_collection_image_urls(collection)
     return render_template('game.html', images=image_urls, collection=collection)
 
@@ -2251,6 +2622,8 @@ def puzzle():
 def collection_puzzle(collection_name):
     """Render the puzzle slider game for a specific collection."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     image_urls = _get_collection_image_urls(collection)
     return render_template('puzzle.html', images=image_urls, collection=collection)
 
@@ -2260,6 +2633,8 @@ def collection_puzzle(collection_name):
 def collection_sequence(collection_name):
     """Render the sequence memory game for a specific collection."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     image_urls = _get_collection_image_urls(collection)
     return render_template('sequence.html', images=image_urls, collection=collection)
 
@@ -2269,6 +2644,8 @@ def collection_sequence(collection_name):
 def collection_flashcards(collection_name):
     """Render the flashcards memory game for a specific collection."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     image_urls = _get_collection_image_urls(collection)
     return render_template('flashcards.html', images=image_urls, collection=collection)
 
@@ -2278,6 +2655,8 @@ def collection_flashcards(collection_name):
 def collection_hunt(collection_name):
     """Simple Image Hunt game: show target image, player must find it in a grid."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     image_urls = _get_collection_image_urls(collection)
     return render_template('hunt.html', images=image_urls, collection=collection)
 
@@ -2287,6 +2666,8 @@ def collection_hunt(collection_name):
 def collection_zoom(collection_name):
     """Zoom Challenge game: show zoomed-in portion of image, identify which full image it is."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     image_urls = _get_collection_image_urls(collection)
     return render_template('zoom.html', images=image_urls, collection=collection)
 
@@ -2296,6 +2677,8 @@ def collection_zoom(collection_name):
 def collection_whack(collection_name):
     """Whack-a-Mole game: click images as they appear on screen."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     image_urls = _get_collection_image_urls(collection)
     return render_template('whack.html', images=image_urls, collection=collection)
 
@@ -2305,6 +2688,8 @@ def collection_whack(collection_name):
 def collection_recall(collection_name):
     """Recall Grid game: memorize image positions and select the original spot."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     image_urls = _get_collection_image_urls(collection)
     return render_template('recall.html', images=image_urls, collection=collection)
 
@@ -2314,6 +2699,8 @@ def collection_recall(collection_name):
 def collection_missing(collection_name):
     """Missing Piece game: identify which image disappeared from the shown grid."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     image_urls = _get_collection_image_urls(collection)
     return render_template('missing.html', images=image_urls, collection=collection)
 
@@ -2323,6 +2710,8 @@ def collection_missing(collection_name):
 def collection_trail(collection_name):
     """Trail Trace game: follow a route through a memorized image grid."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     image_urls = _get_collection_image_urls(collection)
     return render_template('trail.html', images=image_urls, collection=collection)
 
@@ -2332,6 +2721,8 @@ def collection_trail(collection_name):
 def collection_remix(collection_name):
     """Remix Match game: identify which stylized remix belongs to the target image."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     image_urls = _get_collection_image_urls(collection)
     return render_template('remix.html', images=image_urls, collection=collection)
 
@@ -2604,6 +2995,9 @@ def api_collection_images(collection_name):
 
     if not _collection_exists(safe_name):
         return jsonify({'success': False, 'error': 'Collection not found'}), 404
+
+    if _restricted_collection_blocked(current_user, safe_name):
+        return jsonify({'success': False, 'error': 'Access restricted', 'restricted': True}), 403
 
     tags_data = _load_tags_resolved()
     image_models = _get_collection_image_model_map(safe_name)
@@ -2901,6 +3295,7 @@ def api_images_by_model():
 
     rows = _get_images_by_model_ids(model_ids, match_all)
     blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
+    restricted_denied = _restricted_collections_denied_for_user(current_user)
     images = [{
         'collection':  coll,
         'filename':    fname,
@@ -2908,7 +3303,8 @@ def api_images_by_model():
         'tags':        list(tags) if tags else [],
         'body_parts':  dict(body_parts) if body_parts else {},
     } for coll, fname, url, tags, body_parts in rows
-      if _image_visible_to_user(dict(body_parts) if body_parts else {}, blocked_by_collection.get(coll, set()))]
+      if coll not in restricted_denied
+      and _image_visible_to_user(dict(body_parts) if body_parts else {}, blocked_by_collection.get(coll, set()))]
 
     return jsonify({'success': True, 'images': images, 'count': len(images)})
 
@@ -3042,6 +3438,7 @@ def search_by_tag():
     
     tags_data = _load_tags_resolved()
     blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
+    restricted_denied = _restricted_collections_denied_for_user(current_user)
     matching_images = []
 
     for image_key, tag_info in tags_data.items():
@@ -3050,6 +3447,8 @@ def search_by_tag():
         image_tags = [t.lower() for t in tag_info.get('tags', [])]
         if search_tag in image_tags and tag_info.get('url'):
             collection = image_key.split('/')[0]
+            if collection in restricted_denied:
+                continue
             if not _image_visible_to_user(tag_info.get('body_parts', {}), blocked_by_collection.get(collection, set())):
                 continue
             matching_images.append({
@@ -3156,6 +3555,7 @@ def api_images_by_tags():
     tags_data = _load_tags_resolved()
     extras = _get_all_image_extras()
     blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
+    restricted_denied = _restricted_collections_denied_for_user(current_user)
     matching_images = []
 
     # Iterate through all tagged images
@@ -3167,6 +3567,8 @@ def api_images_by_tags():
             continue
 
         collection = parts[0]
+        if collection in restricted_denied:
+            continue
         filename = '/'.join(parts[1:])
         tags = tags_info.get('tags', [])
         matched = all(tag in tags for tag in tags_filter) if match_all else any(tag in tags for tag in tags_filter)
@@ -3241,6 +3643,7 @@ def api_images_by_body_parts():
     tags_data = _load_tags_resolved()
     extras = _get_all_image_extras()
     blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
+    restricted_denied = _restricted_collections_denied_for_user(current_user)
     matching_images = []
 
     for image_key, tags_info in tags_data.items():
@@ -3250,6 +3653,8 @@ def api_images_by_body_parts():
         if len(parts) < 2:
             continue
         collection = parts[0]
+        if collection in restricted_denied:
+            continue
         filename = '/'.join(parts[1:])
 
         image_extras = extras.get(image_key, {})
@@ -4313,6 +4718,104 @@ def api_set_content_block(user_id):
 
     return jsonify({'success': True, 'granted': grant})
 
+# ── Admin: restricted-collection patterns + access requests ─────────────────────
+
+@app.route('/api/admin/restricted-patterns')
+@admin_required
+def api_list_restricted_patterns():
+    rows = _load_restricted_patterns_with_ids()
+    return jsonify({'success': True, 'patterns': [{'id': i, 'pattern': p} for i, p in rows]})
+
+@app.route('/api/admin/restricted-patterns', methods=['POST'])
+@admin_required
+def api_add_restricted_pattern():
+    pattern = str((request.get_json() or {}).get('pattern') or '').strip()
+    if not pattern:
+        return jsonify({'success': False, 'error': 'Pattern required'}), 400
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO restricted_collection_patterns (pattern, added_by) VALUES (%s, %s) ON CONFLICT (pattern) DO NOTHING",
+            (pattern, current_user.id)
+        )
+        conn.commit()
+    finally:
+        _release_db(conn)
+    return jsonify({'success': True})
+
+@app.route('/api/admin/restricted-patterns/<int:pattern_id>', methods=['DELETE'])
+@admin_required
+def api_delete_restricted_pattern(pattern_id):
+    conn = _get_db()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM restricted_collection_patterns WHERE id = %s", (pattern_id,))
+        conn.commit()
+    finally:
+        _release_db(conn)
+    return jsonify({'success': True})
+
+@app.route('/api/admin/restricted-access')
+@admin_required
+def api_list_restricted_access():
+    """?status=pending|approved|accepted (default 'pending') for the admin tabs."""
+    status = request.args.get('status', 'pending')
+    if status not in ('pending', 'denied', 'approved', 'accepted', 'expired', 'revoked'):
+        return jsonify({'success': False, 'error': 'Invalid status'}), 400
+    return jsonify({'success': True, 'requests': _list_restricted_access(status)})
+
+@app.route('/api/admin/restricted-access/<int:request_id>/approve', methods=['POST'])
+@admin_required
+def api_approve_restricted_access(request_id):
+    """Any admin EXCEPT the requester themselves — enforced in _approve_restricted_access
+    via `user_id != %s`, not just here, so this can't be bypassed by a stale UI."""
+    ok = _approve_restricted_access(request_id, current_user.id)
+    if not ok:
+        return jsonify({'success': False, 'error': 'Not pending, or you are the requester'}), 400
+    row = _get_restricted_access_row_by_id(request_id)
+    if row:
+        socketio.emit('access_request_approved', {
+            'id': request_id, 'collection': row['collection_name'],
+            'accept_window_start': row['accept_window_start'].isoformat(),
+            'accept_window_end': row['accept_window_end'].isoformat(),
+        }, room=f"user_{row['user_id']}")
+    return jsonify({'success': True})
+
+@app.route('/api/admin/restricted-access/<int:request_id>/deny', methods=['POST'])
+@admin_required
+def api_deny_restricted_access(request_id):
+    ok = _deny_restricted_access(request_id, current_user.id)
+    if not ok:
+        return jsonify({'success': False, 'error': 'Request is not pending'}), 400
+    row = _get_restricted_access_row_by_id(request_id)
+    if row:
+        socketio.emit('access_request_denied', {
+            'id': request_id, 'collection': row['collection_name'],
+        }, room=f"user_{row['user_id']}")
+    return jsonify({'success': True})
+
+@app.route('/api/admin/restricted-access/<int:request_id>/revoke', methods=['POST'])
+@admin_required
+def api_admin_revoke_restricted_access(request_id):
+    """Any admin can revoke any accepted grant, at any time, including their own."""
+    row = _get_restricted_access_row_by_id(request_id)
+    ok = _revoke_restricted_access(request_id, current_user.id)
+    if not ok:
+        return jsonify({'success': False, 'error': 'No active access to revoke'}), 400
+    if row:
+        socketio.emit('access_revoked', {
+            'id': request_id, 'collection': row['collection_name'],
+        }, room=f"user_{row['user_id']}")
+    return jsonify({'success': True})
+
+@app.route('/admin/restricted-collections')
+def admin_restricted_collections_page():
+    if not current_user.is_authenticated or not current_user.is_admin:
+        return redirect(url_for('login_page'))
+    return render_template('admin-restricted-collections.html',
+                            all_collections=_load_collections())
+
 # ── Admin: image health (untagged / unknown subject / orphaned / missing B2 backup) ──
 # Four views over the images table's edge cases:
 #  - untagged: active images missing a rating for at least one BODY_PARTS entry
@@ -4703,6 +5206,9 @@ def vz_create(data):
         return
     data = data or {}
     collection = _safe_collection_name(str(data.get('collection') or ''))
+    if _restricted_collection_blocked(current_user, collection):
+        emit('vz_error', {'message': 'This collection is restricted. Request access first.'})
+        return
     username = str(data.get('username') or 'Player 1').strip()[:20] or 'Player 1'
     opponent_name = str(data.get('opponentUsername') or 'Player 2').strip()[:20] or 'Player 2'
     creator_id = current_user.id if current_user.is_authenticated else None
@@ -4741,6 +5247,9 @@ def vz_join(data):
         return
     if len(room['players']) >= 2:
         emit('vz_error', {'message': 'That room is already full.'})
+        return
+    if _restricted_collection_blocked(current_user, room['collection']):
+        emit('vz_error', {'message': 'This collection is restricted. Request access first.'})
         return
 
     username = room.get('pending_opponent_name') or 'Player 2'
@@ -4845,6 +5354,9 @@ def mm_create(data):
         return
     data = data or {}
     collection = _safe_collection_name(str(data.get('collection') or ''))
+    if _restricted_collection_blocked(current_user, collection):
+        emit('mm_error', {'message': 'This collection is restricted. Request access first.'})
+        return
     username = str(data.get('username') or 'Player 1').strip()[:20] or 'Player 1'
     opponent_name = str(data.get('opponentUsername') or 'Player 2').strip()[:20] or 'Player 2'
 
@@ -4908,6 +5420,9 @@ def mm_join(data):
         return
     if len(room['players']) >= 2:
         emit('mm_error', {'message': 'That room is already full.'})
+        return
+    if _restricted_collection_blocked(current_user, room['collection']):
+        emit('mm_error', {'message': 'This collection is restricted. Request access first.'})
         return
 
     username = room.get('pending_opponent_name') or 'Player 2'
@@ -5240,6 +5755,9 @@ def cc_create(data):
         return
     data = data or {}
     collection = _safe_collection_name(str(data.get('collection') or ''))
+    if _restricted_collection_blocked(current_user, collection):
+        emit('cc_error', {'message': 'This collection is restricted. Request access first.'})
+        return
     username = str(data.get('username') or 'Player 1').strip()[:20] or 'Player 1'
     opponent_name = str(data.get('opponentUsername') or 'Player 2').strip()[:20] or 'Player 2'
 
@@ -5302,6 +5820,9 @@ def cc_join(data):
         return
     if len(room['players']) >= 2:
         emit('cc_error', {'message': 'That room is already full.'})
+        return
+    if _restricted_collection_blocked(current_user, room['collection']):
+        emit('cc_error', {'message': 'This collection is restricted. Request access first.'})
         return
 
     username = room.get('pending_opponent_name') or 'Player 2'
@@ -5369,6 +5890,34 @@ def handle_disconnect():
     _cc_handle_disconnect(request.sid)
 
 
+@socketio.on('connect')
+def handle_connect():
+    # Lets the server push to a specific logged-in user (restricted-access
+    # request/approval/reminder notifications) outside of any game context —
+    # nothing else in this app needed a per-user room before this feature.
+    if current_user.is_authenticated:
+        sio_join_room(f'user_{current_user.id}')
+        if current_user.is_admin:
+            sio_join_room('admin_notifications')
+
+
+def _restricted_access_reconciler():
+    """Long-lived background task (started once at startup) that drives the two
+    time-based transitions for restricted-collection access requests: expiring
+    a lapsed 10-minute accept window, and firing the accept-window-opened
+    reminder exactly once. Deliberately DB-polling rather than a long
+    socketio.sleep(7200) — this app has no durable scheduler and a single
+    long sleep wouldn't survive a Render restart; a short poll loop recovers
+    on its own after any restart since all state lives in Postgres timestamps."""
+    while True:
+        socketio.sleep(60)
+        try:
+            _expire_lapsed_restricted_access()
+            _send_due_restricted_access_reminders()
+        except Exception:
+            app.logger.exception('restricted-access reconciler tick failed')
+
+
 # ── Startup ───────────────────────────────────────────────────────────────────
 
 # Initialise DB tables on every startup (safe — uses IF NOT EXISTS)
@@ -5389,6 +5938,8 @@ try:
     print("Google OAuth metadata pre-warmed.")
 except Exception as _oauth_warm_err:
     print(f"WARNING: Google OAuth metadata pre-warm failed (will retry lazily on first login): {_oauth_warm_err}")
+
+socketio.start_background_task(_restricted_access_reconciler)
 
 if __name__ == '__main__':
     socketio.run(app)

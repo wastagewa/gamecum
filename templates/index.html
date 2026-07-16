@@ -97,6 +97,20 @@
     
     <div class="header">
         <h1>{% if collection %}{{ collection }} Gallery{% else %}Image Gallery{% endif %}</h1>
+        {% if has_restricted_access %}
+        <button type="button" onclick="giveUpRestrictedAccess()" style="margin-top:.6rem;padding:.4rem 1rem;border-radius:.6rem;border:1.5px solid #ef4444;background:transparent;color:#ef4444;font-size:.82rem;font-weight:700;cursor:pointer;">
+            <i class="fas fa-unlock"></i> Give up access to this collection
+        </button>
+        <script>
+            function giveUpRestrictedAccess(){
+                if (!confirm('Give up your access to this restricted collection? You will need to request it again to come back.')) return;
+                fetch(`/api/restricted-access/{{ collection }}/release`, {method: 'POST'})
+                    .then(r => r.json())
+                    .then(d => { if (d.success) location.href = '/'; else alert(d.error || 'Failed'); })
+                    .catch(() => alert('Network error'));
+            }
+        </script>
+        {% endif %}
         <div class="upload-container" style="margin-top:16px;display:flex;gap:12px;flex-wrap:wrap;justify-content:center;">
             <label for="file-upload" class="custom-upload-btn">
                 <i class="fas fa-cloud-upload-alt"></i> Upload Image
