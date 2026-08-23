@@ -37,9 +37,13 @@
     tr:hover td{background:rgba(164,6,110,.03);}
     .empty{text-align:center;padding:2.5rem;color:var(--muted-text);}
 
-    .action-btn{padding:.3rem .75rem;border-radius:.5rem;border:1.5px solid;
+    /* style.css also defines .action-btn (memory-game collection cards) with
+       flex:1 — neutralise it so these buttons size to their label instead of
+       stretching across the row. */
+    .action-btn{flex:0 0 auto;padding:.3rem .75rem;border-radius:.5rem;border:1.5px solid;
       font-size:.78rem;font-weight:700;cursor:pointer;transition:all .18s;
-      display:inline-flex;align-items:center;gap:.3rem;margin-right:.4rem;}
+      display:inline-flex;align-items:center;justify-content:center;gap:.3rem;
+      white-space:nowrap;margin-right:.4rem;}
     .action-btn.approve{color:#22c55e;border-color:#22c55e;background:transparent;}
     .action-btn.approve:hover{background:#22c55e;color:#fff;}
     .action-btn.deny, .action-btn.revoke{color:#ef4444;border-color:#ef4444;background:transparent;}
@@ -47,7 +51,8 @@
 
     /* Patterns list */
     .pattern-row{display:flex;align-items:center;justify-content:space-between;
-      padding:.6rem 1rem;border-bottom:1px solid rgba(164,6,110,.05);}
+      gap:1rem;padding:.6rem 1rem;border-bottom:1px solid rgba(164,6,110,.05);}
+    .pattern-row .pattern-name{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;}
     .pattern-row:last-child{border-bottom:none;}
     .pattern-form{display:flex;gap:.6rem;margin-bottom:1.2rem;}
     .pattern-form input{flex:1;padding:.6rem .9rem;border-radius:.6rem;
@@ -156,7 +161,7 @@
         }
         box.innerHTML = d.patterns.map(p => `
           <div class="pattern-row">
-            <span><i class="fas fa-filter" style="color:var(--primary-color);"></i> ${p.pattern}</span>
+            <span class="pattern-name"><i class="fas fa-filter" style="color:var(--primary-color);"></i> ${p.pattern}</span>
             <button class="action-btn deny" onclick="deletePattern(${p.id})"><i class="fas fa-trash"></i> Remove</button>
           </div>`).join('');
       }catch{ box.innerHTML = '<p class="empty">Network error</p>'; }

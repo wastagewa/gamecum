@@ -72,6 +72,26 @@ import app as _app   # noqa: E402  (must be after the sys.modules stubs above)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Shared: neutralise the restricted-collection gate for route tests
+# ─────────────────────────────────────────────────────────────────────────────
+def _stub_no_restrictions(testcase):
+    """Pin the restricted-collection lookups to 'nothing is restricted'.
+
+    Route tests drive a single shared cursor mock whose fetchall() returns rows
+    shaped for the query under test, so any *extra* query a route makes gets the
+    wrong shape back. The restricted-collection gate issues exactly such a query,
+    so tests that aren't about restriction stub it out here rather than teaching
+    the cursor mock to dispatch on SQL text.
+    """
+    for name, value in (('_load_restricted_patterns', []),
+                        ('_restricted_collections_denied_for_user', set()),
+                        ('_restricted_collection_blocked', False)):
+        patcher = patch.object(_app, name, return_value=value)
+        patcher.start()
+        testcase.addCleanup(patcher.stop)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 1. Constants
 # ─────────────────────────────────────────────────────────────────────────────
 class TestConstants(unittest.TestCase):
@@ -565,6 +585,7 @@ class TestImageHealthRoutes(unittest.TestCase):
         _cur.reset_mock()
         _cur.fetchone.return_value = None
         _cur.fetchall.return_value = []
+        _stub_no_restrictions(self)
         self.client = _app.app.test_client()
 
     def test_untagged_images_query_requires_all_body_parts_present(self):
@@ -657,6 +678,7 @@ class TestAiQuoteBatchRoutes(unittest.TestCase):
         _cur.fetchone.return_value = None
         _cur.fetchall.return_value = []
         _cur.fetchall.side_effect = None  # defensive: clear any leaked side_effect iterator
+        _stub_no_restrictions(self)
         self.client = _app.app.test_client()
 
     def tearDown(self):
@@ -1132,3 +1154,180 @@ class TestRestrictedCollectionEnforcement(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Restricted collections + the global auth wall
+# ─────────────────────────────────────────────────────────────────────────────
+class _Anon:
+    """Stand-in for flask_login's AnonymousUser (the module-level current_user
+    mock in this harness is authenticated for every other test)."""
+    is_authenticated = False
+    is_admin = False
+    id = None
+
+
+class TestGlobalAuthWall(unittest.TestCase):
+    """Auth is deny-by-default: only _PUBLIC_ENDPOINTS may be reached signed-out.
+    Regression guard for /api/collections, /api/images and /api/tags, which each
+    returned every image's permanent CDN url to anonymous callers."""
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        self.client = _app.app.test_client()
+        patcher = patch.object(_app, 'current_user', _Anon())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_image_serving_apis_reject_anonymous(self):
+        for path in ('/api/collections', '/api/images', '/api/tags',
+                     '/api/tags-with-counts', '/api/body-parts-with-counts'):
+            with self.subTest(path=path):
+                resp = self.client.get(path)
+                self.assertEqual(resp.status_code, 401)
+                self.assertNotIn(b'cloudinary', resp.data)
+
+    def test_anonymous_page_load_redirects_to_login(self):
+        resp = self.client.get('/manage-collections')
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/login', resp.headers['Location'])
+
+    def test_upload_rejects_anonymous(self):
+        """/upload had no decorator at all — anyone could add images."""
+        resp = self.client.post('/upload/col')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_public_endpoints_still_reachable(self):
+        self.assertEqual(self.client.get('/login').status_code, 200)
+        self.assertEqual(self.client.get('/api/auth/me').status_code, 200)
+
+    def test_every_public_endpoint_name_exists(self):
+        """Guards against a typo silently leaving an endpoint walled off."""
+        known = {r.endpoint for r in _app.app.url_map.iter_rules()}
+        self.assertEqual(_app._PUBLIC_ENDPOINTS - known, set())
+
+
+class TestRestrictedPatternMatching(unittest.TestCase):
+
+    def _with_patterns(self, patterns):
+        p = patch.object(_app, '_load_restricted_patterns', return_value=patterns)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_substring_match_is_case_insensitive(self):
+        self._with_patterns(['gay'])
+        self.assertTrue(_app._is_collection_restricted('GayReal'))
+        self.assertTrue(_app._is_collection_restricted('MYGAYPICS'))
+
+    def test_non_matching_collection_is_open(self):
+        self._with_patterns(['gay'])
+        self.assertFalse(_app._is_collection_restricted('Real'))
+
+    def test_no_patterns_means_nothing_restricted(self):
+        self._with_patterns([])
+        self.assertFalse(_app._is_collection_restricted('GayReal'))
+
+    def test_empty_collection_name_is_not_restricted(self):
+        self._with_patterns(['gay'])
+        self.assertFalse(_app._is_collection_restricted(''))
+
+
+class TestRestrictedFiltering(unittest.TestCase):
+    """_visible_tags_data() / _drop_restricted_rows() are the two choke points
+    every read path goes through, so they carry the whole guarantee."""
+
+    def _deny(self, denied):
+        p = patch.object(_app, '_restricted_collections_denied_for_user', return_value=denied)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_visible_tags_data_strips_denied_collections(self):
+        raw = {
+            'Real/a.jpg':    {'url': 'https://cdn/Real/a.jpg', 'tags': []},
+            'GayReal/b.jpg': {'url': 'https://cdn/GayReal/b.jpg', 'tags': []},
+        }
+        with patch.object(_app, '_load_tags_resolved', return_value=raw):
+            self._deny({'GayReal'})
+            out = _app._visible_tags_data()
+        self.assertEqual(set(out), {'Real/a.jpg'})
+
+    def test_visible_tags_data_passes_through_when_nothing_denied(self):
+        raw = {'Real/a.jpg': {'url': 'https://cdn/Real/a.jpg', 'tags': []}}
+        with patch.object(_app, '_load_tags_resolved', return_value=raw):
+            self._deny(set())
+            out = _app._visible_tags_data()
+        self.assertEqual(out, raw)
+
+    def test_drop_restricted_rows_filters_by_collection_name(self):
+        rows = [{'collection_name': 'Real', 'filename': 'a.jpg'},
+                {'collection_name': 'GayReal', 'filename': 'b.jpg'}]
+        self._deny({'GayReal'})
+        self.assertEqual(_app._drop_restricted_rows(rows),
+                         [{'collection_name': 'Real', 'filename': 'a.jpg'}])
+
+
+class TestRestrictedAccessRequestSql(unittest.TestCase):
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.rowcount = 1
+
+    def test_request_reopens_an_approved_row_whose_window_lapsed(self):
+        """The reconciler only stamps 'expired' once a minute; until it does, the
+        row is still 'approved' and a re-request must not be rejected as
+        'already in progress'."""
+        _app._request_restricted_access('GayReal', 7)
+        sql = _cur.execute.call_args.args[0]
+        self.assertIn("status IN ('denied', 'expired', 'revoked')", sql)
+        self.assertIn("status = 'approved'", sql)
+        self.assertIn('accept_window_end <= NOW()', sql)
+
+    def test_approve_cannot_be_performed_by_the_requester(self):
+        _app._approve_restricted_access(3, 9)
+        sql, params = _cur.execute.call_args.args
+        self.assertIn('user_id != %s', sql)
+        self.assertEqual(params, (9, 3, 9))
+
+    def test_accept_requires_being_inside_the_window(self):
+        _app._accept_restricted_access(3, 9)
+        sql = _cur.execute.call_args.args[0]
+        self.assertIn('NOW() BETWEEN accept_window_start AND accept_window_end', sql)
+        self.assertIn("status = 'approved'", sql)
+
+
+class TestRenamePreservesAccessControl(unittest.TestCase):
+    """collections(name) is FK'd ON DELETE CASCADE from three access-control
+    tables, and rename ends by deleting the old collections row — so every one of
+    them must be carried across first or the rename silently resets access."""
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        self.client = _app.app.test_client()
+        for name, kw in (('_collection_exists', {'side_effect': [True, False]}),
+                         ('_ensure_collection', {'return_value': None}),
+                         ('_load_collection_videos', {'return_value': []})):
+            p = patch.object(_app, name, **kw)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_all_three_access_tables_follow_the_rename(self):
+        resp = self.client.post('/api/collections/rename',
+                                json={'old_name': 'GayReal', 'new_name': 'GayReel'})
+        self.assertEqual(resp.status_code, 200)
+
+        moved = {
+            c.args[0].split()[1]                      # UPDATE <table> SET ...
+            for c in _cur.execute.call_args_list
+            if c.args and c.args[0].strip().startswith('UPDATE ')
+            and len(c.args) > 1 and c.args[1] == ('GayReel', 'GayReal')
+        }
+        # (soft-deleted image rows are carried across by the same param shape,
+        # hence a subset check rather than equality)
+        self.assertLessEqual(
+            {'video_collection_access', 'image_tag_blocks', 'restricted_collection_access'},
+            moved,
+        )

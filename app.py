@@ -580,9 +580,13 @@ def _load_tags():
         _release_db(conn)
 
 def _load_tags_resolved():
-    """Same as _load_tags() but with 'url' resolved into something fetchable —
-    use this for every read path (gallery, APIs, minigames); reserve raw
-    _load_tags() for the tag-editing read-modify-write path."""
+    """Same as _load_tags() but with 'url' resolved into something fetchable.
+
+    The resolved urls are permanent, unauthenticated CDN links, so this output is
+    NOT safe to serve to a client as-is — it includes restricted collections. Use
+    _visible_tags_data() for anything that reaches a response body; reserve this
+    for admin/maintenance paths that gate themselves, and raw _load_tags() for the
+    tag-editing read-modify-write path."""
     tags = _load_tags()
     for value in tags.values():
         if isinstance(value, dict) and value.get('url'):
@@ -1504,6 +1508,28 @@ def _restricted_collections_denied_for_user(user) -> set:
         _release_db(conn)
     return restricted - accessible
 
+def _visible_tags_data(user=None):
+    """_load_tags_resolved() with every image in a restricted collection the viewer
+    cannot see stripped out. This is the single choke point every read path that
+    serves image data to a client must go through — _load_tags_resolved() resolves
+    urls into permanent, unauthenticated CDN links, so handing its raw output to a
+    response is equivalent to publishing those images. Reserve the unfiltered
+    version for admin/maintenance paths that do their own gating."""
+    tags_data = _load_tags_resolved()
+    denied = _restricted_collections_denied_for_user(user if user is not None else current_user)
+    if not denied:
+        return tags_data
+    return {k: v for k, v in tags_data.items() if k.split('/', 1)[0] not in denied}
+
+def _drop_restricted_rows(rows, key='collection_name', user=None):
+    """Filter a list of image/video dicts down to what this viewer may see. For the
+    cross-collection admin maintenance views, which query the images table directly
+    rather than going through _visible_tags_data()."""
+    denied = _restricted_collections_denied_for_user(user if user is not None else current_user)
+    if not denied:
+        return rows
+    return [r for r in rows if r.get(key) not in denied]
+
 def _get_restricted_access_row(collection: str, user_id: int):
     """The current request/grant row for this (collection, user), or None."""
     conn = _get_db()
@@ -1548,7 +1574,13 @@ def _list_restricted_access(status: str):
 
 def _request_restricted_access(collection: str, user_id: int) -> bool:
     """Create a pending request, or reset a terminal-status row back to pending.
-    Returns False (no-op) if a request is already pending/approved/accepted."""
+    Returns False (no-op) if a request is genuinely still in progress.
+
+    An 'approved' row whose accept window has already closed counts as terminal
+    here even though the reconciler hasn't stamped it 'expired' yet — that sweep
+    only runs once a minute, and without this the user sees the (clock-derived)
+    "window expired" screen but gets "a request is already in progress" when they
+    click Request Access."""
     conn = _get_db()
     try:
         cur = conn.cursor()
@@ -1561,6 +1593,8 @@ def _request_restricted_access(collection: str, user_id: int) -> bool:
                 denied_by = NULL, denied_at = NULL, revoked_by = NULL, revoked_at = NULL,
                 reminder_sent = FALSE
             WHERE restricted_collection_access.status IN ('denied', 'expired', 'revoked')
+               OR (restricted_collection_access.status = 'approved'
+                   AND restricted_collection_access.accept_window_end <= NOW())
         """, (collection, user_id))
         created = cur.rowcount > 0
         conn.commit()
@@ -1755,6 +1789,46 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
+# ── Global auth wall ──────────────────────────────────────────────────────────
+# Authentication is DENY-BY-DEFAULT: every endpoint requires a logged-in user
+# unless it is named in _PUBLIC_ENDPOINTS below. Previously each route opted in
+# via @login_required, which meant every new route was a chance to forget it —
+# and plenty did (/api/collections, /api/images, /api/tags and /upload were all
+# reachable anonymously). The per-route @login_required decorators are kept as
+# harmless belt-and-braces; this hook is what actually guarantees the property.
+#
+# Add to this set ONLY endpoints that must work for a signed-out visitor.
+
+_PUBLIC_ENDPOINTS = {
+    'static',                 # css/js/images
+    'login_page',             # the login screen itself
+    'api_login',              # form POST from the login screen
+    'api_register',
+    'auth_google',            # OAuth kickoff + callback (no session yet by definition)
+    'auth_google_callback',
+    'logout',                 # must work even with a half-dead session
+    'api_auth_me',            # returns {'authenticated': False} — how the UI detects logged-out
+    'api_heartbeat',          # already a no-op when anonymous
+}
+
+
+@app.before_request
+def _require_authentication():
+    endpoint = request.endpoint
+    # None = no URL rule matched (404s, and the Socket.IO transport, which is
+    # handled by the WSGI middleware rather than a Flask route). Let those fall
+    # through to their normal handling.
+    if endpoint is None or endpoint in _PUBLIC_ENDPOINTS:
+        return None
+    if current_user.is_authenticated:
+        return None
+    # API callers get a machine-readable 401; page loads go to the login screen.
+    # next= is carried for reference only — login_page currently always lands on
+    # index() after sign-in; honouring it would be a login.html change.
+    if request.path.startswith('/api/'):
+        return jsonify({'success': False, 'error': 'Authentication required'}), 401
+    return redirect(url_for('login_page', next=request.full_path))
+
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 
 def _seed_admin():
@@ -1833,7 +1907,7 @@ def allowed_video_file(filename):
 def _get_collection_image_urls(collection: str):
     """Return signed, directly-usable image URLs for a collection, excluding
     anything the current viewer is blocked from (see _effective_blocked_pairs)."""
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     blocked = _effective_blocked_pairs(current_user, collection)
     prefix = f"{collection}/"
     urls = []
@@ -1999,7 +2073,7 @@ def index():
 
     # Count images per collection from tags.json, excluding whatever this
     # viewer is blocked from so the count matches what they'll actually see.
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
     collections = {}
     for key, value in tags_data.items():
@@ -2030,7 +2104,7 @@ def collection_view(collection_name):
     collection = _safe_collection_name(collection_name)
     if _restricted_collection_blocked(current_user, collection):
         return redirect(url_for('restricted_collection_page', collection_name=collection))
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     images = []      # list of filenames (used as keys for tags/delete operations)
     image_urls = {}  # filename -> displayable URL (direct Cloudinary, or /img/ proxy for sensitive tags)
     image_tags = {}
@@ -2171,7 +2245,7 @@ def get_quote():
         filename = request.args.get('filename', '')
         
         if collection and filename:
-            all_tags = _load_tags_resolved()
+            all_tags = _visible_tags_data()
             image_key = _get_image_key(collection, filename)
             image_data = all_tags.get(image_key)
             
@@ -2295,6 +2369,8 @@ def api_get_ai_quote(collection_name, filename):
     only ever reads/writes the cache; it never calls the model itself.
     """
     safe_name = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, safe_name):
+        return jsonify({'success': False, 'error': 'Access restricted', 'restricted': True}), 403
     quote = _get_image_ai_quote(safe_name, filename)
     return jsonify({'success': True, 'quote': quote, 'cached': bool(quote)})
 
@@ -2308,6 +2384,8 @@ def api_get_ai_quote_prompt(collection_name, filename):
     the static quote bank in that case).
     """
     safe_name = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, safe_name):
+        return jsonify({'success': False, 'error': 'Access restricted', 'restricted': True}), 403
     prompt = _build_ai_quote_prompt(safe_name, filename)
     if prompt is None:
         return jsonify({'success': False, 'error': 'Not enough tag data for this image yet'}), 422
@@ -2321,6 +2399,8 @@ def api_save_ai_quote(collection_name, filename):
         return jsonify({'success': False, 'error': 'Authentication required'}), 401
 
     safe_name = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, safe_name):
+        return jsonify({'success': False, 'error': 'Access restricted', 'restricted': True}), 403
     data = request.get_json() or {}
     quote = str(data.get('quote', '')).strip()
 
@@ -2538,6 +2618,8 @@ def get_high_scores(collection):
         collection = _safe_collection_name(collection)
         if not collection:
             return jsonify({'error': 'Invalid collection'}), 400
+        if _restricted_collection_blocked(current_user, collection):
+            return jsonify({'error': 'Access restricted', 'restricted': True}), 403
 
         conn = _get_db()
         try:
@@ -2738,6 +2820,8 @@ def tag_match():
 def collection_tag_match(collection_name):
     """Render the Tag Match memory game for a specific collection."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('tag-match.html', collection=collection)
 
 
@@ -2747,7 +2831,7 @@ def collection_tag_match(collection_name):
 @app.route('/api/images')
 def api_images_all():
     """Return a JSON list of all image URLs."""
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     result = [
         v['url'] for v in tags_data.values()
         if isinstance(v, dict) and v.get('url')
@@ -2758,7 +2842,7 @@ def api_images_all():
 @app.route('/manage-collections')
 def manage_collections():
     """Render collection management page."""
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     collections = {}
     for key in tags_data:
         if '/' in key and isinstance(tags_data[key], dict) and tags_data[key].get('url'):
@@ -2921,15 +3005,20 @@ def api_rename_collection():
             finally:
                 _release_db(conn)
 
-        # Carry over collection-level video access grants to the new name
-        # (they'd otherwise be lost when the old collection row cascade-deletes below)
+        # Carry over every per-collection access-control row to the new name. All
+        # three tables FK to collections(name) ON DELETE CASCADE, and the DELETE at
+        # the end of this function would otherwise silently wipe them: video grants
+        # would be lost, per-user image tag blocks would vanish (un-hiding content an
+        # admin deliberately hid), and restricted-collection grants/requests would be
+        # destroyed. Renaming must preserve access control, not reset it.
         conn = _get_db()
         try:
             cur = conn.cursor()
-            cur.execute(
-                "UPDATE video_collection_access SET collection_name = %s WHERE collection_name = %s",
-                (safe_new, safe_old)
-            )
+            for table in ('video_collection_access', 'image_tag_blocks', 'restricted_collection_access'):
+                cur.execute(
+                    f"UPDATE {table} SET collection_name = %s WHERE collection_name = %s",
+                    (safe_new, safe_old)
+                )
             conn.commit()
         finally:
             _release_db(conn)
@@ -2999,7 +3088,7 @@ def api_collection_images(collection_name):
     if _restricted_collection_blocked(current_user, safe_name):
         return jsonify({'success': False, 'error': 'Access restricted', 'restricted': True}), 403
 
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     image_models = _get_collection_image_model_map(safe_name)
     blocked = _effective_blocked_pairs(current_user, safe_name)
     images = []
@@ -3086,6 +3175,8 @@ def api_unlock_image(collection_name, filename):
 def api_get_lock_status(collection_name, filename):
     """Get lock status for an image."""
     safe_name = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, safe_name):
+        return jsonify({'success': False, 'error': 'Access restricted', 'restricted': True}), 403
     locked = _get_image_locked_status(safe_name, filename)
     tags = _get_image_tags(safe_name, filename)
     return jsonify({'success': True, 'locked': locked, 'tags': tags})
@@ -3117,6 +3208,10 @@ def tagger_view(collection_name):
     safe_name = _safe_collection_name(collection_name)
     if not _collection_exists(safe_name):
         return "Collection not found", 404
+    # The restricted wall has no admin bypass — being an admin gets you into this
+    # view, it does not get you into a walled collection's images.
+    if _restricted_collection_blocked(current_user, safe_name):
+        return redirect(url_for('restricted_collection_page', collection_name=safe_name))
     tags_data = _load_tags_resolved()
     image_models = _get_collection_image_model_map(safe_name)
     images = []
@@ -3326,7 +3421,7 @@ def models_view():
 @app.route('/api/collections')
 def api_collections():
     """Return a JSON mapping of collection name -> list of image URLs."""
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     result = {}
     for key, value in tags_data.items():
         if '/' not in key or not isinstance(value, dict) or not value.get('url'):
@@ -3344,7 +3439,7 @@ def api_collections():
 @app.route('/api/tags')
 def api_all_tags():
     """Return all image tags."""
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     return jsonify({'tags': tags_data})
 
 
@@ -3353,7 +3448,7 @@ def api_image_tags(collection, filename):
     """Get tags, body-part ratings, and tagged model names for a specific image."""
     collection = _safe_collection_name(collection)
     image_key = _get_image_key(collection, filename)
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
 
     if image_key not in tags_data:
         return jsonify({'success': False, 'tags': []}), 404
@@ -3436,9 +3531,8 @@ def search_by_tag():
     if not search_tag:
         return jsonify({'error': 'Tag parameter required'}), 400
     
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
-    restricted_denied = _restricted_collections_denied_for_user(current_user)
     matching_images = []
 
     for image_key, tag_info in tags_data.items():
@@ -3447,8 +3541,6 @@ def search_by_tag():
         image_tags = [t.lower() for t in tag_info.get('tags', [])]
         if search_tag in image_tags and tag_info.get('url'):
             collection = image_key.split('/')[0]
-            if collection in restricted_denied:
-                continue
             if not _image_visible_to_user(tag_info.get('body_parts', {}), blocked_by_collection.get(collection, set())):
                 continue
             matching_images.append({
@@ -3479,7 +3571,7 @@ def tags_view():
 @app.route('/api/tags-with-counts')
 def api_tags_with_counts():
     """Return all tags grouped by collection with image counts."""
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     tag_counts = {}  # {tag: {collections: {collection: count}, total: count}}
     
     # Iterate through all tagged images
@@ -3552,10 +3644,9 @@ def api_images_by_tags():
     if not tags_filter:
         return jsonify({'success': False, 'error': 'No tags provided'}), 400
 
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     extras = _get_all_image_extras()
     blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
-    restricted_denied = _restricted_collections_denied_for_user(current_user)
     matching_images = []
 
     # Iterate through all tagged images
@@ -3567,8 +3658,6 @@ def api_images_by_tags():
             continue
 
         collection = parts[0]
-        if collection in restricted_denied:
-            continue
         filename = '/'.join(parts[1:])
         tags = tags_info.get('tags', [])
         matched = all(tag in tags for tag in tags_filter) if match_all else any(tag in tags for tag in tags_filter)
@@ -3593,10 +3682,16 @@ def api_images_by_tags():
 @app.route('/api/body-parts-with-counts')
 def api_body_parts_with_counts():
     """Return every (body part, rating) combination in use, with image counts — the body_parts facet list for the tag browser."""
+    denied = _restricted_collections_denied_for_user(current_user)
     conn = _get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT body_parts FROM images WHERE body_parts IS NOT NULL AND body_parts != '{}'::jsonb AND deleted_at IS NULL")
+        cur.execute("""
+            SELECT body_parts FROM images
+            WHERE body_parts IS NOT NULL AND body_parts != '{}'::jsonb
+              AND deleted_at IS NULL
+              AND NOT (collection_name = ANY(%s))
+        """, (list(denied),))
         rows = cur.fetchall()
     finally:
         _release_db(conn)
@@ -3640,10 +3735,9 @@ def api_images_by_body_parts():
     if not filters:
         return jsonify({'success': False, 'error': 'parts must be in "part:rating" form'}), 400
 
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     extras = _get_all_image_extras()
     blocked_by_collection = _effective_blocked_pairs_by_collection(current_user)
-    restricted_denied = _restricted_collections_denied_for_user(current_user)
     matching_images = []
 
     for image_key, tags_info in tags_data.items():
@@ -3653,8 +3747,6 @@ def api_images_by_body_parts():
         if len(parts) < 2:
             continue
         collection = parts[0]
-        if collection in restricted_denied:
-            continue
         filename = '/'.join(parts[1:])
 
         image_extras = extras.get(image_key, {})
@@ -3684,6 +3776,8 @@ def api_images_by_body_parts():
 def collection_spotlight(collection_name):
     """Spotlight: drifting peephole reveals image; identify it before fully exposed."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('spotlight.html', collection=collection)
 
 
@@ -3692,6 +3786,8 @@ def collection_spotlight(collection_name):
 def collection_flashmemory(collection_name):
     """Flash Memory: image flashes briefly, then pick it from a lineup."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('flashmemory.html', collection=collection)
 
 
@@ -3700,6 +3796,8 @@ def collection_flashmemory(collection_name):
 def collection_whoisthat(collection_name):
     """Who's That?: tags shown, no image — find which one in the lineup matches."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('whoisthat.html', collection=collection)
 
 
@@ -3708,6 +3806,8 @@ def collection_whoisthat(collection_name):
 def collection_oddoneout(collection_name):
     """Odd One Out: find the image that doesn't share a tag with the other three."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('oddoneout.html', collection=collection)
 
 
@@ -3716,6 +3816,8 @@ def collection_oddoneout(collection_name):
 def collection_speedsort(collection_name):
     """Speed Sort: decide whether each image has the target tag before time runs out."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('speedsort.html', collection=collection)
 
 
@@ -3724,6 +3826,8 @@ def collection_speedsort(collection_name):
 def collection_snap(collection_name):
     """Snap Match: decide if two images share a tag as fast as possible."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('snap.html', collection=collection)
 
 
@@ -3732,6 +3836,8 @@ def collection_snap(collection_name):
 def collection_bracket(collection_name):
     """Hot Bracket: vote between two images; track win-rates; declare a champion."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('bracket.html', collection=collection)
 
 
@@ -3740,6 +3846,8 @@ def collection_bracket(collection_name):
 def collection_scratch(collection_name):
     """Striptease Scratch Card: scratch away tiles to reveal a hidden image, then identify it."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('scratch.html', collection=collection)
 
 
@@ -3748,6 +3856,8 @@ def collection_scratch(collection_name):
 def collection_behindblur(collection_name):
     """Behind the Blur: image clears over time — identify it before it's crystal clear."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('behindblur.html', collection=collection)
 
 
@@ -3756,6 +3866,8 @@ def collection_behindblur(collection_name):
 def collection_silhouette(collection_name):
     """Silhouette Strike: image reveals from black silhouette to full colour — name it fast."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('silhouette.html', collection=collection)
 
 
@@ -3764,6 +3876,8 @@ def collection_silhouette(collection_name):
 def collection_towerdefense(collection_name):
     """Tower Defense Viewer: images march across a conveyor — save your favourites before they scroll away."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('towerdefense.html', collection=collection)
 
 
@@ -3772,6 +3886,8 @@ def collection_towerdefense(collection_name):
 def collection_shootinggallery(collection_name):
     """3D Shooting Gallery: shoot target images on a fairground range, avoid decoys."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('shootinggallery.html', collection=collection)
 
 
@@ -3780,6 +3896,8 @@ def collection_shootinggallery(collection_name):
 def collection_orbitingvault(collection_name):
     """Orbiting Vault: framed images orbit on a rotating ring — click the one matching the target before it swings out of view."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('orbitingvault.html', collection=collection)
 
 
@@ -3788,6 +3906,8 @@ def collection_orbitingvault(collection_name):
 def collection_cargobay(collection_name):
     """Zero-Gravity Cargo Bay: tractor-beam the drifting crate matching the target before it's lost to the airlock."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('cargobay.html', collection=collection)
 
 
@@ -3796,6 +3916,8 @@ def collection_cargobay(collection_name):
 def collection_timeloop(collection_name):
     """Time-Loop Detective: scrub a looping noir room's timeline to catch the target photo in the right frame at the right moment."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('timeloop.html', collection=collection)
 
 
@@ -3804,6 +3926,8 @@ def collection_timeloop(collection_name):
 def collection_heistdrone(collection_name):
     """Gallery Heist Drone: free-fly a drone through a multi-room mansion, dodge sweeping spotlights, and scan the target painting in each room."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('heistdrone.html', collection=collection)
 
 
@@ -3812,6 +3936,8 @@ def collection_heistdrone(collection_name):
 def collection_versuszoom(collection_name):
     """Versus Zoom Reveal: a live 2-player game — each player sees a different zoomed-in snippet and races to guess which of two blurred full images it came from."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('versuszoom.html', collection=collection)
 
 
@@ -3820,6 +3946,8 @@ def collection_versuszoom(collection_name):
 def collection_memorymatch(collection_name):
     """Memory Match Duel: live 2-player turn-based Concentration on a shared board — find more pairs than your opponent to win."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('memorymatch.html', collection=collection)
 
 
@@ -3828,6 +3956,8 @@ def collection_memorymatch(collection_name):
 def collection_compatcheck(collection_name):
     """Compatibility Check: a live 2-player game where each round both players privately pick which tagged body part attracted them most, then see if they matched."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('compatcheck.html', collection=collection)
 
 
@@ -3836,6 +3966,8 @@ def collection_compatcheck(collection_name):
 def collection_bubbleburst(collection_name):
     """Bubble Burst: pop rising bubbles that contain the target image before they escape."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('bubbleburst.html', collection=collection)
 
 
@@ -3844,6 +3976,8 @@ def collection_bubbleburst(collection_name):
 def collection_breakout(collection_name):
     """Image Pong (Breakout): break tiles to reveal a hidden image, guess it fast for max score."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('breakout.html', collection=collection)
 
 
@@ -3852,6 +3986,8 @@ def collection_breakout(collection_name):
 def collection_heatmap(collection_name):
     """Heat Map: paint on each image to show what draws your eye."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('heatmap.html', collection=collection)
 
 
@@ -3860,6 +3996,8 @@ def collection_heatmap(collection_name):
 def collection_gallerywalk(collection_name):
     """Gallery Walk: stroll through a virtual art gallery of your collection."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('gallerywalk.html', collection=collection)
 
 
@@ -4223,6 +4361,8 @@ def api_quote_chat_token():
 def collection_chat(collection_name):
     """Render the AI chat game for a specific collection."""
     collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
     return render_template('chat.html', collection=collection)
 
 
@@ -4567,6 +4707,8 @@ def admin_video_collection_detail(collection_name):
     safe_name = _safe_collection_name(collection_name)
     if not _collection_exists(safe_name):
         return "Collection not found", 404
+    if _restricted_collection_blocked(current_user, safe_name):
+        return redirect(url_for('restricted_collection_page', collection_name=safe_name))
 
     videos = _load_collection_videos(safe_name)
     users = _all_users_basic()
@@ -4842,7 +4984,7 @@ def admin_untagged_images():
               AND NOT (COALESCE(i.body_parts, '{}'::jsonb) ?& %s)
             ORDER BY i.created_at DESC
         """, (BODY_PARTS,))
-        untagged = [dict(r) for r in cur.fetchall()]
+        untagged = _drop_restricted_rows([dict(r) for r in cur.fetchall()])
         for row in untagged:
             row['tags'] = list(row['tags']) if row['tags'] else []
             row['body_parts'] = dict(row['body_parts']) if row['body_parts'] else {}
@@ -4867,7 +5009,7 @@ def admin_unknown_subject_images():
               AND NOT EXISTS (SELECT 1 FROM image_models im WHERE im.image_id = i.id)
             ORDER BY i.created_at DESC
         """)
-        unknown_subject = [dict(r) for r in cur.fetchall()]
+        unknown_subject = _drop_restricted_rows([dict(r) for r in cur.fetchall()])
     finally:
         _release_db(conn)
     return render_template('admin-unknown-subject-images.html', unknown_subject=unknown_subject)
@@ -4887,7 +5029,7 @@ def admin_missing_backup_images():
             WHERE i.deleted_at IS NULL AND i.b2_backup_key IS NULL
             ORDER BY i.created_at DESC
         """)
-        missing_backup = [dict(r) for r in cur.fetchall()]
+        missing_backup = _drop_restricted_rows([dict(r) for r in cur.fetchall()])
         for img in missing_backup:
             img['url'] = _resolve_image_url(img['url'])
     finally:
@@ -4983,6 +5125,8 @@ def admin_ai_quotes_collection(collection_name):
     safe_name = _safe_collection_name(collection_name)
     if not _collection_exists(safe_name):
         return "Collection not found", 404
+    if _restricted_collection_blocked(current_user, safe_name):
+        return redirect(url_for('restricted_collection_page', collection_name=safe_name))
     conn = _get_db()
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -5020,7 +5164,7 @@ def admin_orphaned_images():
             WHERE i.deleted_at IS NOT NULL
             ORDER BY i.deleted_at DESC
         """)
-        orphans = [dict(r) for r in cur.fetchall()]
+        orphans = _drop_restricted_rows([dict(r) for r in cur.fetchall()])
     finally:
         _release_db(conn)
     return render_template('admin-orphaned-images.html', orphans=orphans)
@@ -5086,7 +5230,7 @@ def _vz_collection_images(collection, blocked=None):
     """blocked: optional set of (body_part, rating) pairs to exclude (union of every
     player currently in the room — see vz_join/mm_join/cc_join for why this is
     re-run at join time rather than only once at create time)."""
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     prefix = f"{collection}/"
     images = []
     for key, value in tags_data.items():
@@ -5640,7 +5784,7 @@ def _cc_collection_images(collection, keyword_map, blocked=None):
     fewer than 2 would make the round a forced, uninformative "match".
     blocked: optional union of blocked pairs — see cc_join, which rebuilds this
     authoritatively once both players are known, before any image is revealed."""
-    tags_data = _load_tags_resolved()
+    tags_data = _visible_tags_data()
     prefix = f"{collection}/"
     eligible = []
     for key, value in tags_data.items():

@@ -15,10 +15,13 @@
   <style>
     .wrap{max-width:600px;margin:4rem auto;padding:0 1.5rem;text-align:center;}
     .lock-icon{font-size:3rem;color:var(--primary-color);margin-bottom:1rem;}
-    h1{font-size:1.5rem;font-weight:700;margin-bottom:.5rem;}
+    h1{font-size:1.5rem;font-weight:700;margin-bottom:.5rem;overflow-wrap:anywhere;}
     .coll-name{color:var(--primary-color);}
     p.desc{color:var(--muted-text);margin-bottom:2rem;}
-    .card{background:var(--surface-color);border-radius:1.2rem;padding:2rem;
+    /* NB: not ".card" — style.css uses that for the memory-game tiles and pins
+       them to a fixed height:var(--card-height,200px), which clipped this box
+       and let the text spill out below it. */
+    .restricted-card{background:var(--surface-color);border-radius:1.2rem;padding:2rem;
       border:1px solid rgba(164,6,110,.1);box-shadow:0 2px 14px var(--shadow-color);}
     .status-badge{display:inline-block;padding:.35rem 1rem;border-radius:999px;
       font-size:.85rem;font-weight:700;margin-bottom:1rem;}
@@ -48,7 +51,7 @@
   </nav>
 
   <div class="wrap">
-    <div class="card">
+    <div class="restricted-card">
       <div class="lock-icon"><i class="fas fa-user-lock"></i></div>
       <h1>Restricted collection: <span class="coll-name">{{ collection }}</span></h1>
       <p class="desc">This collection requires approved access before you can view anything in it.</p>
