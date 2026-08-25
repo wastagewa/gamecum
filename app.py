@@ -13,7 +13,7 @@ if ON_RENDER:
     from psycogreen.gevent import patch_psycopg
     patch_psycopg()
 
-from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for, session, Response
+from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for, session, Response, has_request_context
 from flask_socketio import SocketIO, emit, join_room as sio_join_room
 import json
 from werkzeug.utils import secure_filename
@@ -21,6 +21,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import uuid
 import random
 import re
+import secrets
 import string
 import time as _time
 from functools import wraps
@@ -1473,11 +1474,111 @@ def _user_has_restricted_collection_access(user_id: int, collection: str) -> boo
     finally:
         _release_db(conn)
 
+# ── Guest passes for live multiplayer rooms ───────────────────────────────────
+# A player who opens a room's share link can play that one game without an
+# account, including when the room's collection is restricted. The pass is
+# deliberately narrow: it names one room code and one collection, it only opens
+# that game's page and that room's socket events, and it stops meaning anything
+# the moment the room disappears from memory (which happens when the last player
+# disconnects). It is NOT a login — every other page and API still redirects the
+# guest to the sign-in screen.
+#
+# Trade-off worth being explicit about: image urls are permanent, unauthenticated
+# CDN links, so a guest keeps working urls for whatever they were shown after the
+# room closes. The pass controls access to the app, not to bytes already served.
+
+GUEST_PASS_TTL_SECONDS = 6 * 3600
+
+# endpoint name -> room registry name. Resolved lazily through globals() because
+# the room dicts are defined further down the file, with their games.
+_GUEST_ENDPOINTS = {
+    'collection_versuszoom':  ('versuszoom',  '_vz_rooms'),
+    'collection_memorymatch': ('memorymatch', '_mm_rooms'),
+    'collection_compatcheck': ('compatcheck', '_cc_rooms'),
+}
+_GUEST_GAMES = {game: registry for game, registry in _GUEST_ENDPOINTS.values()}
+
+
+def _room_registry(game: str):
+    """The in-memory room dict for a multiplayer game, or None."""
+    return globals().get(_GUEST_GAMES.get(game) or '')
+
+
+def _guest_pass():
+    """The live guest pass on this session, or None.
+
+    Liveness is checked against the room registry rather than a stored expiry, so
+    the pass lasts exactly as long as the game does. The TTL is only a backstop
+    for a room that somehow lingers in memory.
+    """
+    # The restricted-collection helpers that call this also run from background
+    # tasks, where there is no session to read.
+    if not has_request_context():
+        return None
+    p = session.get('guest_pass')
+    if not isinstance(p, dict):
+        return None
+    if _time.time() - (p.get('issued_at') or 0) > GUEST_PASS_TTL_SECONDS:
+        return None
+    rooms = _room_registry(p.get('game'))
+    if not isinstance(rooms, dict):
+        return None
+    room = rooms.get(p.get('code'))
+    if not room or room.get('collection') != p.get('collection'):
+        return None
+    return p
+
+
+def _guest_pass_collection():
+    """The one collection this session may see as a guest, or None."""
+    p = _guest_pass()
+    return p['collection'] if p else None
+
+
+def _try_guest_access() -> bool:
+    """Let a signed-out visitor onto a multiplayer game page when they arrived via
+    a live room's share link (?room=CODE), and remember it for the Socket.IO
+    handshake that follows. Returns False for anything else, so the caller falls
+    through to the normal sign-in redirect."""
+    entry = _GUEST_ENDPOINTS.get(request.endpoint)
+    if not entry:
+        return False
+    game = entry[0]
+    code = (request.args.get('room') or '').strip().upper()
+    if not code:
+        return False
+    rooms = _room_registry(game)
+    room = rooms.get(code) if isinstance(rooms, dict) else None
+    if not room:
+        return False
+    # The link's collection must be the room's collection — otherwise any live
+    # room code would unlock any collection's page.
+    collection = _safe_collection_name((request.view_args or {}).get('collection_name') or '')
+    if not collection or room.get('collection') != collection:
+        return False
+    session['guest_pass'] = {
+        'game': game, 'code': code, 'collection': collection, 'issued_at': _time.time(),
+    }
+    return True
+
+
+def _may_join_room(game: str, code: str) -> bool:
+    """Signed in, or holding a guest pass minted from this exact room's link."""
+    if current_user.is_authenticated:
+        return True
+    p = _guest_pass()
+    return bool(p and p.get('game') == game and p.get('code') == code)
+
+
 def _restricted_collection_blocked(user, collection: str) -> bool:
     """True if this collection is restricted and the viewer lacks accepted access.
     Deliberately NO admin bypass (unlike _user_can_view_any_video_in_collection) —
     admins must go through the same request flow as anyone else."""
     if not _is_collection_restricted(collection):
+        return False
+    # A guest playing a live multiplayer room in this collection is let through
+    # for the duration of that room only (see _guest_pass).
+    if _guest_pass_collection() == collection:
         return False
     if not user or not getattr(user, 'is_authenticated', False):
         return True
@@ -1492,6 +1593,9 @@ def _restricted_collections_denied_for_user(user) -> set:
         return set()
     patterns_lower = [p.lower() for p in patterns]
     restricted = {c for c in _load_collections() if any(p in c.lower() for p in patterns_lower)}
+    guest_collection = _guest_pass_collection()
+    if guest_collection:
+        restricted -= {guest_collection}
     if not restricted:
         return set()
     if not user or not getattr(user, 'is_authenticated', False):
@@ -1820,7 +1924,17 @@ def _require_authentication():
     # through to their normal handling.
     if endpoint is None or endpoint in _PUBLIC_ENDPOINTS:
         return None
+    # Arriving on a live room's share link grants access to that one room's game.
+    # This runs for signed-in visitors too, deliberately: the invitation is the
+    # credential, so following it behaves the same whether or not you have an
+    # account. Gating it on being signed out instead would make "log out first"
+    # a bypass of the restricted-collection wall rather than closing one.
+    invited = _try_guest_access()
     if current_user.is_authenticated:
+        return None
+    # A guest gets that game page and nothing else — every other endpoint falls
+    # through to the sign-in redirect below.
+    if invited:
         return None
     # API callers get a machine-readable 401; page loads go to the login screen.
     # next= is carried for reference only — login_page currently always lands on
@@ -3932,7 +4046,9 @@ def collection_heistdrone(collection_name):
 
 
 @app.route('/collection/<collection_name>/versuszoom')
-@login_required
+# No @login_required: the global auth wall handles this route, and it is the
+# only thing that knows about guest passes (a decorator here would redirect a
+# link-invited guest before the wall's exception could run).
 def collection_versuszoom(collection_name):
     """Versus Zoom Reveal: a live 2-player game — each player sees a different zoomed-in snippet and races to guess which of two blurred full images it came from."""
     collection = _safe_collection_name(collection_name)
@@ -3942,7 +4058,9 @@ def collection_versuszoom(collection_name):
 
 
 @app.route('/collection/<collection_name>/memorymatch')
-@login_required
+# No @login_required: the global auth wall handles this route, and it is the
+# only thing that knows about guest passes (a decorator here would redirect a
+# link-invited guest before the wall's exception could run).
 def collection_memorymatch(collection_name):
     """Memory Match Duel: live 2-player turn-based Concentration on a shared board — find more pairs than your opponent to win."""
     collection = _safe_collection_name(collection_name)
@@ -3952,7 +4070,9 @@ def collection_memorymatch(collection_name):
 
 
 @app.route('/collection/<collection_name>/compatcheck')
-@login_required
+# No @login_required: the global auth wall handles this route, and it is the
+# only thing that knows about guest passes (a decorator here would redirect a
+# link-invited guest before the wall's exception could run).
 def collection_compatcheck(collection_name):
     """Compatibility Check: a live 2-player game where each round both players privately pick which tagged body part attracted them most, then see if they matched."""
     collection = _safe_collection_name(collection_name)
@@ -5219,9 +5339,12 @@ VZ_REVEAL_PAUSE = 5      # seconds the reveal stays up before the next round
 
 
 def _vz_gen_code():
+    # secrets, not random: a room code is now an access credential (it admits a
+    # link-invited player to the room's collection), and random's Mersenne
+    # Twister is reconstructable from observed output.
     alphabet = string.ascii_uppercase + string.digits
     while True:
-        code = ''.join(random.choices(alphabet, k=5))
+        code = ''.join(secrets.choice(alphabet) for _ in range(6))
         if code not in _vz_rooms:
             return code
 
@@ -5380,11 +5503,13 @@ def vz_create(data):
 
 @socketio.on('vz_join')
 def vz_join(data):
-    if not current_user.is_authenticated:
-        emit('vz_error', {'message': 'Please sign in to play.'})
-        return
     data = data or {}
     code = str(data.get('code') or '').strip().upper()
+    # Signed-in players may join any room; a guest may only join the one room
+    # whose share link minted their pass.
+    if not _may_join_room('versuszoom', code):
+        emit('vz_error', {'message': 'Please sign in to play.'})
+        return
     room = _vz_rooms.get(code)
     if not room:
         emit('vz_error', {'message': 'Room not found. Check the code and try again.'})
@@ -5470,9 +5595,12 @@ MM_MATCH_PAUSE = 0.8      # seconds a found pair stays highlighted before the ne
 
 
 def _mm_gen_code():
+    # secrets, not random: a room code is now an access credential (it admits a
+    # link-invited player to the room's collection), and random's Mersenne
+    # Twister is reconstructable from observed output.
     alphabet = string.ascii_uppercase + string.digits
     while True:
-        code = ''.join(random.choices(alphabet, k=5))
+        code = ''.join(secrets.choice(alphabet) for _ in range(6))
         if code not in _mm_rooms:
             return code
 
@@ -5553,11 +5681,13 @@ def mm_create(data):
 
 @socketio.on('mm_join')
 def mm_join(data):
-    if not current_user.is_authenticated:
-        emit('mm_error', {'message': 'Please sign in to play.'})
-        return
     data = data or {}
     code = str(data.get('code') or '').strip().upper()
+    # Signed-in players may join any room; a guest may only join the one room
+    # whose share link minted their pass.
+    if not _may_join_room('memorymatch', code):
+        emit('mm_error', {'message': 'Please sign in to play.'})
+        return
     room = _mm_rooms.get(code)
     if not room:
         emit('mm_error', {'message': 'Room not found. Check the code and try again.'})
@@ -5772,9 +5902,12 @@ def _cc_categorize_tags(tags, keyword_map):
 
 
 def _cc_gen_code():
+    # secrets, not random: a room code is now an access credential (it admits a
+    # link-invited player to the room's collection), and random's Mersenne
+    # Twister is reconstructable from observed output.
     alphabet = string.ascii_uppercase + string.digits
     while True:
-        code = ''.join(random.choices(alphabet, k=5))
+        code = ''.join(secrets.choice(alphabet) for _ in range(6))
         if code not in _cc_rooms:
             return code
 
@@ -5953,11 +6086,13 @@ def cc_create(data):
 
 @socketio.on('cc_join')
 def cc_join(data):
-    if not current_user.is_authenticated:
-        emit('cc_error', {'message': 'Please sign in to play.'})
-        return
     data = data or {}
     code = str(data.get('code') or '').strip().upper()
+    # Signed-in players may join any room; a guest may only join the one room
+    # whose share link minted their pass.
+    if not _may_join_room('compatcheck', code):
+        emit('cc_error', {'message': 'Please sign in to play.'})
+        return
     room = _cc_rooms.get(code)
     if not room:
         emit('cc_error', {'message': 'Room not found. Check the code and try again.'})

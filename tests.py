@@ -1331,3 +1331,134 @@ class TestRenamePreservesAccessControl(unittest.TestCase):
             {'video_collection_access', 'image_tag_blocks', 'restricted_collection_access'},
             moved,
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Guest passes for live multiplayer rooms
+# ─────────────────────────────────────────────────────────────────────────────
+class TestMultiplayerGuestPass(unittest.TestCase):
+    """A room's share link admits a signed-out player to that one game, in that
+    one collection, for as long as the room lives — and to nothing else."""
+
+    ROOM = {'collection': 'GayReal'}
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        self.client = _app.app.test_client()
+
+        # One live versuszoom room in a restricted collection
+        self.rooms = {'AB12XY': dict(self.ROOM)}
+        for name, kw in (('_vz_rooms', {'new': self.rooms}),
+                         ('current_user', {'new': _Anon()}),
+                         ('_is_collection_restricted', {'return_value': True}),
+                         ('_restricted_collections_denied_for_user', {'return_value': set()})):
+            p = patch.object(_app, name, **kw)
+            p.start()
+            self.addCleanup(p.stop)
+
+    # ── reaching the game page ──────────────────────────────────────────────
+    def test_share_link_admits_a_signed_out_player(self):
+        resp = self.client.get('/collection/GayReal/versuszoom?room=AB12XY')
+        self.assertEqual(resp.status_code, 200)
+
+    def test_same_page_without_a_room_code_still_requires_login(self):
+        resp = self.client.get('/collection/GayReal/versuszoom')
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/login', resp.headers['Location'])
+
+    def test_unknown_room_code_requires_login(self):
+        resp = self.client.get('/collection/GayReal/versuszoom?room=NOPE00')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_room_code_does_not_unlock_a_different_collection(self):
+        """The link's collection must match the room's, or any live code would
+        open any collection's game page."""
+        resp = self.client.get('/collection/OtherColl/versuszoom?room=AB12XY')
+        self.assertEqual(resp.status_code, 302)
+
+    # ── the pass is narrow ──────────────────────────────────────────────────
+    def test_pass_does_not_unlock_the_rest_of_the_app(self):
+        self.assertEqual(
+            self.client.get('/collection/GayReal/versuszoom?room=AB12XY').status_code, 200)
+        # ...now the session holds a pass. It must still open nothing else.
+        for path, expected in (('/api/collections', 401),
+                               ('/api/tags', 401),
+                               ('/collection/GayReal', 302),
+                               ('/', 302),
+                               ('/collection/GayReal/game', 302)):
+            with self.subTest(path=path):
+                self.assertEqual(self.client.get(path).status_code, expected)
+
+    def test_pass_does_not_open_another_multiplayer_game(self):
+        self.client.get('/collection/GayReal/versuszoom?room=AB12XY')
+        resp = self.client.get('/collection/GayReal/memorymatch')
+        self.assertEqual(resp.status_code, 302)
+
+    # ── lifetime ────────────────────────────────────────────────────────────
+    def test_pass_dies_with_the_room(self):
+        self.assertEqual(
+            self.client.get('/collection/GayReal/versuszoom?room=AB12XY').status_code, 200)
+        self.rooms.clear()          # last player disconnected; room popped
+        resp = self.client.get('/collection/GayReal/versuszoom?room=AB12XY')
+        self.assertEqual(resp.status_code, 302)
+
+    def test_expired_pass_is_ignored(self):
+        with _app.app.test_request_context('/'):
+            _app.session['guest_pass'] = {
+                'game': 'versuszoom', 'code': 'AB12XY', 'collection': 'GayReal',
+                'issued_at': 0,     # 1970
+            }
+            self.assertIsNone(_app._guest_pass())
+
+    def test_pass_for_a_stale_collection_is_ignored(self):
+        """Room still live, but renamed out from under the pass."""
+        with _app.app.test_request_context('/'):
+            _app.session['guest_pass'] = {
+                'game': 'versuszoom', 'code': 'AB12XY', 'collection': 'SomethingElse',
+                'issued_at': _app._time.time(),
+            }
+            self.assertIsNone(_app._guest_pass())
+
+    # ── the restricted gate honours it, for one collection only ─────────────
+    def test_restricted_gate_opens_only_for_the_pass_collection(self):
+        with _app.app.test_request_context('/'):
+            _app.session['guest_pass'] = {
+                'game': 'versuszoom', 'code': 'AB12XY', 'collection': 'GayReal',
+                'issued_at': _app._time.time(),
+            }
+            self.assertFalse(_app._restricted_collection_blocked(_Anon(), 'GayReal'))
+            self.assertTrue(_app._restricted_collection_blocked(_Anon(), 'GaySnaps'))
+
+    # ── socket join authorisation ───────────────────────────────────────────
+    def test_guest_may_join_only_the_room_that_invited_them(self):
+        with _app.app.test_request_context('/'):
+            _app.session['guest_pass'] = {
+                'game': 'versuszoom', 'code': 'AB12XY', 'collection': 'GayReal',
+                'issued_at': _app._time.time(),
+            }
+            self.assertTrue(_app._may_join_room('versuszoom', 'AB12XY'))
+            self.assertFalse(_app._may_join_room('versuszoom', 'ZZ99ZZ'))
+            self.assertFalse(_app._may_join_room('memorymatch', 'AB12XY'))
+
+    def test_guest_with_no_pass_may_not_join(self):
+        with _app.app.test_request_context('/'):
+            self.assertFalse(_app._may_join_room('versuszoom', 'AB12XY'))
+
+
+class TestRoomCodeGeneration(unittest.TestCase):
+
+    def test_codes_are_unpredictable_and_unique(self):
+        """Room codes admit link-invited players, so they must come from secrets
+        rather than random's reconstructable Mersenne Twister."""
+        import inspect
+        src = inspect.getsource(_app._vz_gen_code)
+        self.assertIn('secrets.choice', src)
+        self.assertNotIn('random.choices', src)
+
+    def test_generated_code_shape(self):
+        with patch.dict(_app._vz_rooms, {}, clear=True):
+            code = _app._vz_gen_code()
+        self.assertEqual(len(code), 6)
+        self.assertTrue(code.isalnum() and code.isupper())
