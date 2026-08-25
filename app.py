@@ -64,13 +64,23 @@ VALID_RATINGS = {'h', 'c', 'sn', 'n', 'x'}
 # and the fallback if that setting is ever missing. Must contain the literal
 # "{name_instruction}" placeholder — it's substituted per-image with either an
 # instruction to address the featured model by name, or to keep the quote generic.
+# Hard ceiling on a stored quote. A one-line caption is ~100-200 characters, so
+# anything near this is the model having ignored the brief. Shared with the client
+# (see _build_ai_quote_prompt) so it can trim to a clean sentence before saving
+# rather than losing a completion it already paid for.
+AI_QUOTE_MAX_CHARS = 500
+
 DEFAULT_AI_QUOTE_SYSTEM_PROMPT = (
     "You write short, flirty, playful one-line captions for photos on an adult image "
     "board, based only on the descriptive tags/details you're given. "
-    "{name_instruction} Keep it to one or two sentences, under 30 words total. "
+    "{name_instruction} "
+    "Write in English only — never use any other language or script, not even for a "
+    "single word. "
+    "Keep it to one or two sentences, under 30 words and under 300 characters total. "
     "Be suggestive and fun, not vulgar or crude. Do not repeat the raw tag list "
     "verbatim, add disclaimers, or break character with any meta-commentary — "
-    "reply with ONLY the quote text itself, no quotation marks."
+    "no preamble, no explanation, no reasoning. "
+    "Reply with ONLY the caption text itself, no quotation marks."
 )
 
 socketio = SocketIO(app, async_mode='gevent' if ON_RENDER else 'threading')
@@ -1150,6 +1160,7 @@ def _build_ai_quote_prompt(collection: str, filename: str):
         'user_message': user_message,
         'model': _QUOTE_HF_MODEL,
         'max_tokens': _QUOTE_HF_MAX_TOKENS,
+        'max_chars': AI_QUOTE_MAX_CHARS,
         'api_base': _QUOTE_CHAT_API_BASE_URL,
         'featured_model': featured_model,
     }
@@ -2520,8 +2531,14 @@ def api_save_ai_quote(collection_name, filename):
 
     if not quote:
         return jsonify({'success': False, 'error': 'quote is required'}), 400
-    if len(quote) > 500:
-        return jsonify({'success': False, 'error': 'quote is too long'}), 400
+    if len(quote) > AI_QUOTE_MAX_CHARS:
+        # Worth naming both numbers: the usual cause is the model ignoring the
+        # length brief, and the caller can only react if it knows by how much.
+        return jsonify({
+            'success': False,
+            'error': f'Quote is {len(quote)} characters; the limit is {AI_QUOTE_MAX_CHARS}.',
+            'max_chars': AI_QUOTE_MAX_CHARS,
+        }), 400
     if not _image_exists_in_tags(safe_name, filename):
         return jsonify({'success': False, 'error': 'Image not found'}), 404
 
@@ -2540,6 +2557,7 @@ def api_get_ai_quote_prompt_setting():
         'default':   DEFAULT_AI_QUOTE_SYSTEM_PROMPT,
         'model':     _QUOTE_HF_MODEL,
         'maxTokens': _QUOTE_HF_MAX_TOKENS,
+        'maxChars':  AI_QUOTE_MAX_CHARS,
         'apiBase':   _QUOTE_CHAT_API_BASE_URL,
     })
 

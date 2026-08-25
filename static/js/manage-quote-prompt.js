@@ -56,6 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let savedTemplate   = '';
     let currentModel    = '';
     let currentMaxTokens = 500;
+    let currentMaxChars = 500;
     let currentApiBase  = 'https://router.huggingface.co/v1/chat/completions';
 
     testGenBtn.disabled = true;  // re-enabled once loadTemplate() resolves below
@@ -81,6 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 savedTemplate   = data.template;
                 currentModel    = data.model;
                 currentMaxTokens = data.maxTokens;
+                currentMaxChars = data.maxChars || 500;
                 currentApiBase  = data.apiBase;
                 testGenModelName.textContent = currentModel;
                 if (testGenMaxTokens) testGenMaxTokens.textContent = currentMaxTokens;
@@ -160,12 +162,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error('Chat API token not configured on the server (set QUOTE_CHAT_API_TOKEN or HF_TOKEN).');
             }
 
-            const quote = await callHuggingFaceChat({
+            // Same path the real feature takes (cleanup, English-only retry, length
+            // trim) so this preview shows what would actually be stored, not the
+            // raw completion.
+            const quote = await generateQuote({
                 token:        tokenData.token,
                 model:        currentModel,
                 systemPrompt,
                 userMessage,
                 maxTokens:    currentMaxTokens,
+                maxChars:     currentMaxChars,
                 apiBase:      currentApiBase,
             });
             showTestResult(promptBlock + '\n\nGENERATED QUOTE:\n"' + quote + '"', false);

@@ -164,15 +164,26 @@
         throw new Error(promptData.error || 'Not enough tag data to generate a quote');
       }
       const token = await getHfToken();
-      const quote = await callHuggingFaceChat({
+      const quote = await generateQuote({
         token, model: promptData.model, systemPrompt: promptData.system_prompt,
         userMessage: promptData.user_message, maxTokens: promptData.max_tokens,
-        apiBase: promptData.api_base,
+        maxChars: promptData.max_chars, apiBase: promptData.api_base,
       });
-      await fetch(`/api/images/${encodeURIComponent(collection)}/${encodeURIComponent(filename)}/ai-quote`, {
+      const saveRes = await fetch(`/api/images/${encodeURIComponent(collection)}/${encodeURIComponent(filename)}/ai-quote`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quote }),
       });
+      // fetch only rejects on network failure, so without this an HTTP 400 was
+      // swallowed and the row reported "Saved" for a quote that never reached the
+      // database — which is why generated quotes kept coming back missing.
+      if (!saveRes.ok) {
+        let msg = `Save failed (HTTP ${saveRes.status})`;
+        try {
+          const err = await saveRes.json();
+          if (err && err.error) msg = err.error;
+        } catch (e) { /* non-JSON error body — keep the status message */ }
+        throw new Error(msg);
+      }
       return quote;
     }
 

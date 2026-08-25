@@ -86,24 +86,35 @@ document.addEventListener('DOMContentLoaded', () => {
                 cachedHfToken   = tokenData.token || null;
             }
 
-            const quote = await callHuggingFaceChat({
+            const quote = await generateQuote({
                 token:        cachedHfToken,
                 model:        promptData.model,
                 systemPrompt: promptData.system_prompt,
                 userMessage:  promptData.user_message,
                 maxTokens:    promptData.max_tokens,
+                maxChars:     promptData.max_chars,
                 apiBase:      promptData.api_base,
             });
 
             // Cache it server-side so the next viewer (and the next slideshow pass) gets it
             // instantly. Best-effort: if the save fails, still return the quote we already
-            // paid to generate rather than throwing it away.
+            // paid to generate rather than throwing it away — but say so, because a silently
+            // dropped save looks identical to a working one until you reload the page.
             try {
-                await fetch(`/api/images/${encodeURIComponent(collection)}/${encodeURIComponent(filename)}/ai-quote`, {
+                const saveRes = await fetch(`/api/images/${encodeURIComponent(collection)}/${encodeURIComponent(filename)}/ai-quote`, {
                     method:  'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body:    JSON.stringify({ quote }),
                 });
+                if (!saveRes.ok) {
+                    // fetch resolves for 4xx/5xx, so this needs an explicit check.
+                    let detail = `HTTP ${saveRes.status}`;
+                    try {
+                        const err = await saveRes.json();
+                        if (err && err.error) detail = err.error;
+                    } catch (e) { /* non-JSON body */ }
+                    console.error('AI quote was generated but not saved:', detail);
+                }
             } catch (e) {
                 console.error('Failed to cache AI quote (showing it anyway):', e);
             }

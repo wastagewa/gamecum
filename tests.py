@@ -1462,3 +1462,77 @@ class TestRoomCodeGeneration(unittest.TestCase):
             code = _app._vz_gen_code()
         self.assertEqual(len(code), 6)
         self.assertTrue(code.isalnum() and code.isupper())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI quote: length cap and prompt contract
+# ─────────────────────────────────────────────────────────────────────────────
+class TestAiQuoteLengthCap(unittest.TestCase):
+    """The save endpoint's character cap is what was silently rejecting generated
+    quotes (the client never checked the response), so both the limit and the
+    error it reports are part of the contract now."""
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        _stub_no_restrictions(self)
+        self.client = _app.app.test_client()
+        p = patch.object(_app, '_image_exists_in_tags', return_value=True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _post(self, quote):
+        return self.client.post(
+            '/api/images/col/a.jpg/ai-quote',
+            json={'quote': quote},
+        )
+
+    def test_quote_at_the_limit_is_accepted(self):
+        with patch.object(_app, '_set_image_ai_quote') as save:
+            resp = self._post('x' * _app.AI_QUOTE_MAX_CHARS)
+        self.assertEqual(resp.status_code, 200)
+        save.assert_called_once()
+
+    def test_over_long_quote_is_rejected_with_both_numbers(self):
+        """A bare 'quote is too long' gave the caller nothing to act on."""
+        over = 'x' * (_app.AI_QUOTE_MAX_CHARS + 25)
+        with patch.object(_app, '_set_image_ai_quote') as save:
+            resp = self._post(over)
+        self.assertEqual(resp.status_code, 400)
+        body = resp.get_json()
+        self.assertIn(str(len(over)), body['error'])
+        self.assertIn(str(_app.AI_QUOTE_MAX_CHARS), body['error'])
+        self.assertEqual(body['max_chars'], _app.AI_QUOTE_MAX_CHARS)
+        save.assert_not_called()
+
+    def test_empty_quote_is_rejected(self):
+        with patch.object(_app, '_set_image_ai_quote') as save:
+            resp = self._post('   ')
+        self.assertEqual(resp.status_code, 400)
+        save.assert_not_called()
+
+
+class TestAiQuotePromptContract(unittest.TestCase):
+
+    def test_default_prompt_pins_the_output_language(self):
+        """Qwen and other bilingual models code-switch into Chinese without it."""
+        self.assertIn('English only', _app.DEFAULT_AI_QUOTE_SYSTEM_PROMPT)
+
+    def test_default_prompt_keeps_the_required_placeholder(self):
+        self.assertIn('{name_instruction}', _app.DEFAULT_AI_QUOTE_SYSTEM_PROMPT)
+
+    def test_default_prompt_states_a_character_budget(self):
+        self.assertIn('characters', _app.DEFAULT_AI_QUOTE_SYSTEM_PROMPT)
+
+    def test_prompt_endpoint_tells_the_client_the_char_budget(self):
+        """The client trims to this rather than losing a paid-for completion."""
+        _cur.reset_mock()
+        _cur.fetchone.side_effect = [
+            (1, ['soft light'], {'chest': 'n'}),   # image row
+            None,                                   # app_settings lookup
+        ]
+        _cur.fetchall.return_value = []
+        built = _app._build_ai_quote_prompt('col', 'a.jpg')
+        _cur.fetchone.side_effect = None
+        self.assertEqual(built['max_chars'], _app.AI_QUOTE_MAX_CHARS)
