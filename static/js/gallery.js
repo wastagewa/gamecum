@@ -461,10 +461,68 @@ document.addEventListener('DOMContentLoaded', () => {
     const slideshowPlayPause = document.getElementById('slideshowPlayPause');
     const slideshowFullscreen = document.getElementById('slideshowFullscreen');
     const slideshowSpeed = document.getElementById('slideshowSpeed');
+    const slideshowAmbient = document.getElementById('slideshowAmbient');
+    const slideshowTimerBar = document.getElementById('slideshowTimer');
+    const slideshowCaption = document.getElementById('slideshowCaption');
 
     let slideshowIndex = 0;
     let slideshowTimer = null;
     let slideshowPlaying = true;
+    let chromeIdleTimer = null;
+
+    // ── Ambient backdrop ─────────────────────────────────────────────────────
+    // Blurred copy of the current image behind the stage. Loaded via a detached
+    // Image() so the swap only happens once the bytes are there — otherwise the
+    // backdrop flashes empty between slides. The browser serves it from cache,
+    // so this costs no extra request.
+    function updateAmbientBackdrop(imgSrc) {
+        if (!slideshowAmbient || slideshowAmbient.dataset.src === imgSrc) return;
+        slideshowAmbient.dataset.src = imgSrc;
+        const pre = new Image();
+        pre.onload = () => {
+            if (slideshowAmbient.dataset.src !== imgSrc) return;  // slide moved on
+            slideshowAmbient.src = imgSrc;
+            slideshowAmbient.classList.add('loaded');
+        };
+        pre.src = imgSrc;
+    }
+
+    // Restart a CSS animation by force-reflowing between removing and re-adding it.
+    function restartAnimation(el) {
+        if (!el) return;
+        el.style.animation = 'none';
+        void el.offsetWidth;
+        el.style.animation = '';
+    }
+
+    function restartSlideTimerBar() {
+        if (!slideshowOverlay) return;
+        slideshowOverlay.style.setProperty('--ss-interval', `${slideshowInterval}ms`);
+        restartAnimation(slideshowTimerBar && slideshowTimerBar.querySelector('.ss-timer-fill'));
+    }
+
+    function restartCaptionAnimation() {
+        if (!slideshowCaption) return;
+        slideshowCaption.classList.remove('ss-enter');
+        void slideshowCaption.offsetWidth;
+        slideshowCaption.classList.add('ss-enter');
+    }
+
+    // ── Chrome auto-hide ─────────────────────────────────────────────────────
+    // Arrows, close and the control bar fade out after a couple of idle seconds
+    // while playing, leaving just the photo and its words. Any pointer movement
+    // brings them back. A paused slideshow always keeps its chrome — someone
+    // who paused is interacting with it.
+    function showChrome() {
+        if (!slideshowOverlay) return;
+        slideshowOverlay.classList.remove('chrome-hidden');
+        clearTimeout(chromeIdleTimer);
+        if (slideshowPlaying) {
+            chromeIdleTimer = setTimeout(() => {
+                slideshowOverlay.classList.add('chrome-hidden');
+            }, 2600);
+        }
+    }
     
     // Load saved slideshow speed from localStorage, default to 4000ms
     let slideshowInterval = parseInt(localStorage.getItem('imgur.slideshowSpeed') || '4000', 10);
@@ -507,8 +565,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!allImages || allImages.length === 0) return;
         const imgSrc = allImages[slideshowIndex];
         if (slideshowImage) {
+            // Play the entrance on load, not on src assignment — otherwise the
+            // animation runs against a blank element and the photo pops in at the
+            // end of it. Until the new bytes arrive the previous frame stays up,
+            // which reads as a crossfade rather than a flash of empty stage.
+            slideshowImage.onload = () => restartAnimation(slideshowImage);
             slideshowImage.src = imgSrc;
         }
+        updateAmbientBackdrop(imgSrc);
+        restartSlideTimerBar();
+        restartCaptionAnimation();
         if (slideshowCounter) {
             slideshowCounter.textContent = `${slideshowIndex + 1} / ${allImages.length}`;
         }
@@ -560,33 +626,35 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            // Three labelled rows of solid pills competed with the image for
+            // attention. Now the model is a single small eyebrow above the quote
+            // and everything else is one quiet, wrapping row of outline chips —
+            // metadata that supports the picture instead of framing it.
             const sections = [];
             if (data.models && data.models.length > 0) {
-                sections.push(`
-                    <div class="info-section">
-                        <span class="info-section-label"><i class="fas fa-user"></i> Model</span>
-                        ${data.models.map((name, i) => `<span class="info-badge badge-model" style="animation-delay:${i * 0.03}s">${escapeHtml(name)}</span>`).join('')}
-                    </div>
-                `);
-            }
-            if (data.body_parts && data.body_parts.length > 0) {
-                sections.push(`
-                    <div class="info-section">
-                        <span class="info-section-label"><i class="fas fa-child-reaching"></i> Details</span>
-                        ${data.body_parts.map((bp, i) => `<span class="info-badge badge-bodypart" style="animation-delay:${i * 0.03}s">${escapeHtml(bp.label)}</span>`).join('')}
-                    </div>
-                `);
-            }
-            if (data.tags && data.tags.length > 0) {
-                sections.push(`
-                    <div class="info-section">
-                        <span class="info-section-label"><i class="fas fa-tags"></i> Tags</span>
-                        ${data.tags.map((tag, i) => `<span class="info-badge badge-tag slideshow-tag-badge" data-tag="${escapeHtml(tag)}" style="animation-delay:${i * 0.03}s">${escapeHtml(tag)}</span>`).join('')}
-                    </div>
-                `);
+                sections.push(
+                    '<div class="ss-model"><i class="fas fa-user"></i>' +
+                    data.models.map(name => escapeHtml(name))
+                        .join('<span class="ss-model-sep">·</span>') +
+                    '</div>'
+                );
             }
 
-            tagsPanel.innerHTML = sections.length ? sections.join('') : '<p class="tags-empty">No tags, details, or model set for this image yet</p>';
+            const chips = [
+                ...(data.body_parts || []).map(bp =>
+                    `<span class="info-badge badge-bodypart">${escapeHtml(bp.label)}</span>`),
+                // .slideshow-tag-badge + data-tag are the hooks highlightMatchedTag() uses
+                ...(data.tags || []).map(tag =>
+                    `<span class="info-badge badge-tag slideshow-tag-badge" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`),
+            ];
+            if (chips.length) {
+                // Stagger across the combined row so the chips cascade in as one group
+                const staggered = chips.map((chip, i) =>
+                    chip.replace('<span ', `<span style="animation-delay:${(i * 0.025).toFixed(3)}s" `));
+                sections.push(`<div class="ss-chips">${staggered.join('')}</div>`);
+            }
+
+            tagsPanel.innerHTML = sections.length ? sections.join('') : '<p class="tags-empty">No details for this image yet</p>';
         } catch (error) {
             console.error('Error fetching image details:', error);
             tagsPanel.innerHTML = '<p class="tags-error">Unable to load details</p>';
@@ -641,16 +709,19 @@ document.addEventListener('DOMContentLoaded', () => {
         slideshowPlaying = !slideshowPlaying;
         if (slideshowPlayPause) {
             const icon = slideshowPlayPause.querySelector('i');
-            if (slideshowPlaying) {
-                icon.className = 'fas fa-pause';
-                slideshowPlayPause.classList.add('playing');
-                startSlideshowAutoplay();
-            } else {
-                icon.className = 'fas fa-play';
-                slideshowPlayPause.classList.remove('playing');
-                stopSlideshowAutoplay();
-            }
+            icon.className = slideshowPlaying ? 'fas fa-pause' : 'fas fa-play';
+            slideshowPlayPause.classList.toggle('playing', slideshowPlaying);
         }
+        if (slideshowOverlay) {
+            slideshowOverlay.classList.toggle('is-paused', !slideshowPlaying);
+        }
+        if (slideshowPlaying) {
+            startSlideshowAutoplay();
+        } else {
+            stopSlideshowAutoplay();
+        }
+        // Pausing pins the chrome open; resuming restarts the idle countdown.
+        showChrome();
     }
 
     async function openSlideshow(startIndex = 0) {
@@ -666,8 +737,10 @@ document.addEventListener('DOMContentLoaded', () => {
         slideshowPlaying = true;
         if (slideshowOverlay) {
             slideshowOverlay.classList.add('active');
+            slideshowOverlay.classList.remove('is-paused', 'chrome-hidden');
             await updateSlideshowImage();
             startSlideshowAutoplay();
+            showChrome();
             // Update play/pause button state
             if (slideshowPlayPause) {
                 const icon = slideshowPlayPause.querySelector('i');
@@ -682,9 +755,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function closeSlideshow() {
         if (slideshowOverlay) {
-            slideshowOverlay.classList.remove('active');
+            slideshowOverlay.classList.remove('active', 'chrome-hidden', 'is-paused');
             stopSlideshowAutoplay();
         }
+        clearTimeout(chromeIdleTimer);
         // Restore navbar when slideshow closes
         const navbar = document.querySelector('.navbar');
         if (navbar) navbar.style.display = '';
@@ -728,12 +802,14 @@ document.addEventListener('DOMContentLoaded', () => {
     async function slideshowPrevImage() {
         if (allImages.length === 0) return;
         slideshowIndex = (slideshowIndex - 1 + allImages.length) % allImages.length;
+        showChrome();
         await updateSlideshowImage();
     }
 
     async function slideshowNextImage() {
         if (allImages.length === 0) return;
         slideshowIndex = (slideshowIndex + 1) % allImages.length;
+        showChrome();
         await updateSlideshowImage();
     }
 
@@ -818,13 +894,25 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    if (slideshowOverlay) {
+        ['pointermove', 'pointerdown', 'wheel'].forEach(evt => {
+            slideshowOverlay.addEventListener(evt, showChrome, { passive: true });
+        });
+    }
+
     const infoPanelToggle = document.getElementById('infoPanelToggle');
     const slideshowInfoPanel = document.getElementById('slideshowInfoPanel');
+
+    function toggleSlideshowInfo() {
+        if (!infoPanelToggle || !slideshowInfoPanel) return;
+        const collapsed = slideshowInfoPanel.classList.toggle('collapsed');
+        infoPanelToggle.setAttribute('aria-expanded', String(!collapsed));
+    }
+
     if (infoPanelToggle && slideshowInfoPanel) {
         infoPanelToggle.addEventListener('click', (e) => {
             e.stopPropagation();
-            const collapsed = slideshowInfoPanel.classList.toggle('collapsed');
-            infoPanelToggle.setAttribute('aria-expanded', String(!collapsed));
+            toggleSlideshowInfo();
         });
     }
 
@@ -833,6 +921,7 @@ document.addEventListener('DOMContentLoaded', () => {
             slideshowInterval = parseInt(e.target.value, 10);
             // Save the selected speed to localStorage
             localStorage.setItem('imgur.slideshowSpeed', slideshowInterval.toString());
+            restartSlideTimerBar();
             if (slideshowPlaying) {
                 stopSlideshowAutoplay();
                 startSlideshowAutoplay();
@@ -862,7 +951,12 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'F':
                 toggleSlideshowFullscreen();
                 break;
+            case 'i':
+            case 'I':
+                toggleSlideshowInfo();
+                break;
         }
+        showChrome();
     });
 
     // Handle fullscreen change
