@@ -306,7 +306,13 @@
                 <div class="ss-meta" id="slideshowTagsContent">
                     <p class="tags-loading"><i class="fas fa-spinner fa-spin"></i> Loading details…</p>
                 </div>
-                <blockquote class="slideshow-quote" id="slideshowQuote"></blockquote>
+                <!-- The quote gets whatever height is left after the metadata and
+                     the button, and scales its own type to fit it (fitQuote in
+                     gallery.js). That's what keeps a long quote from pushing the
+                     tags off the top of the screen. -->
+                <div class="ss-quote-wrap" id="slideshowQuoteWrap">
+                    <blockquote class="slideshow-quote" id="slideshowQuote"></blockquote>
+                </div>
                 <div class="ss-quote-actions">
                     <button class="quote-gen-btn" id="slideshowQuoteRegenBtn" title="Generate AI quote" aria-label="Generate AI quote">
                         <i class="fas fa-wand-magic-sparkles"></i> <span class="quote-gen-btn-label">Generate AI Quote</span>

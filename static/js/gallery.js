@@ -512,6 +512,43 @@ document.addEventListener('DOMContentLoaded', () => {
         restartAnimation(slideshowTimerBar && slideshowTimerBar.querySelector('.ss-timer-fill'));
     }
 
+    // ── Fit the quote to the space it has ───────────────────────────────────
+    // The metadata row and the generate button hold their height, so the quote
+    // gets the remainder — and a 60-word quote has to be set smaller than a
+    // 10-word one to live in the same box. Without this a long quote grew the
+    // caption until the tags were clipped off the top of the viewport.
+    const QUOTE_MAX_PX = 30;   // roughly the old 1.85rem ceiling
+    const QUOTE_MIN_PX = 13;
+
+    function fitQuote() {
+        const wrap = document.getElementById('slideshowQuoteWrap');
+        if (!wrap || !slideshowQuote || !slideshowQuote.textContent) return;
+
+        // Available height can be 0 while the overlay is still hidden; retry on
+        // the next frame rather than baking in a wrong size.
+        const available = wrap.clientHeight;
+        if (available <= 0) {
+            requestAnimationFrame(fitQuote);
+            return;
+        }
+
+        const fits = px => {
+            slideshowQuote.style.fontSize = px + 'px';
+            return slideshowQuote.scrollHeight <= available;
+        };
+
+        if (fits(QUOTE_MAX_PX)) return;
+
+        // Binary search rather than stepping down one pixel at a time: ~5 reflows
+        // instead of up to 17, which matters when autoplay is on a 2s interval.
+        let lo = QUOTE_MIN_PX, hi = QUOTE_MAX_PX, best = QUOTE_MIN_PX;
+        while (lo <= hi) {
+            const mid = Math.floor((lo + hi) / 2);
+            if (fits(mid)) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
+        }
+        slideshowQuote.style.fontSize = best + 'px';
+    }
+
     function restartCaptionAnimation() {
         if (!slideshowCaption) return;
         slideshowCaption.classList.remove('ss-enter');
@@ -591,6 +628,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const slideshowQuoteErrorEl = document.getElementById('slideshowQuoteError');
         if (slideshowQuoteErrorEl) slideshowQuoteErrorEl.style.display = 'none';
+        // Clear the previous slide's fitted size so a short quote isn't stuck at
+        // whatever a long one needed.
+        if (slideshowQuote) slideshowQuote.style.fontSize = '';
 
         // Extract collection and filename from image URL for quote matching
         const { collection, filename } = imageQuoteParams(imgSrc);
@@ -603,6 +643,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const result = await fetchRandomQuote(collection, filename);
         if (slideshowQuote) {
             slideshowQuote.textContent = `"${result.quote}"`;
+            fitQuote();
         }
         if (result.matchedTag && result.matchedTag !== 'default') {
             highlightMatchedTag(result.matchedTag);
@@ -910,6 +951,28 @@ document.addEventListener('DOMContentLoaded', () => {
             slideshowOverlay.addEventListener(evt, showChrome, { passive: true });
         });
     }
+
+    // The quote element has several writers — the static tag-matched quote, the
+    // cached AI quote that lands a moment later, and the regenerate button. Watch
+    // the text instead of threading a refit callback through all three.
+    // childList/characterData only: fitQuote writes style.fontSize, so observing
+    // attributes here would loop.
+    if (slideshowQuote && window.MutationObserver) {
+        new MutationObserver(() => fitQuote()).observe(slideshowQuote, {
+            childList: true, characterData: true, subtree: true,
+        });
+    }
+
+    // Resizing (and entering/leaving fullscreen) changes the box the quote has to
+    // fit, and crossing the 900px breakpoint swaps the whole layout.
+    let refitTimer = null;
+    window.addEventListener('resize', () => {
+        clearTimeout(refitTimer);
+        refitTimer = setTimeout(() => {
+            if (slideshowQuote) slideshowQuote.style.fontSize = '';
+            fitQuote();
+        }, 120);
+    });
 
     const infoPanelToggle = document.getElementById('infoPanelToggle');
     const slideshowInfoPanel = document.getElementById('slideshowInfoPanel');
