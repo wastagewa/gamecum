@@ -227,6 +227,12 @@ document.addEventListener('DOMContentLoaded', () => {
             url: `/collection/${_coll}/memorymatch`
         },
         {
+            name: 'Sequence Duel',
+            icon: 'fa-wave-square',
+            description: 'Simon-says, head to head. Take turns replaying a sequence that gets longer each round, while your opponent watches every tap land. First to tap a wrong cell loses.',
+            url: `/collection/${_coll}/sequenceduel`
+        },
+        {
             name: 'Compatibility Check',
             icon: 'fa-heart-circle-check',
             description: 'Same image, same tags, two private picks. See if you and your partner are drawn to the same parts — get a compatibility score at the end.',

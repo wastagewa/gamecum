@@ -1506,6 +1506,7 @@ _GUEST_ENDPOINTS = {
     'collection_versuszoom':  ('versuszoom',  '_vz_rooms'),
     'collection_memorymatch': ('memorymatch', '_mm_rooms'),
     'collection_compatcheck': ('compatcheck', '_cc_rooms'),
+    'collection_sequenceduel': ('sequenceduel', '_sq_rooms'),
 }
 _GUEST_GAMES = {game: registry for game, registry in _GUEST_ENDPOINTS.values()}
 
@@ -4087,6 +4088,16 @@ def collection_memorymatch(collection_name):
     return render_template('memorymatch.html', collection=collection)
 
 
+@app.route('/collection/<collection_name>/sequenceduel')
+# No @login_required — see collection_versuszoom.
+def collection_sequenceduel(collection_name):
+    """Sequence Duel: live 2-player Simon-says on a shared board — players alternate turns replaying a sequence while the other watches every tap land, and the first to tap a wrong cell loses."""
+    collection = _safe_collection_name(collection_name)
+    if _restricted_collection_blocked(current_user, collection):
+        return redirect(url_for('restricted_collection_page', collection_name=collection))
+    return render_template('sequenceduel.html', collection=collection)
+
+
 @app.route('/collection/<collection_name>/compatcheck')
 # No @login_required: the global auth wall handles this route, and it is the
 # only thing that knows about guest passes (a decorator here would redirect a
@@ -6176,6 +6187,367 @@ def _cc_handle_disconnect(sid):
         _cc_rooms.pop(code, None)
 
 
+# ── Sequence Duel: live 2-player Simon-says, taken in turns ──────────────────
+# Players alternate turns. The sequence flashes on the shared board — both watch
+# it — but only the player whose turn it is replays it, and every tap they make
+# is broadcast so the other player watches it land in real time. The first
+# player to tap a wrong cell loses the whole game; there's no points tally to
+# argue about, which is the point.
+#
+# Each turn gets its OWN freshly generated sequence rather than a growing shared
+# prefix. That matters because the idle player is watching: if both players
+# replayed the same growing sequence, the spectator would simply be shown the
+# answer to their own next turn. Length still climbs, but it climbs a step at a
+# time for BOTH players (turns 1-2 at length 3, turns 3-4 at length 4, …) so
+# neither ever faces a longer sequence than the other has already cleared.
+#
+# The sequence is NEVER sent to a client. The server drives the flash one cell
+# at a time over sq_flash and validates each tap against its own copy, so the
+# answer isn't sitting in a socket payload for anyone who opens devtools.
+
+_sq_rooms = {}
+_sq_sid_room = {}
+
+SQ_MIN_IMAGES = 4
+SQ_MIN_GRID = 3
+SQ_MAX_GRID = 6
+SQ_START_LENGTH = 3          # cells in the first turn
+SQ_TURNS_PER_LENGTH = 2      # both players face a length before it goes up
+SQ_LEAD_IN = 1.0             # pause before a sequence starts flashing
+SQ_GAP = 0.22                # dark gap between flashes
+SQ_TURN_HANDOVER = 1.6       # pause after a cleared turn, before the next one
+# Input deadline = this much per cell, plus a fixed grace. Generous — the game
+# should be lost by misremembering, not by a slow trackpad.
+SQ_TIME_PER_CELL = 3.0
+SQ_TIME_GRACE = 4.0
+
+
+def _sq_gen_code():
+    alphabet = string.ascii_uppercase + string.digits
+    while True:
+        code = ''.join(secrets.choice(alphabet) for _ in range(6))
+        if code not in _sq_rooms:
+            return code
+
+
+def _sq_build_board(collection, grid_size, blocked=None):
+    """One image per cell, so a flashing cell is visually distinct. Returns
+    (urls, available) — urls is None when the collection can't fill the grid."""
+    images = _vz_collection_images(collection, blocked)
+    cells = grid_size * grid_size
+    if len(images) < SQ_MIN_IMAGES:
+        return None, len(images)
+    urls = [img['url'] for img in images]
+    # Repeat rather than refuse when the collection is smaller than the grid —
+    # duplicates are fine here (position is what's being remembered, not image).
+    while len(urls) < cells:
+        urls += urls
+    random.shuffle(urls)
+    return urls[:cells], len(images)
+
+
+def _sq_length_for_turn(turn: int) -> int:
+    """Turns 1-2 are 3 cells, turns 3-4 are 4, and so on — so both players always
+    face a given length, and losing means you broke at a length your opponent
+    has already cleared."""
+    return SQ_START_LENGTH + (turn - 1) // SQ_TURNS_PER_LENGTH
+
+
+@socketio.on('sq_create')
+def sq_create(data):
+    if not current_user.is_authenticated:
+        emit('sq_error', {'message': 'Please sign in to play.'})
+        return
+    data = data or {}
+    collection = _safe_collection_name(str(data.get('collection') or ''))
+    if _restricted_collection_blocked(current_user, collection):
+        emit('sq_error', {'message': 'This collection is restricted. Request access first.'})
+        return
+
+    username = str(data.get('username') or 'Player 1').strip()[:20] or 'Player 1'
+    opponent_name = str(data.get('opponentUsername') or 'Player 2').strip()[:20] or 'Player 2'
+
+    try:
+        grid_size = int(data.get('gridSize'))
+    except (TypeError, ValueError):
+        grid_size = 4
+    grid_size = max(SQ_MIN_GRID, min(SQ_MAX_GRID, grid_size))
+
+    try:
+        flash_ms = int(data.get('flashSpeed'))
+    except (TypeError, ValueError):
+        flash_ms = 600
+    flash_ms = max(250, min(1200, flash_ms))
+
+    board, available = _sq_build_board(
+        collection, grid_size, _effective_blocked_pairs(current_user, collection))
+    if board is None:
+        emit('sq_error', {'message': f'This collection only has {available} images available — needs at least {SQ_MIN_IMAGES}.'})
+        return
+
+    code = _sq_gen_code()
+    _sq_rooms[code] = {
+        'collection': collection,
+        'grid_size': grid_size,
+        'flash_ms': flash_ms,
+        'board': board,           # rebuilt in sq_join once both players are known
+        'sequence': [],           # server-only; this turn's cells
+        'turn': 0,                # 1-indexed once play starts
+        'turn_order': [],         # [sid, sid] — set in sq_join
+        'active_sid': None,
+        'step': 0,                # how many cells the active player has got right
+        'cleared': {},            # sid -> turns cleared, for the game-over summary
+        'players': {request.sid: username},
+        'user_ids': {request.sid: current_user.id},
+        'rematch': set(),
+        'deadline_token': 0,      # invalidates a stale timeout task
+        'pending_opponent_name': opponent_name,
+        'phase': 'lobby',
+    }
+    _sq_sid_room[request.sid] = code
+    sio_join_room(code)
+    emit('sq_created', {'code': code, 'username': username})
+
+
+@socketio.on('sq_join')
+def sq_join(data):
+    data = data or {}
+    code = str(data.get('code') or '').strip().upper()
+    if not _may_join_room('sequenceduel', code):
+        emit('sq_error', {'message': 'Please sign in to play.'})
+        return
+    room = _sq_rooms.get(code)
+    if not room:
+        emit('sq_error', {'message': 'Room not found. Check the code and try again.'})
+        return
+    if len(room['players']) >= 2:
+        emit('sq_error', {'message': 'That room is already full.'})
+        return
+    if _restricted_collection_blocked(current_user, room['collection']):
+        emit('sq_error', {'message': 'This collection is restricted. Request access first.'})
+        return
+
+    username = room.get('pending_opponent_name') or 'Player 2'
+    room['players'][request.sid] = username
+    room['user_ids'][request.sid] = current_user.id if current_user.is_authenticated else None
+    _sq_sid_room[request.sid] = code
+    sio_join_room(code)
+
+    # Rebuild the board now both players are known, so neither is shown an image
+    # the other is blocked from. Nothing has been revealed yet.
+    combined_blocked = _union_blocked_pairs(room['user_ids'].values(), room['collection'])
+    board, available = _sq_build_board(room['collection'], room['grid_size'], combined_blocked)
+    if board is None:
+        socketio.emit('sq_error', {'message': f'Not enough images available for both players ({available} available). Room closed.'}, room=code)
+        for sid in list(room['players'].keys()):
+            _sq_sid_room.pop(sid, None)
+        _sq_rooms.pop(code, None)
+        return
+    room['board'] = board
+
+    sids = list(room['players'].keys())
+    random.shuffle(sids)          # coin toss for who goes first
+    room['turn_order'] = sids
+    room['cleared'] = {sid: 0 for sid in sids}
+
+    emit('sq_joined', {'code': code, 'username': username})
+    socketio.emit('sq_game_start', {
+        'board': room['board'],
+        'gridSize': room['grid_size'],
+        'players': room['players'],
+        'turnOrder': room['turn_order'],
+    }, room=code)
+    socketio.start_background_task(_sq_next_turn, code)
+
+
+def _sq_next_turn(code):
+    """Hand the board to the next player: fresh sequence, flash it to both, then
+    open input for that player alone."""
+    room = _sq_rooms.get(code)
+    if not room or len(room['players']) < 2:
+        return
+
+    room['phase'] = 'showing'
+    room['turn'] += 1
+    room['step'] = 0
+    room['active_sid'] = room['turn_order'][(room['turn'] - 1) % len(room['turn_order'])]
+
+    length = _sq_length_for_turn(room['turn'])
+    cells = room['grid_size'] ** 2
+    room['sequence'] = [random.randrange(cells) for _ in range(length)]
+
+    socketio.emit('sq_turn_start', {
+        'turn': room['turn'],
+        'round': (room['turn'] - 1) // SQ_TURNS_PER_LENGTH + 1,
+        'activeSid': room['active_sid'],
+        'length': length,
+    }, room=code)
+
+    socketio.sleep(SQ_LEAD_IN)
+    flash_s = room['flash_ms'] / 1000.0
+    for index in list(room['sequence']):
+        if _sq_rooms.get(code) is not room or room['phase'] != 'showing':
+            return   # room died or the game ended mid-flash
+        socketio.emit('sq_flash', {'index': index, 'durationMs': room['flash_ms']}, room=code)
+        socketio.sleep(flash_s + SQ_GAP)
+
+    if _sq_rooms.get(code) is not room or room['phase'] != 'showing':
+        return
+    room['phase'] = 'input'
+    room['deadline_token'] += 1
+    limit = length * SQ_TIME_PER_CELL + SQ_TIME_GRACE
+    socketio.emit('sq_input_open', {
+        'activeSid': room['active_sid'],
+        'length': length,
+        'seconds': limit,
+    }, room=code)
+    socketio.start_background_task(_sq_deadline, code, room['deadline_token'], limit)
+
+
+def _sq_deadline(code, token, limit):
+    """Nobody should be able to stall the game by simply not answering."""
+    socketio.sleep(limit)
+    room = _sq_rooms.get(code)
+    if not room or room['phase'] != 'input' or room['deadline_token'] != token:
+        return
+    _sq_finish(room, code, loser_sid=room['active_sid'], reason='time')
+
+
+@socketio.on('sq_tap')
+def sq_tap(data):
+    data = data or {}
+    code = _sq_sid_room.get(request.sid)
+    room = _sq_rooms.get(code)
+    if not room or room['phase'] != 'input':
+        return
+    if request.sid != room['active_sid']:
+        return                      # spectator — watching, not playing
+    try:
+        index = int(data.get('index'))
+    except (TypeError, ValueError):
+        return
+    if index < 0 or index >= len(room['board']):
+        return
+
+    step = room['step']
+    if step >= len(room['sequence']):
+        return
+    correct = index == room['sequence'][step]
+
+    # Broadcast to the whole room, not just the tapper: the other player is meant
+    # to watch each tap land as it happens. This is the one place the board state
+    # is revealed, and only for cells the active player has already committed to.
+    socketio.emit('sq_tap_landed', {
+        'sid': request.sid,
+        'index': index,
+        'correct': correct,
+        'step': step + 1 if correct else step,
+        'length': len(room['sequence']),
+    }, room=code)
+
+    if not correct:
+        # First mistake ends it. No score to compare — breaking first is losing.
+        _sq_finish(room, code, loser_sid=request.sid, reason='wrong')
+        return
+
+    room['step'] = step + 1
+    if room['step'] >= len(room['sequence']):
+        room['cleared'][request.sid] = room['cleared'].get(request.sid, 0) + 1
+        room['phase'] = 'between'
+        room['deadline_token'] += 1     # cancel the pending timeout
+        socketio.start_background_task(_sq_turn_cleared, code)
+
+
+def _sq_turn_cleared(code):
+    room = _sq_rooms.get(code)
+    if not room or room['phase'] != 'between':
+        return
+    socketio.emit('sq_turn_cleared', {
+        'sid': room['active_sid'],
+        'turn': room['turn'],
+        'length': len(room['sequence']),
+    }, room=code)
+    socketio.sleep(SQ_TURN_HANDOVER)
+    if _sq_rooms.get(code) is room and room['phase'] == 'between':
+        _sq_next_turn(code)
+
+
+def _sq_finish(room, code, loser_sid, reason):
+    room['phase'] = 'finished'
+    room['deadline_token'] += 1
+    room['rematch'] = set()
+    winner_sid = None
+    if loser_sid:
+        others = [s for s in room['players'] if s != loser_sid]
+        winner_sid = others[0] if others else None
+    socketio.emit('sq_game_over', {
+        'players': room['players'],
+        'loserSid': loser_sid,
+        'winnerSid': winner_sid,
+        'reason': reason,               # 'wrong' | 'time' | 'left'
+        'turn': room['turn'],
+        'round': (room['turn'] - 1) // SQ_TURNS_PER_LENGTH + 1 if room['turn'] else 0,
+        'length': len(room['sequence']),
+        'cleared': room['cleared'],
+    }, room=code)
+
+
+@socketio.on('sq_rematch')
+def sq_rematch(data):
+    """Both players have to ask before a rematch starts — one person shouldn't be
+    able to yank the other back into a new game."""
+    code = _sq_sid_room.get(request.sid)
+    room = _sq_rooms.get(code)
+    if not room or room['phase'] != 'finished':
+        return
+    if request.sid not in room['players']:
+        return
+
+    room['rematch'].add(request.sid)
+    socketio.emit('sq_rematch_state', {
+        'ready': sorted(room['rematch']),
+        'players': room['players'],
+    }, room=code)
+
+    both_asked = len(room['players']) == 2 and len(room['rematch']) == 2
+    if both_asked:
+        room['rematch'] = set()
+        room['sequence'] = []
+        room['turn'] = 0
+        room['step'] = 0
+        room['active_sid'] = None
+        room['cleared'] = {sid: 0 for sid in room['players']}
+        # Loser of the last game opens the next one.
+        room['turn_order'] = list(reversed(room['turn_order']))
+        combined_blocked = _union_blocked_pairs(room['user_ids'].values(), room['collection'])
+        board, _ = _sq_build_board(room['collection'], room['grid_size'], combined_blocked)
+        if board:
+            room['board'] = board
+        socketio.emit('sq_rematch_start', {
+            'board': room['board'],
+            'gridSize': room['grid_size'],
+            'players': room['players'],
+            'turnOrder': room['turn_order'],
+        }, room=code)
+        socketio.start_background_task(_sq_next_turn, code)
+
+
+def _sq_handle_disconnect(sid):
+    code = _sq_sid_room.pop(sid, None)
+    if not code:
+        return
+    room = _sq_rooms.get(code)
+    if not room:
+        return
+    room['players'].pop(sid, None)
+    room['rematch'].discard(sid)
+    # Walking out mid-game hands the win to whoever stayed.
+    if room['phase'] in ('showing', 'input', 'between') and room['players']:
+        _sq_finish(room, code, loser_sid=None, reason='left')
+    socketio.emit('sq_opponent_left', {}, room=code)
+    if not room['players']:
+        _sq_rooms.pop(code, None)
+
 @socketio.on('disconnect')
 def handle_disconnect():
     # Flask-SocketIO only keeps the LAST handler registered for a given event
@@ -6185,6 +6557,7 @@ def handle_disconnect():
     _vz_handle_disconnect(request.sid)
     _mm_handle_disconnect(request.sid)
     _cc_handle_disconnect(request.sid)
+    _sq_handle_disconnect(request.sid)
 
 
 @socketio.on('connect')

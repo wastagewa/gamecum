@@ -1536,3 +1536,276 @@ class TestAiQuotePromptContract(unittest.TestCase):
         built = _app._build_ai_quote_prompt('col', 'a.jpg')
         _cur.fetchone.side_effect = None
         self.assertEqual(built['max_chars'], _app.AI_QUOTE_MAX_CHARS)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sequence Duel (live 2-player Simon-says, taken in turns)
+# ─────────────────────────────────────────────────────────────────────────────
+class _SqBase(unittest.TestCase):
+
+    CODE = 'RM0001'
+
+    def setUp(self):
+        self.sio = MagicMock()
+        self.sio.sleep = MagicMock(return_value=None)
+        p = patch.object(_app, 'socketio', self.sio)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def make_room(self, phase='input', seq=(2, 5, 7), turn=1, active='A'):
+        room = {
+            'collection': 'col', 'grid_size': 4, 'flash_ms': 600,
+            'board': ['u%d' % i for i in range(16)],
+            'sequence': list(seq),
+            'turn': turn,
+            'turn_order': ['A', 'B'],
+            'active_sid': active,
+            'step': 0,
+            'cleared': {'A': 0, 'B': 0},
+            'players': {'A': 'Ana', 'B': 'Bo'},
+            'user_ids': {'A': 1, 'B': 2},
+            'rematch': set(),
+            'deadline_token': 0,
+            'pending_opponent_name': 'Bo',
+            'phase': phase,
+        }
+        _app._sq_rooms[self.CODE] = room
+        self.addCleanup(_app._sq_rooms.pop, self.CODE, None)
+        return room
+
+    def payload(self, event):
+        for call in self.sio.emit.call_args_list:
+            if call.args and call.args[0] == event:
+                return call.args[1]
+        return None
+
+    def events(self):
+        return [c.args[0] for c in self.sio.emit.call_args_list if c.args]
+
+
+class TestSequenceDuelTurnOrder(_SqBase):
+
+    def test_turns_alternate_between_the_two_players(self):
+        room = self.make_room(phase='lobby', seq=(), turn=0, active=None)
+        seen = []
+        for _ in range(4):
+            room['phase'] = 'between'
+            _app._sq_next_turn(self.CODE)
+            seen.append(room['active_sid'])
+        self.assertEqual(seen, ['A', 'B', 'A', 'B'])
+
+    def test_both_players_face_a_length_before_it_grows(self):
+        """Losing should mean you broke at a length your opponent already cleared,
+        so the length steps up only after both have played it."""
+        lengths = [_app._sq_length_for_turn(t) for t in range(1, 9)]
+        self.assertEqual(lengths, [3, 3, 4, 4, 5, 5, 6, 6])
+
+    def test_each_turn_gets_a_fresh_sequence_not_a_growing_prefix(self):
+        """The idle player is watching every tap — a shared growing prefix would
+        hand them the answer to their own next turn."""
+        room = self.make_room(phase='lobby', seq=(), turn=0, active=None)
+        _app._sq_next_turn(self.CODE)
+        first = list(room['sequence'])
+        room['phase'] = 'between'
+        _app._sq_next_turn(self.CODE)
+        second = list(room['sequence'])
+        self.assertEqual(len(first), len(second))       # same length for both players
+        self.assertEqual(len(second), _app.SQ_START_LENGTH)
+        self.assertFalse(second[:len(first)] == first and len(second) > len(first))
+
+    def test_turn_start_names_the_active_player_but_not_the_cells(self):
+        room = self.make_room(phase='lobby', seq=(), turn=0, active=None)
+        _app._sq_next_turn(self.CODE)
+        body = self.payload('sq_turn_start')
+        self.assertEqual(body['activeSid'], 'A')
+        self.assertEqual(body['length'], _app.SQ_START_LENGTH)
+        self.assertNotIn('sequence', body)
+
+        flashes = [c.args[1] for c in self.sio.emit.call_args_list if c.args[0] == 'sq_flash']
+        self.assertEqual(len(flashes), _app.SQ_START_LENGTH)
+
+
+class TestSequenceDuelTapping(_SqBase):
+    """sq_tap reads request.sid, so these drive it through a request context."""
+
+    def _tap(self, room, sid, index):
+        with _app.app.test_request_context('/'):
+            _app.request.sid = sid
+            _app._sq_sid_room[sid] = self.CODE
+            self.addCleanup(_app._sq_sid_room.pop, sid, None)
+            with patch.object(_app, 'emit'):
+                _app.sq_tap({'index': index})
+
+    def test_a_correct_tap_advances_the_step(self):
+        room = self.make_room(seq=(2, 5, 7), active='A')
+        self._tap(room, 'A', 2)
+        self.assertEqual(room['step'], 1)
+        self.assertEqual(room['phase'], 'input')
+
+    def test_every_tap_is_broadcast_so_the_other_player_watches_it_land(self):
+        room = self.make_room(seq=(2, 5, 7), active='A')
+        self._tap(room, 'A', 2)
+        body = self.payload('sq_tap_landed')
+        self.assertEqual(body['sid'], 'A')
+        self.assertEqual(body['index'], 2)
+        self.assertTrue(body['correct'])
+        # broadcast to the room, not just the tapper
+        landed = next(c for c in self.sio.emit.call_args_list if c.args[0] == 'sq_tap_landed')
+        self.assertEqual(landed.kwargs.get('room'), self.CODE)
+
+    def test_a_wrong_tap_ends_the_game_for_the_tapper(self):
+        room = self.make_room(seq=(2, 5, 7), active='A')
+        self._tap(room, 'A', 9)
+        self.assertFalse(self.payload('sq_tap_landed')['correct'])
+        over = self.payload('sq_game_over')
+        self.assertEqual(over['loserSid'], 'A')
+        self.assertEqual(over['winnerSid'], 'B')
+        self.assertEqual(room['phase'], 'finished')
+
+    def test_the_idle_player_cannot_tap(self):
+        room = self.make_room(seq=(2, 5, 7), active='A')
+        self._tap(room, 'B', 2)
+        self.assertEqual(room['step'], 0)
+        self.assertNotIn('sq_tap_landed', self.events())
+        self.assertNotIn('sq_game_over', self.events())
+
+    def test_completing_the_sequence_clears_the_turn(self):
+        room = self.make_room(seq=(2, 5, 7), active='A')
+        for cell in (2, 5, 7):
+            self._tap(room, 'A', cell)
+        self.assertEqual(room['phase'], 'between')
+        self.assertEqual(room['cleared']['A'], 1)
+        self.assertNotIn('sq_game_over', self.events())
+
+    def test_taps_are_ignored_once_the_game_is_over(self):
+        room = self.make_room(phase='finished', seq=(2, 5, 7), active='A')
+        self._tap(room, 'A', 2)
+        self.assertEqual(room['step'], 0)
+        self.assertNotIn('sq_tap_landed', self.events())
+
+
+class TestSequenceDuelDeadline(_SqBase):
+
+    def test_the_active_player_loses_on_timeout(self):
+        room = self.make_room(active='B')
+        _app._sq_deadline(self.CODE, room['deadline_token'], 1)
+        self.assertEqual(self.payload('sq_game_over')['loserSid'], 'B')
+
+    def test_a_stale_deadline_task_does_nothing(self):
+        """Clearing a turn bumps the token; the old timer must not fire."""
+        room = self.make_room()
+        stale = room['deadline_token']
+        room['deadline_token'] += 1
+        _app._sq_deadline(self.CODE, stale, 1)
+        self.assertIsNone(self.payload('sq_game_over'))
+
+    def test_deadline_does_nothing_once_the_turn_is_cleared(self):
+        room = self.make_room(phase='between')
+        _app._sq_deadline(self.CODE, room['deadline_token'], 1)
+        self.assertIsNone(self.payload('sq_game_over'))
+
+
+class TestSequenceDuelRematch(_SqBase):
+
+    def setUp(self):
+        super().setUp()
+        # Starting a rematch rebuilds the board, which reaches the DB for the
+        # players' content blocks — not what these tests are about.
+        for name, kw in (('_sq_build_board', {'return_value': (['u%d' % i for i in range(16)], 16)}),
+                         ('_union_blocked_pairs', {'return_value': set()})):
+            p = patch.object(_app, name, **kw)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _ask(self, sid):
+        with _app.app.test_request_context('/'):
+            _app.request.sid = sid
+            _app._sq_sid_room[sid] = self.CODE
+            self.addCleanup(_app._sq_sid_room.pop, sid, None)
+            _app.sq_rematch({})
+
+    def test_one_player_asking_only_announces_it(self):
+        room = self.make_room(phase='finished')
+        self._ask('A')
+        self.assertEqual(self.payload('sq_rematch_state')['ready'], ['A'])
+        self.assertIsNone(self.payload('sq_rematch_start'))
+        self.assertEqual(room['phase'], 'finished')
+
+    def test_both_asking_starts_a_fresh_game(self):
+        room = self.make_room(phase='finished', turn=7)
+        room['cleared'] = {'A': 3, 'B': 3}
+        self._ask('A')
+        self._ask('B')
+        self.assertIsNotNone(self.payload('sq_rematch_start'))
+        self.assertEqual(room['turn'], 0)
+        self.assertEqual(room['sequence'], [])
+        self.assertEqual(room['cleared'], {'A': 0, 'B': 0})
+
+    def test_rematch_swaps_who_opens(self):
+        """Going first is a small edge — it shouldn't stay with the same player."""
+        room = self.make_room(phase='finished')
+        room['turn_order'] = ['A', 'B']
+        self._ask('A')
+        self._ask('B')
+        self.assertEqual(room['turn_order'], ['B', 'A'])
+
+    def test_rematch_is_ignored_mid_game(self):
+        room = self.make_room(phase='input')
+        self._ask('A')
+        self.assertEqual(room['rematch'], set())
+
+
+class TestSequenceDuelBoard(_SqBase):
+
+    def _images(self, n):
+        return [{'url': f'https://cdn/img{i}.jpg'} for i in range(n)]
+
+    def test_board_fills_the_grid_by_repeating_a_small_collection(self):
+        with patch.object(_app, '_vz_collection_images', return_value=self._images(5)):
+            board, available = _app._sq_build_board('col', 6)
+        self.assertEqual(len(board), 36)
+        self.assertEqual(available, 5)
+
+    def test_board_refuses_a_collection_below_the_minimum(self):
+        with patch.object(_app, '_vz_collection_images', return_value=self._images(3)):
+            board, available = _app._sq_build_board('col', 4)
+        self.assertIsNone(board)
+        self.assertEqual(available, 3)
+
+
+class TestSequenceDuelDisconnect(_SqBase):
+
+    def test_leaving_mid_game_hands_the_win_to_whoever_stayed(self):
+        room = self.make_room(phase='input')
+        _app._sq_sid_room['A'] = self.CODE
+        _app._sq_handle_disconnect('A')
+        self.assertIn('sq_game_over', self.events())
+        self.assertIn('sq_opponent_left', self.events())
+        self.assertEqual(room['phase'], 'finished')
+
+    def test_last_player_out_drops_the_room(self):
+        self.make_room(phase='finished')
+        _app._sq_sid_room['A'] = self.CODE
+        _app._sq_sid_room['B'] = self.CODE
+        _app._sq_handle_disconnect('A')
+        _app._sq_handle_disconnect('B')
+        self.assertNotIn(self.CODE, _app._sq_rooms)
+
+
+class TestSequenceDuelRouting(unittest.TestCase):
+
+    def test_route_is_registered(self):
+        rules = {r.endpoint for r in _app.app.url_map.iter_rules()}
+        self.assertIn('collection_sequenceduel', rules)
+
+    def test_share_links_work_for_guests_like_the_other_duels(self):
+        self.assertIn('collection_sequenceduel', _app._GUEST_ENDPOINTS)
+        game, _registry = _app._GUEST_ENDPOINTS['collection_sequenceduel']
+        self.assertEqual(game, 'sequenceduel')
+        self.assertIs(_app._room_registry(game), _app._sq_rooms)
+
+    def test_disconnect_dispatcher_cleans_up_this_game_too(self):
+        """Flask-SocketIO keeps only the last 'disconnect' handler, so every game
+        has to be dispatched from the one handler."""
+        import inspect
+        self.assertIn('_sq_handle_disconnect', inspect.getsource(_app.handle_disconnect))
