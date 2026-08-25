@@ -243,23 +243,44 @@
     </div>
     {% endif %}
 
-    <!-- Modal -->
-    <div class="modal" id="imageModal">
-        <div class="modal-overlay" id="modalOverlay"></div>
-        <button class="close-modal" id="closeModal" aria-label="Close modal">&times;</button>
-        <div class="modal-container">
-            <button class="nav-btn prev-btn" id="prevBtn" aria-label="Previous image">
-                <i class="fas fa-chevron-left"></i>
-            </button>
-            <img class="modal-content" id="modalImage" src="" alt="Modal Image">
-            <button class="nav-btn next-btn" id="nextBtn" aria-label="Next image">
-                <i class="fas fa-chevron-right"></i>
-            </button>
-            <div class="modal-footer">
-                <p class="modal-quote" id="modalQuote"></p>
-                <button class="quote-regen-btn" id="modalQuoteRegenBtn" title="Regenerate quote" aria-label="Regenerate quote">
-                    <i class="fas fa-rotate"></i>
-                </button>
+    <!-- Single-image lightbox.
+         Deliberately NOT class="modal": style.css defines .modal and
+         .modal-content twice (here and again for the dialog boxes around line
+         3900), and the later block won — which is where the dark rounded card
+         behind the image came from. Its own namespace, so nothing collides. -->
+    <div class="image-lightbox" id="imageModal">
+        <div class="lb-ambient" aria-hidden="true">
+            <img class="lb-ambient-img" id="modalAmbient" src="" alt="">
+        </div>
+        <div class="lb-backdrop" id="modalOverlay"></div>
+
+        <div class="lb-stage">
+            <img class="lb-image" id="modalImage" src="" alt="">
+        </div>
+
+        <button class="lb-nav prev" id="prevBtn" aria-label="Previous image">
+            <i class="fas fa-chevron-left"></i>
+        </button>
+        <button class="lb-nav next" id="nextBtn" aria-label="Next image">
+            <i class="fas fa-chevron-right"></i>
+        </button>
+
+        <button class="lb-close" id="closeModal" aria-label="Close">
+            <i class="fas fa-times"></i>
+        </button>
+
+        <div class="lb-panel">
+            <div class="lb-caption" id="modalCaption">
+                <div class="lb-meta" id="modalMeta"></div>
+                <div class="lb-quote-wrap" id="modalQuoteWrap">
+                    <blockquote class="lb-quote" id="modalQuote"></blockquote>
+                </div>
+                <div class="lb-actions">
+                    <button class="quote-regen-btn" id="modalQuoteRegenBtn" title="Regenerate quote" aria-label="Regenerate quote">
+                        <i class="fas fa-rotate"></i>
+                    </button>
+                    <span class="lb-counter" id="modalCounter"></span>
+                </div>
             </div>
         </div>
     </div>

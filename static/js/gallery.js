@@ -9,8 +9,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const gallery = document.getElementById('gallery');
     const modal = document.getElementById('imageModal');
     const modalImg = document.getElementById('modalImage');
-    const closeBtn = document.querySelector('.close-modal');
-    const modalOverlay = document.querySelector('.modal-overlay');
+    const closeBtn = document.getElementById('closeModal');
+    const modalOverlay = document.getElementById('modalOverlay');
     const loading = document.getElementById('loading');
     
     // Hide loading spinner immediately on page load
@@ -25,6 +25,80 @@ document.addEventListener('DOMContentLoaded', () => {
     
         let currentImageIndex = 0;
         let allImages = [];
+
+        const modalAmbient  = document.getElementById('modalAmbient');
+        const modalMeta     = document.getElementById('modalMeta');
+        const modalCounter  = document.getElementById('modalCounter');
+        const modalQuoteEl  = document.getElementById('modalQuote');
+        const modalQuoteBox = document.getElementById('modalQuoteWrap');
+
+        // Blurred copy of the photo behind the stage. Preloaded through a
+        // detached Image() so the backdrop never flashes empty between images;
+        // the browser serves it from cache, so it costs no extra request.
+        function setModalAmbient(imgSrc) {
+            if (!modalAmbient || modalAmbient.dataset.src === imgSrc) return;
+            modalAmbient.dataset.src = imgSrc;
+            const pre = new Image();
+            pre.onload = () => {
+                if (modalAmbient.dataset.src !== imgSrc) return;   // moved on already
+                modalAmbient.src = imgSrc;
+                modalAmbient.classList.add('loaded');
+            };
+            pre.src = imgSrc;
+        }
+
+        // Same treatment as the slideshow: metadata and the button hold their
+        // height, the quote scales to whatever is left.
+        const LB_QUOTE_MAX_PX = 27;
+        const LB_QUOTE_MIN_PX = 12;
+
+        function fitModalQuote() {
+            if (!modalQuoteBox || !modalQuoteEl || !modalQuoteEl.textContent) return;
+            const available = modalQuoteBox.clientHeight;
+            if (available <= 0) { requestAnimationFrame(fitModalQuote); return; }
+
+            const fits = px => {
+                modalQuoteEl.style.fontSize = px + 'px';
+                return modalQuoteEl.scrollHeight <= available;
+            };
+            if (fits(LB_QUOTE_MAX_PX)) return;
+
+            let lo = LB_QUOTE_MIN_PX, hi = LB_QUOTE_MAX_PX, best = LB_QUOTE_MIN_PX;
+            while (lo <= hi) {
+                const mid = Math.floor((lo + hi) / 2);
+                if (fits(mid)) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
+            }
+            modalQuoteEl.style.fontSize = best + 'px';
+        }
+
+        // Several writers land on #modalQuote (the tag-matched quote, the cached
+        // AI quote arriving later, the regenerate button), so watch the text
+        // rather than threading a refit callback through each of them.
+        if (modalQuoteEl && window.MutationObserver) {
+            new MutationObserver(() => fitModalQuote()).observe(modalQuoteEl, {
+                childList: true, characterData: true, subtree: true,
+            });
+        }
+
+        function updateModalCounter() {
+            if (!modalCounter) return;
+            modalCounter.textContent = allImages.length
+                ? `${currentImageIndex + 1} / ${allImages.length}`
+                : '';
+        }
+
+        // Everything that has to happen when the lightbox lands on an image,
+        // whether it just opened or the viewer navigated.
+        function paintModalChrome(imgSrc) {
+            if (modalQuoteEl) modalQuoteEl.style.fontSize = '';   // re-fit from scratch
+            setModalAmbient(imgSrc);
+            updateModalCounter();
+            renderImageMeta(imgSrc, modalMeta);
+            // openModal writes the quote before the lightbox is displayed, so the
+            // observer's first fit measures a zero-height box. Refit explicitly
+            // here, once display:flex has been applied.
+            fitModalQuote();
+        }
 
         function imageQuoteUrl(imageUrl) {
             try {
@@ -193,6 +267,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const imgSrc = allImages[currentImageIndex];
                 modalImg.src = imgSrc;
                 updateNavigationButtons();
+                paintModalChrome(imgSrc);
 
                 // Get a tag-matched quote for this image
                 const quoteElement = document.getElementById('modalQuote');
@@ -274,6 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             modal.style.display = 'flex';
             modalImg.src = imageUrl;
+            paintModalChrome(imageUrl);
 
             // Force reflow for animation
             void modal.offsetHeight;
@@ -663,7 +739,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     async function updateSlideshowTags(imgSrc) {
-        const tagsPanel = document.getElementById('slideshowTagsContent');
+        return renderImageMeta(imgSrc, document.getElementById('slideshowTagsContent'));
+    }
+
+    // Shared by the slideshow caption and the single-image lightbox — both want
+    // the same "who is this / what's in it" line, and they should not drift.
+    async function renderImageMeta(imgSrc, tagsPanel) {
         if (!tagsPanel) return;
 
         const { collection, filename } = imageQuoteParams(imgSrc);

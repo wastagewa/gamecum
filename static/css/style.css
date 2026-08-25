@@ -648,147 +648,327 @@ body {
     transform: translateY(0);
 }
 
-/* Modal Styles */
-.modal {
+/* ── Single-image lightbox ─────────────────────────────────────────────────
+   Same visual language as the fullscreen slideshow (ambient backdrop, caption
+   on a scrim, split columns on a wide screen) so opening one image and starting
+   a slideshow don't feel like two different apps.
+
+   Namespaced .image-lightbox / .lb-* on purpose: the old markup used .modal and
+   .modal-content, which style.css also defines further down for dialog boxes.
+   The later block won, so the lightbox was inheriting a dialog's surface colour
+   and border radius — that was the dark card sitting behind the photo. */
+
+.image-lightbox {
     display: none;
     position: fixed;
-    z-index: 1000;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.95);
-    backdrop-filter: blur(10px);
+    inset: 0;
+    z-index: 100001;          /* above .modal's 100000 dialogs */
+    background: #07050a;
     opacity: 0;
     pointer-events: none;
-    transition: all 0.3s ease-in-out;
-    justify-content: center;
-    align-items: center;
+    transition: opacity 0.3s ease;
+    overflow: hidden;
 }
 
-.modal.show-modal {
+.image-lightbox.show-modal {
     opacity: 1;
     pointer-events: auto;
 }
 
-.modal.show-modal .modal-content {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
-}
-
-.modal-container {
-    position: relative;
-    width: 90%;
-    height: 90%;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-}
-
-/* Modal navigation arrows (overlay at image sides) */
-.nav-btn {
+/* Click-anywhere-outside to close. Sits above the ambient art but below the
+   photo, caption and chrome. */
+.lb-backdrop {
     position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
+    inset: 0;
+    z-index: 1;
+}
+
+/* Ambient backdrop — a blurred, over-scaled copy of the photo on show, so the
+   frame carries the image's own colour instead of being a black void. */
+.lb-ambient {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    z-index: 0;
+}
+
+.lb-ambient-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scale(1.35);
+    filter: blur(64px) saturate(1.7) brightness(0.5);
+    opacity: 0;
+    transition: opacity 0.9s ease;
+}
+
+.lb-ambient-img.loaded { opacity: 1; }
+
+.lb-ambient::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(120% 90% at 50% 40%, transparent 30%, rgba(7, 5, 10, 0.88) 100%),
+        linear-gradient(to bottom, rgba(7, 5, 10, 0.5), transparent 25%, transparent 45%, rgba(7, 5, 10, 0.94));
+}
+
+.lb-stage {
+    position: absolute;
+    inset: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #fff;
-    background: rgba(0,0,0,0.35);
-    border: 1px solid rgba(255,255,255,0.12);
-    box-shadow: 0 10px 40px rgba(0,0,0,0.35);
-    backdrop-filter: blur(8px);
-    cursor: pointer;
-    z-index: 2010;
-    transition: transform 0.15s ease, background 0.15s ease;
+    padding: 4vh 7vw 30vh;
+    z-index: 2;
+    pointer-events: none;     /* clicks fall through to .lb-backdrop */
 }
 
-.nav-btn:hover { transform: translateY(-50%) scale(1.05); background: rgba(0,0,0,0.55); }
-
-.nav-btn i { font-size: 22px; }
-
-/* Position the arrows to the sides of the visible image area. Use percentage offsets so they stay near edges responsively. */
-.prev-btn { left: 6%; }
-.next-btn { right: 6%; }
-
-@media (max-width: 640px) {
-    .nav-btn { width: 44px; height: 44px; }
-    .prev-btn { left: 3%; }
-    .next-btn { right: 3%; }
-}
-
-.modal-content {
+.lb-image {
+    display: block;
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
-    border-radius: 15px;
-    box-shadow: 0 0 100px rgba(0, 0, 0, 0.8);
-    filter: brightness(1.1) contrast(1.1);
-    transition: all 0.3s ease-in-out;
+    border-radius: 14px;
+    /* No brightness/contrast filter. The old rule pushed both to 1.1, which
+       silently misrepresented every image in the gallery. */
+    box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.09),
+        0 40px 120px rgba(0, 0, 0, 0.85);
     opacity: 0;
-    transform: translate(0, 20px);
+    transform: scale(1.03);
+    transition: opacity 0.45s ease, transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+    pointer-events: auto;
 }
 
-.modal.show-modal .modal-content {
+.image-lightbox.show-modal .lb-image {
     opacity: 1;
-    transform: translate(0, 0);
+    transform: scale(1);
 }
 
-.modal-footer {
-    position: relative;
-    width: 100%;
-    padding: 20px;
-    text-align: center;
-    color: white;
-    margin-top: 20px;
+/* ── Caption ──────────────────────────────────────────────────────────────*/
+.lb-panel {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 12vh 4vw 2.6rem;
+    z-index: 4;
+    pointer-events: none;
+    background: linear-gradient(to top,
+        rgba(7, 5, 10, 0.95) 0%,
+        rgba(7, 5, 10, 0.82) 28%,
+        rgba(7, 5, 10, 0.45) 62%,
+        transparent 100%);
+}
+
+.lb-caption {
+    max-width: min(62ch, 68vw);
+    max-height: 44vh;
+    min-height: 0;
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
+    gap: 0.8rem;
+    pointer-events: auto;
+}
+
+.lb-meta,
+.lb-actions { flex: 0 0 auto; }
+
+/* The quote takes the leftover height and scales its own type to fit it, so a
+   long quote can never squeeze the tags out (fitModalQuote in gallery.js). */
+.lb-quote-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    display: flex;
     align-items: center;
-    gap: 15px;
+    overflow: hidden;
 }
 
-.modal-quote {
+.lb-quote {
+    position: relative;
+    margin: 0;
+    color: #fff;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: clamp(1.05rem, 1.9vw, 1.7rem);
     font-style: italic;
-    font-size: 1.1rem;
-    color: #fff;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.5);
-    max-width: 600px;
-    margin: 0 auto;
+    line-height: 1.42;
+    text-wrap: balance;
+    text-shadow: 0 2px 24px rgba(0, 0, 0, 0.95), 0 1px 3px rgba(0, 0, 0, 0.9);
 }
 
-.quote-regen-btn {
+.lb-quote::before {
+    content: '\201C';
     position: absolute;
-    bottom: 6px;
-    right: 6px;
-    width: 30px;
-    height: 30px;
+    left: -0.5em;
+    top: -0.18em;
+    font-size: 2.6em;
+    line-height: 1;
+    color: var(--primary-color, #a4066e);
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.lb-quote:empty { display: none; }
+
+.lb-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.45rem;
+}
+
+.lb-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.lb-counter {
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.06em;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+/* ── Chrome ───────────────────────────────────────────────────────────────*/
+.lb-nav,
+.lb-close {
+    position: absolute;
     border-radius: 50%;
-    border: 1.5px solid rgba(255,255,255,0.35);
-    background: rgba(0,0,0,0.45);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(12, 9, 16, 0.45);
+    backdrop-filter: blur(16px);
+    color: rgba(255, 255, 255, 0.82);
+    cursor: pointer;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.25s ease;
+}
+
+.lb-nav {
+    top: 50%;
+    transform: translateY(-50%);
+    width: 52px;
+    height: 52px;
+    font-size: 1.15rem;
+}
+
+.lb-nav:hover {
+    background: rgba(164, 6, 110, 0.85);
+    border-color: transparent;
     color: #fff;
+    transform: translateY(-50%) scale(1.08);
+}
+
+.lb-nav.prev { left: 24px; }
+.lb-nav.next { right: 24px; }
+
+.lb-close {
+    top: 20px;
+    right: 20px;
+    width: 44px;
+    height: 44px;
+    font-size: 1.15rem;
+}
+
+.lb-close:hover {
+    background: rgba(239, 68, 68, 0.9);
+    border-color: transparent;
+    color: #fff;
+    transform: rotate(90deg);
+}
+
+/* ── Split layout on a wide screen ────────────────────────────────────────
+   Same 40/60 split as the slideshow: the photo fills the right and gets the
+   full viewport height instead of sitting in a band above its own caption. */
+@media (min-width: 900px) {
+    .image-lightbox { --lb-split: 40%; }
+
+    .lb-stage {
+        left: var(--lb-split);
+        padding: 4vh 3.5vw 4vh 1.5vw;
+    }
+
+    .lb-panel {
+        top: 0;
+        right: auto;
+        width: var(--lb-split);
+        padding: 8vh 2.5vw 8vh 4vw;
+        display: flex;
+        align-items: stretch;
+        background: linear-gradient(to right,
+            rgba(7, 5, 10, 0.96) 0%,
+            rgba(7, 5, 10, 0.88) 55%,
+            rgba(7, 5, 10, 0.55) 85%,
+            transparent 100%);
+    }
+
+    .lb-caption {
+        max-width: 100%;
+        width: 100%;
+        max-height: none;
+        justify-content: center;
+        gap: 1rem;
+    }
+
+    .lb-nav.prev { left: calc(var(--lb-split) + 14px); }
+    .lb-nav.next { right: 14px; }
+    .lb-quote::before { left: -0.44em; }
+}
+
+@media (min-width: 1600px) {
+    .image-lightbox { --lb-split: 34%; }
+}
+
+@media (max-width: 640px) {
+    .lb-stage  { padding: 3vh 3vw 34vh; }
+    .lb-panel  { padding: 10vh 5vw 1.8rem; }
+    .lb-caption { max-width: 100%; }
+    .lb-nav { width: 42px; height: 42px; font-size: 1rem; }
+    .lb-nav.prev { left: 8px; }
+    .lb-nav.next { right: 8px; }
+    .lb-close { top: 12px; right: 12px; width: 40px; height: 40px; }
+    .lb-quote::before { left: -0.06em; top: -0.5em; font-size: 2em; }
+    .lb-ambient-img { filter: blur(40px) saturate(1.7) brightness(0.45); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .lb-image { transition: opacity 0.2s ease; transform: none; }
+    .image-lightbox.show-modal .lb-image { transform: none; }
+    .lb-ambient-img { transition: none; }
+}
+
+/* Shared by the lightbox and the slideshow's regenerate button */
+.quote-regen-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(12px);
+    color: rgba(255, 255, 255, 0.85);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.85rem;
-    transition: all 0.15s ease;
+    font-size: 0.8rem;
+    flex-shrink: 0;
+    transition: all 0.2s ease;
 }
 .quote-regen-btn:hover:not(:disabled) {
-    background: var(--primary-color, #a4066e);
-    border-color: var(--primary-color, #a4066e);
-    transform: scale(1.08);
+    background: linear-gradient(135deg, var(--primary-color, #a4066e), #7c3aed);
+    border-color: transparent;
+    color: #fff;
 }
-.quote-regen-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-.quote-regen-btn.spinning i {
-    animation: quote-regen-spin 0.8s linear infinite;
-}
+.quote-regen-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.quote-regen-btn.spinning i { animation: quote-regen-spin 0.8s linear infinite; }
+
 @keyframes quote-regen-spin {
     from { transform: rotate(0deg); }
     to   { transform: rotate(360deg); }
@@ -815,32 +995,6 @@ body {
 
 .modal-content:hover {
     transform: translate(-50%, -50%) scale(1.02);
-}
-
-.close-modal {
-    position: absolute;
-    right: 30px;
-    top: 20px;
-    color: white;
-    font-size: 35px;
-    font-weight: normal;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    width: 50px;
-    height: 50px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 50%;
-    backdrop-filter: blur(5px);
-    opacity: 0;
-    animation: fadeIn 0.5s ease 0.3s forwards;
-}
-
-.close-modal:hover {
-    background: var(--secondary-color);
-    transform: rotate(90deg);
 }
 
 @keyframes modalFadeIn {
