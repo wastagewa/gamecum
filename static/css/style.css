@@ -51,6 +51,7 @@ body {
     color: var(--text-color);
     line-height: 1.6;
     min-height: 100vh;
+    min-height: 100dvh;
     overflow-x: hidden;
     max-width: 100vw;
 }
@@ -568,6 +569,7 @@ body {
 .game-fullscreen #gameBoard {
     width: 100vw;
     min-height: 100vh;
+    min-height: 100dvh;
     z-index: 2000;
     display: grid;
     grid-template-columns: inherit;
@@ -1494,6 +1496,7 @@ body {
         border-bottom: 1px solid rgba(255,255,255,0.08);
         box-shadow: 0 16px 32px var(--shadow-color);
         max-height: calc(100vh - 64px);
+        max-height: calc(100dvh - 64px);
         overflow-y: auto;
         z-index: 9998;
     }
@@ -3048,6 +3051,67 @@ body:has(.slideshow-overlay.active) .navbar {
     .sequence-cell.tap-wrong { animation: none; }
 }
 
+/* ── Touch targets ─────────────────────────────────────────────────────────
+   A few controls are drawn small on purpose (an 18px x on a tag chip, the
+   compact slideshow bar). Rather than inflate them and wreck those layouts,
+   grow only the *hit* area on touch devices with a transparent pseudo-element.
+   Nothing moves visually; the finger just gets ~44px to aim at. */
+@media (pointer: coarse) {
+    .remove-tag-btn,
+    .quote-regen-btn,
+    .slideshow-control-btn,
+    .retag-modal-close,
+    .lightbox-nav,
+    .chat-icon-btn {
+        position: relative;
+    }
+
+    .remove-tag-btn::after,
+    .quote-regen-btn::after,
+    .slideshow-control-btn::after,
+    .retag-modal-close::after,
+    .lightbox-nav::after,
+    .chat-icon-btn::after {
+        content: '';
+        position: absolute;
+        /* half the shortfall to 44px, applied on every side */
+        inset: -8px;
+    }
+
+    .remove-tag-btn::after { inset: -13px; }
+}
+
+/* ── Mobile: stop iOS zooming the page on focus ────────────────────────────
+   Safari on iOS zooms into any text field whose font-size is under 16px when it
+   gains focus, and does not zoom back out — so one tap on a room-code box
+   leaves the whole app scaled up until the user pinches out. 16px is a platform
+   threshold, not a design preference.
+
+   The `html body` prefix is deliberate. Twelve templates set their own input
+   font-size in an inline <style> block, which sits after this stylesheet in the
+   document and therefore wins any specificity tie — login.html among them, and
+   that is the first page a phone ever sees. The two extra element selectors
+   take this to (0,1,3) so it beats a plain `.field input` without resorting to
+   !important.
+
+   Typed-into fields only. The compact inline controls — the slideshow's speed
+   picker, for one — are class-scoped at (0,1,1) on a bare `select`, so they
+   keep their own size and their layout survives. */
+@media (max-width: 900px) {
+    html body input[type="text"],
+    html body input[type="search"],
+    html body input[type="email"],
+    html body input[type="password"],
+    html body input[type="url"],
+    html body input[type="tel"],
+    html body input[type="number"],
+    html body input:not([type]),
+    html body textarea,
+    html body select {
+        font-size: 16px;
+    }
+}
+
 /* ========== JIGSAW PUZZLE GAME STYLES ========== */
 .puzzle-board {
     display: grid;
@@ -4581,6 +4645,7 @@ input:checked + .toggle-slider:before {
 
 #flashcardsContainer {
     min-height: 100vh;
+    min-height: 100dvh;
     display: flex;
     flex-direction: column;
 }
@@ -4943,6 +5008,7 @@ input:checked + .toggle-slider:before {
 #flashcardsContainer.fullscreen {
     width: 100vw !important;
     height: 100vh !important;
+    height: 100dvh !important;
     padding: 0 !important;
     margin: 0 !important;
     background: var(--surface-color);
@@ -5414,6 +5480,7 @@ input:checked + .toggle-slider:before {
 
 #zoomContainer {
     min-height: 100vh;
+    min-height: 100dvh;
     display: flex;
     flex-direction: column;
 }
@@ -5711,6 +5778,7 @@ input:checked + .toggle-slider:before {
 
 #zoomContainer.fullscreen .zoom-content {
     height: 100vh;
+    height: 100dvh;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -6249,6 +6317,7 @@ input:checked + .toggle-slider:before {
     flex-direction: column;
     align-items: center;
     min-height: 100vh;
+    min-height: 100dvh;
     padding: 2rem 1rem 4rem;
 }
 
@@ -6449,6 +6518,7 @@ input:checked + .toggle-slider:before {
     flex-direction: column;
     align-items: center;
     min-height: 100vh;
+    min-height: 100dvh;
     padding: 2rem 1rem 4rem;
 }
 
@@ -6725,6 +6795,7 @@ input:checked + .toggle-slider:before {
     flex-direction: column;
     align-items: center;
     min-height: 100vh;
+    min-height: 100dvh;
     padding: 2rem 1rem 4rem;
 }
 
@@ -7103,11 +7174,13 @@ input:checked + .toggle-slider:before {
     gap: 12px;
     max-width: calc(100vw - 160px);
     max-height: calc(100vh - 80px);
+    max-height: calc(100dvh - 80px);
 }
 
 .lightbox-img {
     max-width: 100%;
     max-height: calc(100vh - 130px);
+    max-height: calc(100dvh - 130px);
     object-fit: contain;
     border-radius: 10px;
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
@@ -7169,7 +7242,7 @@ input:checked + .toggle-slider:before {
 ═══════════════════════════════════════════════════════════════ */
 #spContainer {
     display: flex; flex-direction: column; align-items: center;
-    min-height: 100vh; padding: 2rem 1rem 4rem;
+    min-height: 100vh; min-height: 100dvh; padding: 2rem 1rem 4rem;
 }
 .sp-content {
     width: 100%; max-width: 740px;
@@ -7261,7 +7334,7 @@ input:checked + .toggle-slider:before {
 ═══════════════════════════════════════════════════════════════ */
 #fmContainer {
     display: flex; flex-direction: column; align-items: center;
-    min-height: 100vh; padding: 2rem 1rem 4rem;
+    min-height: 100vh; min-height: 100dvh; padding: 2rem 1rem 4rem;
 }
 .fm-content {
     width: 100%; max-width: 700px;
@@ -7354,7 +7427,7 @@ input:checked + .toggle-slider:before {
 ═══════════════════════════════════════════════════════════════ */
 #wtContainer {
     display: flex; flex-direction: column; align-items: center;
-    min-height: 100vh; padding: 2rem 1rem 4rem;
+    min-height: 100vh; min-height: 100dvh; padding: 2rem 1rem 4rem;
 }
 .wt-content {
     width: 100%; max-width: 800px;
@@ -7654,7 +7727,7 @@ input:checked + .toggle-slider:before {
 /* ═══════════════════════════════════════════════════════════════
    CHAT GAME
 ═══════════════════════════════════════════════════════════════ */
-.chat-body { overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+.chat-body { overflow: hidden; height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
 .chat-page { display: flex; overflow: hidden; flex: 1; min-height: 0; }
 
 /* ── Sidebar ─────────────────────────────────────────────────
@@ -7675,6 +7748,7 @@ input:checked + .toggle-slider:before {
     /* ↓ The key: give this column an absolute height so
        flex:1 children can scroll instead of expanding forever */
     height: calc(100vh - 70px);
+    height: calc(100dvh - 70px);
     transition: width 0.25s ease;
 }
 .chat-sidebar.collapsed { width: 0; min-width: 0; overflow: hidden; border-right: none; }
@@ -7981,7 +8055,7 @@ input:checked + .toggle-slider:before {
 ══════════════════════════════════════════════════════════════ */
 #bracketContainer {
     display:flex;flex-direction:column;align-items:center;
-    min-height:100vh;padding:2rem 1rem 4rem;
+    min-height:100vh; min-height:100dvh;padding:2rem 1rem 4rem;
 }
 .bracket-content{width:100%;max-width:900px;display:flex;flex-direction:column;align-items:center;gap:1.2rem;}
 .bracket-title-bar{text-align:center;}
@@ -8081,7 +8155,7 @@ input:checked + .toggle-slider:before {
 ══════════════════════════════════════════════════════════════ */
 #scratchContainer{
     display:flex;flex-direction:column;align-items:center;
-    min-height:100vh;padding:2rem 1rem 4rem;
+    min-height:100vh; min-height:100dvh;padding:2rem 1rem 4rem;
 }
 .scratch-content{width:100%;max-width:700px;display:flex;flex-direction:column;align-items:center;gap:1.2rem;}
 .scratch-title-bar{text-align:center;}
@@ -8168,7 +8242,7 @@ input:checked + .toggle-slider:before {
 ══════════════════════════════════════════════════════════════ */
 #bbContainer{
     display:flex;flex-direction:column;align-items:center;
-    min-height:100vh;padding:2rem 1rem 4rem;
+    min-height:100vh; min-height:100dvh;padding:2rem 1rem 4rem;
 }
 .bb-content{width:100%;max-width:700px;display:flex;flex-direction:column;align-items:center;gap:1.2rem;}
 .bb-title-bar{text-align:center;}
@@ -8240,7 +8314,7 @@ input:checked + .toggle-slider:before {
 ══════════════════════════════════════════════════════════════ */
 #silContainer{
     display:flex;flex-direction:column;align-items:center;
-    min-height:100vh;padding:2rem 1rem 4rem;
+    min-height:100vh; min-height:100dvh;padding:2rem 1rem 4rem;
 }
 .sil-content{width:100%;max-width:700px;display:flex;flex-direction:column;align-items:center;gap:1.2rem;}
 .sil-title-bar{text-align:center;}
@@ -8633,6 +8707,7 @@ input:checked + .toggle-slider:before {
 #gwContainer{
     display:flex;flex-direction:column;
     min-height:calc(100vh - 60px);
+    min-height:calc(100dvh - 60px);
 }
 
 /* The gallery room */
@@ -8877,7 +8952,7 @@ input:checked + .toggle-slider:before {
 
 /* Fullscreen */
 #gwContainer:fullscreen .gw-scene,
-#gwContainer:-webkit-full-screen .gw-scene{min-height:calc(100vh - 80px);}
+#gwContainer:-webkit-full-screen .gw-scene{min-height:calc(100vh - 80px); min-height:calc(100dvh - 80px);}
 #gwContainer:fullscreen .gw-frame,
 #gwContainer:-webkit-full-screen .gw-frame{width:260px;}
 

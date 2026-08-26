@@ -1809,3 +1809,86 @@ class TestSequenceDuelRouting(unittest.TestCase):
         has to be dispatched from the one handler."""
         import inspect
         self.assertIn('_sq_handle_disconnect', inspect.getsource(_app.handle_disconnect))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Image URL resolution on the direct-query paths
+# ─────────────────────────────────────────────────────────────────────────────
+class TestResolveRowUrls(unittest.TestCase):
+    """images.url holds a bare B2 key for anything migrated to B2. Handing that
+    to a browser makes it resolve against the app's own origin — /Coll/x.png,
+    404. Every view that queries the images table directly has to resolve."""
+
+    def test_bare_b2_key_is_resolved(self):
+        with patch.object(_app, '_resolve_image_url', side_effect=lambda u: 'https://cdn/' + u):
+            rows = _app._resolve_row_urls([{'url': 'GayReal/abc.png'}])
+        self.assertEqual(rows[0]['url'], 'https://cdn/GayReal/abc.png')
+
+    def test_rows_without_a_url_are_left_alone(self):
+        rows = _app._resolve_row_urls([{'url': None}, {'filename': 'x.png'}])
+        self.assertIsNone(rows[0]['url'])
+        self.assertNotIn('url', rows[1])
+
+    def test_legacy_absolute_urls_pass_through(self):
+        """Pre-migration rows already hold a full Cloudinary URL."""
+        original = 'https://res.cloudinary.com/x/Coll/a.png'
+        rows = _app._resolve_row_urls([{'url': original}])
+        self.assertEqual(rows[0]['url'], original)
+
+    def test_it_returns_the_same_list_for_chaining(self):
+        rows = [{'url': 'a/b.png'}]
+        with patch.object(_app, '_resolve_image_url', side_effect=lambda u: u):
+            self.assertIs(_app._resolve_row_urls(rows), rows)
+
+
+class TestImagesByModelUrls(unittest.TestCase):
+    """The model browser was serving raw keys, so every thumbnail 404'd."""
+
+    def setUp(self):
+        _cur.reset_mock()
+        _cur.fetchone.return_value = None
+        _cur.fetchall.return_value = []
+        _cur.fetchall.side_effect = None
+        _stub_no_restrictions(self)
+        self.client = _app.app.test_client()
+        for name, kw in (('_effective_blocked_pairs_by_collection', {'return_value': {}}),
+                         ('_resolve_image_url', {'side_effect': lambda u: 'https://cdn.example/' + u})):
+            p = patch.object(_app, name, **kw)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_model_browser_returns_resolved_urls(self):
+        rows = [('GayReal', 'abc.png', 'GayReal/abc.png', ['tag'], {})]
+        with patch.object(_app, '_get_images_by_model_ids', return_value=rows):
+            resp = self.client.get('/api/images-by-model?model_id=1')
+        self.assertEqual(resp.status_code, 200)
+        url = resp.get_json()['images'][0]['url']
+        self.assertEqual(url, 'https://cdn.example/GayReal/abc.png')
+        # the shape that was breaking: a bare key the browser resolves as a path
+        self.assertFalse(url.startswith('GayReal/'))
+
+
+class TestNoViewServesRawImageKeys(unittest.TestCase):
+    """A structural guard for the whole class of bug: any view that SELECTs url
+    straight out of the images table must resolve it before it reaches a
+    template or a response. Four of them didn't, and every image 404'd."""
+
+    DIRECT_QUERY_VIEWS = [
+        'api_images_by_model',
+        'admin_untagged_images',
+        'admin_unknown_subject_images',
+        'admin_missing_backup_images',
+        'admin_user_detail',
+        'admin_ai_quotes_collection',
+    ]
+
+    def test_every_direct_query_view_resolves_its_urls(self):
+        import inspect
+        for name in self.DIRECT_QUERY_VIEWS:
+            with self.subTest(view=name):
+                src = inspect.getsource(getattr(_app, name))
+                self.assertTrue(
+                    '_resolve_row_urls' in src or '_resolve_image_url' in src,
+                    f'{name} selects images.url but never resolves it — '
+                    f'bare B2 keys will 404 against the app origin',
+                )

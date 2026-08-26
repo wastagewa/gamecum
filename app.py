@@ -1637,6 +1637,23 @@ def _visible_tags_data(user=None):
         return tags_data
     return {k: v for k, v in tags_data.items() if k.split('/', 1)[0] not in denied}
 
+def _resolve_row_urls(rows, key='url'):
+    """Run _resolve_image_url over a list of image dicts, in place.
+
+    images.url holds a bare B2 object key for anything migrated to B2, which a
+    browser resolves against the app's own origin — /GayReal/<uuid>.png, 404.
+    Every path that hands image rows to a template or a JSON response has to
+    resolve them; _visible_tags_data() does it for the tag-based paths, and this
+    is the equivalent for the handful of views that query the images table
+    directly. Legacy Cloudinary rows already hold a full URL and pass through
+    untouched.
+    """
+    for row in rows:
+        if row.get(key):
+            row[key] = _resolve_image_url(row[key])
+    return rows
+
+
 def _drop_restricted_rows(rows, key='collection_name', user=None):
     """Filter a list of image/video dicts down to what this viewer may see. For the
     cross-collection admin maintenance views, which query the images table directly
@@ -3527,7 +3544,7 @@ def api_images_by_model():
     images = [{
         'collection':  coll,
         'filename':    fname,
-        'url':         url,
+        'url':         _resolve_image_url(url),
         'tags':        list(tags) if tags else [],
         'body_parts':  dict(body_parts) if body_parts else {},
     } for coll, fname, url, tags, body_parts in rows
@@ -4788,7 +4805,7 @@ def admin_user_detail(user_id):
         cur.execute("""SELECT collection_name, filename, url, created_at
                        FROM images WHERE uploaded_by=%s AND deleted_at IS NULL
                        ORDER BY created_at DESC LIMIT 50""", (user_id,))
-        uploads = [dict(r) for r in cur.fetchall()]
+        uploads = _resolve_row_urls([dict(r) for r in cur.fetchall()])
         cur.execute("""SELECT collection_name, game_type, data, created_at
                        FROM scores WHERE user_id=%s ORDER BY created_at DESC LIMIT 50""", (user_id,))
         scores = [dict(r) for r in cur.fetchall()]
@@ -5133,7 +5150,7 @@ def admin_untagged_images():
               AND NOT (COALESCE(i.body_parts, '{}'::jsonb) ?& %s)
             ORDER BY i.created_at DESC
         """, (BODY_PARTS,))
-        untagged = _drop_restricted_rows([dict(r) for r in cur.fetchall()])
+        untagged = _resolve_row_urls(_drop_restricted_rows([dict(r) for r in cur.fetchall()]))
         for row in untagged:
             row['tags'] = list(row['tags']) if row['tags'] else []
             row['body_parts'] = dict(row['body_parts']) if row['body_parts'] else {}
@@ -5158,7 +5175,7 @@ def admin_unknown_subject_images():
               AND NOT EXISTS (SELECT 1 FROM image_models im WHERE im.image_id = i.id)
             ORDER BY i.created_at DESC
         """)
-        unknown_subject = _drop_restricted_rows([dict(r) for r in cur.fetchall()])
+        unknown_subject = _resolve_row_urls(_drop_restricted_rows([dict(r) for r in cur.fetchall()]))
     finally:
         _release_db(conn)
     return render_template('admin-unknown-subject-images.html', unknown_subject=unknown_subject)
@@ -5178,9 +5195,7 @@ def admin_missing_backup_images():
             WHERE i.deleted_at IS NULL AND i.b2_backup_key IS NULL
             ORDER BY i.created_at DESC
         """)
-        missing_backup = _drop_restricted_rows([dict(r) for r in cur.fetchall()])
-        for img in missing_backup:
-            img['url'] = _resolve_image_url(img['url'])
+        missing_backup = _resolve_row_urls(_drop_restricted_rows([dict(r) for r in cur.fetchall()]))
     finally:
         _release_db(conn)
     return render_template('admin-missing-backup-images.html', missing_backup=missing_backup)
@@ -5285,10 +5300,9 @@ def admin_ai_quotes_collection(collection_name):
             WHERE collection_name = %s AND deleted_at IS NULL
             ORDER BY created_at DESC
         """, (safe_name,))
-        images = [dict(r) for r in cur.fetchall()]
+        images = _resolve_row_urls([dict(r) for r in cur.fetchall()])
         for img in images:
             img['tags'] = list(img['tags']) if img['tags'] else []
-            img['url'] = _resolve_image_url(img['url'])
     finally:
         _release_db(conn)
     return render_template('admin-ai-quotes-collection.html', collection=safe_name, images=images)

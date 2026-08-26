@@ -43,7 +43,7 @@
 
         .tag-match-shell.fullscreen {
             max-width: none;
-            min-height: 100vh;
+            min-height: 100vh; min-height: 100dvh;
             padding: 20px;
             display: flex;
             flex-direction: column;
@@ -586,5 +586,6 @@
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
     <script src="{{ url_for('static', filename='js/tag-match.js') }}"></script>
+<script src="{{ url_for('static', filename='js/navbar-collections.js') }}"></script>
 </body>
 </html>

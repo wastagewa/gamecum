@@ -25,12 +25,12 @@
     body{
       background:var(--bg);color:var(--txt);
       font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;
-      min-height:100vh;overflow:hidden;
+      min-height:100vh; min-height:100dvh;overflow:hidden;
     }
     canvas#hc{position:fixed;inset:0;pointer-events:none;z-index:0;}
 
     /* ── Layout ── */
-    .wrap{display:grid;grid-template-columns:1fr 1fr;min-height:100vh;position:relative;z-index:1;}
+    .wrap{display:grid;grid-template-columns:1fr 1fr;min-height:100vh; min-height:100dvh;position:relative;z-index:1;}
     @media(max-width:720px){.wrap{grid-template-columns:1fr;}.hero{display:none!important;}}
 
     /* ── Hero panel ── */
